@@ -511,8 +511,8 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
             
             // Prepare data for the chart
             const chartData = ${JSON.stringify(attendanceData.events
-              .filter(event => !event.event.canceled && event.attendance_summary.present_count > 0)  // Only include non-canceled events with attendance for the chart
-              .sort((a, b) => new Date(a.event.date).getTime() - new Date(b.event.date).getTime())  // Sort by date ascending
+              .filter(event => !event.event.canceled && event.attendance_summary.present_count > 0)
+              .sort((a, b) => new Date(a.event.date).getTime() - new Date(b.event.date).getTime())
               .map(event => ({
                 date: formatDate(event.event.date),
                 attendance: event.attendance_summary.present_count,
