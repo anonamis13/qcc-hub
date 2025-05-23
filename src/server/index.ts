@@ -37,7 +37,15 @@ app.get('/api/group-stats/:groupId', async (req, res) => {
 
 app.get('', async (req, res) => {
   try {
-    const result = await getPeopleGroups(429361);
+    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
+    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361; // Default to 429361 if not set
+
+    if (groupTypeIdFromEnv && isNaN(groupTypeId)) {
+      console.warn(`Warning: PCO_GROUP_TYPE_ID environment variable ('${groupTypeIdFromEnv}') is not a valid number. Using default 429361.`);
+      // Optionally, you could throw an error or use a hardcoded default if a valid number is critical
+    }
+
+    const result = await getPeopleGroups(groupTypeId);
     
     const html = `
       <!DOCTYPE html>
@@ -429,9 +437,9 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
                 <input type="checkbox" id="showAllEvents" ${showAllEvents ? 'checked' : ''}>
                 <span class="toggle-slider"></span>
               </label>
-              <span class="toggle-label">Show all historical events</span>
+              <span class="toggle-label">Show all years</span>
               <span class="date-range">
-                Showing events from: ${showAllEvents ? 'All time' : '2025 onwards'}
+                Showing events from: ${showAllEvents ? 'All years' : 'Current year'}
               </span>
             </div>
 

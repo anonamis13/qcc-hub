@@ -217,7 +217,9 @@ export const getGroupEvents = async (groupId: string, showAllEvents: boolean = f
 
       // Only add date filter if we're not showing all events
       if (!showAllEvents) {
-        queryParams['where[starts_at][gte]'] = '2025-01-01T00:00:00Z';
+        const currentYear = new Date().getFullYear();
+        const startOfYear = new Date(currentYear, 0, 1); // Month is 0-indexed (0 for January)
+        queryParams['where[starts_at][gte]'] = startOfYear.toISOString();
       }
 
       console.log('Query parameters:', queryParams);
