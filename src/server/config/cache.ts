@@ -7,7 +7,7 @@ class Cache {
   private cache: Map<string, CacheItem<any>>;
   private readonly defaultTTL: number;
 
-  constructor(defaultTTLMinutes: number = 5) {
+  constructor(defaultTTLMinutes: number = 60) {
     this.cache = new Map();
     this.defaultTTL = defaultTTLMinutes * 60 * 1000; // Convert minutes to milliseconds
   }
@@ -56,4 +56,4 @@ class Cache {
 }
 
 // Create a singleton instance
-export const cache = new Cache(5); // 5 minutes default TTL 
+export const cache = new Cache(60); // 60 minutes (1 hour) default TTL 

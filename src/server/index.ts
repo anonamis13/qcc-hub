@@ -35,6 +35,7 @@ app.get('/api/group-stats/:groupId', async (req, res) => {
   }
 });
 
+//Home Page
 app.get('', async (req, res) => {
   try {
     const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
