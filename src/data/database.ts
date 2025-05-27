@@ -24,6 +24,8 @@ const dbPath = process.env.RENDER_INTERNAL_PATH
 
 let db: Database.Database;
 
+const cacheStore = new Map<string, { data: any; timestamp: number }>();
+
 export const dbCache = {
   set: <T>(key: string, data: T, ttlMinutes: number = 60): void => {
     try {
