@@ -2,8 +2,8 @@
   "name": "church-life-groups",
   "version": "1.0.0",
   "description": "Church Life Groups Attendance and Membership Tracking System",
-  "main": "src/server/index.ts",
-  "type": "commonjs",
+  "main": "dist/src/server/index.js",
+  "type": "module",
   "engines": {
     "node": ">=18.x"
   },

@@ -1,6 +1,6 @@
 import axios, { AxiosError } from 'axios';
 import dotenv from 'dotenv';
-import { cache } from './cache';
+import { cache } from './cache.js';
 
 dotenv.config();
 
