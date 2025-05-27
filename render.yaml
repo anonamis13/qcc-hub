@@ -4,7 +4,7 @@ services:
     env: node
     nodeVersion: 18
     buildCommand: npm ci && npm run build
-    startCommand: npm start
+    startCommand: node dist/server/index.js
     envVars:
       - key: NODE_ENV
         value: production
