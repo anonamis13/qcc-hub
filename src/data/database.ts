@@ -19,6 +19,11 @@ interface CacheStats {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Constants for data retention
+const DAYS_TO_KEEP = 30;
+const MS_IN_DAY = 24 * 60 * 60 * 1000;
+const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000; // Run cleanup once per day
+
 // Initialize SQLite database
 // In Render, we should use the persistent disk mount path
 // Locally, we'll use the same directory as before
@@ -27,6 +32,21 @@ const dbPath = process.env.RENDER
   : path.join(__dirname, 'cache.db');
 
 let db: Database.Database;
+
+function cleanupOldData() {
+  try {
+    const db = initializeDb();
+    const cutoffTime = Date.now() - (DAYS_TO_KEEP * MS_IN_DAY);
+    
+    // Delete records older than cutoff time
+    const deleteStmt = db.prepare('DELETE FROM cache WHERE timestamp < ?');
+    const result = deleteStmt.run(cutoffTime);
+    
+    console.log(`Cleaned up ${result.changes} old records from the database`);
+  } catch (error) {
+    console.error('Error during database cleanup:', error);
+  }
+}
 
 function initializeDb() {
   if (!db) {
@@ -48,6 +68,12 @@ function initializeDb() {
           timestamp INTEGER NOT NULL
         )
       `);
+      
+      // Run initial cleanup
+      cleanupOldData();
+      
+      // Schedule regular cleanup
+      setInterval(cleanupOldData, CLEANUP_INTERVAL);
       
       console.log('Successfully initialized SQLite database');
     } catch (error) {
@@ -135,5 +161,8 @@ export const dbCache = {
       console.error('Failed to get cache stats:', error);
       return { size: 0, keys: [] };
     }
-  }
+  },
+
+  // Expose cleanup function for manual triggering if needed
+  cleanup: cleanupOldData
 }; 
