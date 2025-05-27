@@ -2,6 +2,7 @@ services:
   - type: web
     name: qcc-life-group-health-report
     env: node
+    nodeVersion: 18
     buildCommand: npm install && npm run build
     startCommand: node dist/src/server/index.js
     envVars:

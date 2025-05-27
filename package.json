@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Church Life Groups Attendance and Membership Tracking System",
   "main": "src/server/index.ts",
+  "type": "commonjs",
   "engines": {
     "node": ">=18.x"
   },
