@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { getPeopleGroups, getGroupAttendance, getGroup } from './config/pco';
+import { cache } from './config/cache';
 
 dotenv.config();
 
@@ -35,19 +36,48 @@ app.get('/api/group-stats/:groupId', async (req, res) => {
   }
 });
 
-//Home Page
-app.get('', async (req, res) => {
+// Add new endpoint for loading group data
+app.get('/api/load-groups', async (req, res) => {
   try {
     const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
-    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361; // Default to 429361 if not set
+    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
 
     if (groupTypeIdFromEnv && isNaN(groupTypeId)) {
       console.warn(`Warning: PCO_GROUP_TYPE_ID environment variable ('${groupTypeIdFromEnv}') is not a valid number. Using default 429361.`);
-      // Optionally, you could throw an error or use a hardcoded default if a valid number is critical
     }
 
     const result = await getPeopleGroups(groupTypeId);
-    
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch groups' });
+  }
+});
+
+// Add new endpoint to check cache status
+app.get('/api/check-cache', async (req, res) => {
+  try {
+    const cacheKey = 'all_groups';
+    const cachedGroups = cache.get(cacheKey);
+    res.json({ hasCachedData: !!cachedGroups });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to check cache status' });
+  }
+});
+
+// Add new endpoint to get cache timestamp
+app.get('/api/cache-info', async (req, res) => {
+  try {
+    const cacheKey = 'all_groups';
+    const timestamp = await cache.getTimestamp(cacheKey);
+    res.json({ timestamp });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get cache info' });
+  }
+});
+
+//Home Page
+app.get('', async (req, res) => {
+  try {
     const html = `
       <!DOCTYPE html>
       <html>
@@ -132,29 +162,170 @@ app.get('', async (req, res) => {
               0% { transform: rotate(0deg); }
               100% { transform: rotate(360deg); }
             }
+            #loadDataBtn {
+              padding: 12px 24px;
+              font-size: 16px;
+              font-weight: 500;
+              color: white;
+              background-color: #007bff;
+              border: none;
+              border-radius: 4px;
+              cursor: pointer;
+              margin-bottom: 20px;
+              transition: all 0.3s ease;
+            }
+            #loadDataBtn:hover:not(:disabled) {
+              background-color: #0056b3;
+            }
+            #loadDataBtn:disabled {
+              background-color: #ccc;
+              cursor: not-allowed;
+            }
+            #groupCount {
+              margin: 10px 0;
+              color: #666;
+              display: none;
+            }
+            #groupList {
+              display: none;
+            }
+            .initial-message {
+              text-align: center;
+              color: #666;
+              padding: 40px;
+              font-size: 18px;
+            }
+            #lastUpdate {
+              margin: 10px 0;
+              color: #666;
+              font-size: 14px;
+              display: none;
+            }
           </style>
         </head>
         <body>
           <div class="container">
             <h1>Queen City Church - Life Groups Health Report</h1>
-            <p>${result.filtered_count} total groups.</p>
-            <ul class="group-list">
-              ${result.data
+            <button id="loadDataBtn">Load Data</button>
+            <p id="lastUpdate"></p>
+            <p id="groupCount"></p>
+            <div id="initialMessage" class="initial-message">
+              Loading...
+            </div>
+            <ul id="groupList" class="group-list"></ul>
+          </div>
+
+          <script>
+            const loadDataBtn = document.getElementById('loadDataBtn');
+            const groupList = document.getElementById('groupList');
+            const groupCount = document.getElementById('groupCount');
+            const initialMessage = document.getElementById('initialMessage');
+            const lastUpdate = document.getElementById('lastUpdate');
+
+            function formatLastUpdateTime(timestamp) {
+              if (!timestamp) return '';
+              const date = new Date(timestamp);
+              return date.toLocaleString('en-US', { 
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: 'numeric',
+                minute: 'numeric',
+                hour12: true
+              });
+            }
+
+            async function updateLastUpdateTime() {
+              try {
+                const response = await fetch('/api/cache-info');
+                if (!response.ok) throw new Error('Failed to fetch cache info');
+                const { timestamp } = await response.json();
+                if (timestamp) {
+                  lastUpdate.textContent = \`Last updated: \${formatLastUpdateTime(timestamp)}\`;
+                  lastUpdate.style.display = 'block';
+                }
+              } catch (error) {
+                console.error('Error fetching cache info:', error);
+              }
+            }
+
+            async function loadGroups() {
+              try {
+                loadDataBtn.disabled = true;
+                loadDataBtn.textContent = 'Loading...';
+                
+                const response = await fetch('/api/load-groups');
+                if (!response.ok) throw new Error('Failed to fetch groups');
+                const result = await response.json();
+                
+                displayGroups(result);
+                await updateLastUpdateTime();
+              } catch (error) {
+                console.error('Error:', error);
+                loadDataBtn.textContent = 'Load Data';
+                initialMessage.textContent = 'Failed to load groups. Please try again.';
+                initialMessage.style.display = 'block';
+                alert('Failed to load groups. Please try again.');
+              } finally {
+                loadDataBtn.disabled = false;
+              }
+            }
+
+            function displayGroups(result) {
+              groupCount.textContent = \`\${result.filtered_count} total groups.\`;
+              groupCount.style.display = 'block';
+              initialMessage.style.display = 'none';
+              groupList.style.display = 'block';
+              
+              groupList.innerHTML = result.data
                 .sort((a, b) => a.attributes.name.localeCompare(b.attributes.name))
-                .map(group => `
-                  <li class="group-item" id="group-${group.id}">
-                    <a href="/groups/${group.id}/attendance">
-                      ${group.attributes.name}
+                .map(group => \`
+                  <li class="group-item" id="group-\${group.id}">
+                    <a href="/groups/\${group.id}/attendance">
+                      \${group.attributes.name}
                     </a>
                     <div class="stats-container">
                       <div class="loading"></div>
                     </div>
                   </li>
-                `).join('')}
-            </ul>
-          </div>
+                \`).join('');
 
-          <script>
+              loadDataBtn.textContent = 'Refresh Data';
+              
+              // Load stats for each group
+              result.data.forEach(group => updateGroupStats(group.id));
+            }
+
+            // Check cache and load data if available
+            async function checkCacheAndLoad() {
+              try {
+                const response = await fetch('/api/check-cache');
+                if (!response.ok) throw new Error('Failed to check cache');
+                const { hasCachedData } = await response.json();
+                
+                if (hasCachedData) {
+                  // If we have cached data, load it immediately
+                  loadGroups();
+                  await updateLastUpdateTime();
+                } else {
+                  // If no cached data, show the button and initial message
+                  loadDataBtn.disabled = false;
+                  initialMessage.textContent = 'Click "Load Data" to fetch and display the Life Groups data.';
+                }
+              } catch (error) {
+                console.error('Error checking cache:', error);
+                loadDataBtn.disabled = false;
+                initialMessage.textContent = 'Click "Load Data" to fetch and display the Life Groups data.';
+              }
+            }
+
+            // Add click event listener
+            loadDataBtn.addEventListener('click', loadGroups);
+
+            // Check cache when page loads
+            checkCacheAndLoad();
+
             // Function to update stats for a group
             async function updateGroupStats(groupId) {
               const container = document.querySelector(\`#group-\${groupId} .stats-container\`);
@@ -189,17 +360,6 @@ app.get('', async (req, res) => {
                 container.innerHTML = \`<div class="no-data">Failed to load statistics</div>\`;
               }
             }
-
-            // Load stats for each group with a delay between requests
-            async function loadAllGroupStats() {
-              const groups = ${JSON.stringify(result.data.map(g => g.id))};
-              for (const groupId of groups) {
-                await updateGroupStats(groupId);
-              }
-            }
-
-            // Start loading stats when the page loads
-            loadAllGroupStats();
           </script>
         </body>
       </html>
@@ -207,7 +367,7 @@ app.get('', async (req, res) => {
     
     res.send(html);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch groups' });
+    res.status(500).json({ error: 'Failed to load page' });
   }
 });
 
