@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 // Define interfaces for database results
 interface CacheRow {
@@ -19,8 +20,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Initialize SQLite database
-const dbPath = process.env.RENDER_INTERNAL_PATH 
-  ? path.join(process.env.RENDER_INTERNAL_PATH, 'cache.db')
+// In Render, we should use the persistent disk mount path
+// Locally, we'll use the same directory as before
+const dbPath = process.env.RENDER 
+  ? '/data/cache.db'  // This should match your Render disk mount path
   : path.join(__dirname, 'cache.db');
 
 let db: Database.Database;
@@ -28,16 +31,29 @@ let db: Database.Database;
 function initializeDb() {
   if (!db) {
     console.log('Initializing SQLite database at:', dbPath);
-    db = new Database(dbPath);
-    
-    // Create cache table if it doesn't exist
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS cache (
-        key TEXT PRIMARY KEY,
-        data TEXT NOT NULL,
-        timestamp INTEGER NOT NULL
-      )
-    `);
+    // Ensure the directory exists
+    try {
+      const dbDir = path.dirname(dbPath);
+      if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true });
+      }
+      
+      db = new Database(dbPath);
+      
+      // Create cache table if it doesn't exist
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS cache (
+          key TEXT PRIMARY KEY,
+          data TEXT NOT NULL,
+          timestamp INTEGER NOT NULL
+        )
+      `);
+      
+      console.log('Successfully initialized SQLite database');
+    } catch (error) {
+      console.error('Error initializing database:', error);
+      throw error;
+    }
   }
   return db;
 }
