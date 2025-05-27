@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: qcc-life-group-health-report
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: node dist/server/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PCO_APP_ID
+        sync: false
+      - key: PCO_SECRET
+        sync: false
+      - key: PCO_GROUP_TYPE_ID
+        sync: false 

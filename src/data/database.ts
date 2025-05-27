@@ -13,7 +13,10 @@ interface CacheStats {
 }
 
 // Initialize SQLite database
-const dbPath = path.join(__dirname, 'cache.db');
+const dbPath = process.env.RENDER_INTERNAL_PATH 
+  ? path.join(process.env.RENDER_INTERNAL_PATH, 'cache.db')
+  : path.join(__dirname, 'cache.db');
+
 let db: Database.Database;
 
 try {

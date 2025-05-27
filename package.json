@@ -3,10 +3,13 @@
   "version": "1.0.0",
   "description": "Church Life Groups Attendance and Membership Tracking System",
   "main": "src/server/index.ts",
+  "engines": {
+    "node": ">=18.x"
+  },
   "scripts": {
-    "start": "ts-node src/server/index.ts",
+    "start": "node dist/server/index.js",
     "dev": "nodemon --exec ts-node src/server/index.ts",
-    "build": "tsc",
+    "build": "tsc --outDir dist",
     "test": "jest"
   },
   "dependencies": {
