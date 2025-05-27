@@ -1,8 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { getPeopleGroups, getGroupAttendance, getGroup } from './config/pco';
-import { cache } from './config/cache';
+import { getPeopleGroups, getGroupAttendance, getGroup } from './config/pco.js';
+import { cache } from './config/cache.js';
 
 dotenv.config();
 

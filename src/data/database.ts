@@ -1,11 +1,28 @@
-// Define interfaces for cache entry
-interface CacheEntry<T> {
-  data: T;
+import Database from 'better-sqlite3';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Define interfaces for database results
+interface CacheRow {
+  data: string;
   timestamp: number;
 }
 
-// In-memory cache store
-const cacheStore = new Map<string, CacheEntry<any>>();
+interface CacheStats {
+  count: number;
+  keys: string;
+}
+
+// Helper to get __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Initialize SQLite database
+const dbPath = process.env.RENDER_INTERNAL_PATH 
+  ? path.join(process.env.RENDER_INTERNAL_PATH, 'cache.db')
+  : path.join(__dirname, 'cache.db');
+
+let db: Database.Database;
 
 export const dbCache = {
   set: <T>(key: string, data: T, ttlMinutes: number = 60): void => {
