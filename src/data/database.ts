@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 
 // Define interfaces for database results
 interface CacheRow {
+  key: string;
   data: string;
   timestamp: number;
 }
@@ -24,13 +25,30 @@ const dbPath = process.env.RENDER_INTERNAL_PATH
 
 let db: Database.Database;
 
-const cacheStore = new Map<string, { data: any; timestamp: number }>();
+function initializeDb() {
+  if (!db) {
+    console.log('Initializing SQLite database at:', dbPath);
+    db = new Database(dbPath);
+    
+    // Create cache table if it doesn't exist
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS cache (
+        key TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        timestamp INTEGER NOT NULL
+      )
+    `);
+  }
+  return db;
+}
 
 export const dbCache = {
   set: <T>(key: string, data: T, ttlMinutes: number = 60): void => {
     try {
+      const db = initializeDb();
       const timestamp = Date.now();
-      cacheStore.set(key, { data, timestamp });
+      const stmt = db.prepare('INSERT OR REPLACE INTO cache (key, data, timestamp) VALUES (?, ?, ?)');
+      stmt.run(key, JSON.stringify(data), timestamp);
     } catch (error) {
       console.error(`Failed to set cache for key ${key}:`, error);
       throw error;
@@ -39,18 +57,22 @@ export const dbCache = {
 
   get: <T>(key: string, ttlMinutes: number = 60): T | null => {
     try {
-      const entry = cacheStore.get(key);
-      if (!entry) return null;
+      const db = initializeDb();
+      const stmt = db.prepare('SELECT data, timestamp FROM cache WHERE key = ?');
+      const row = stmt.get(key) as CacheRow | undefined;
+
+      if (!row) return null;
 
       // Check if data is expired
-      const age = Date.now() - entry.timestamp;
+      const age = Date.now() - row.timestamp;
       if (age > ttlMinutes * 60 * 1000) {
         // Data is expired, delete it
-        cacheStore.delete(key);
+        const deleteStmt = db.prepare('DELETE FROM cache WHERE key = ?');
+        deleteStmt.run(key);
         return null;
       }
 
-      return entry.data as T;
+      return JSON.parse(row.data) as T;
     } catch (error) {
       console.error(`Failed to get cache for key ${key}:`, error);
       return null;
@@ -59,8 +81,10 @@ export const dbCache = {
 
   getTimestamp: (key: string): number | null => {
     try {
-      const entry = cacheStore.get(key);
-      return entry ? entry.timestamp : null;
+      const db = initializeDb();
+      const stmt = db.prepare('SELECT timestamp FROM cache WHERE key = ?');
+      const row = stmt.get(key) as { timestamp: number } | undefined;
+      return row ? row.timestamp : null;
     } catch (error) {
       console.error(`Failed to get timestamp for key ${key}:`, error);
       return null;
@@ -69,7 +93,8 @@ export const dbCache = {
 
   clear: (): void => {
     try {
-      cacheStore.clear();
+      const db = initializeDb();
+      db.prepare('DELETE FROM cache').run();
     } catch (error) {
       console.error('Failed to clear cache:', error);
       throw error;
@@ -78,9 +103,17 @@ export const dbCache = {
 
   getStats: (): { size: number; keys: string[] } => {
     try {
+      const db = initializeDb();
+      const countStmt = db.prepare('SELECT COUNT(*) as count FROM cache');
+      const keysStmt = db.prepare('SELECT key FROM cache');
+      
+      const { count } = countStmt.get() as { count: number };
+      const rows = keysStmt.all() as Array<{ key: string }>;
+      const keys = rows.map(row => row.key);
+
       return {
-        size: cacheStore.size,
-        keys: Array.from(cacheStore.keys())
+        size: count,
+        keys: keys
       };
     } catch (error) {
       console.error('Failed to get cache stats:', error);
