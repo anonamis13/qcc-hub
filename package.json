@@ -7,9 +7,10 @@
     "node": ">=18.x"
   },
   "scripts": {
-    "start": "node dist/server/index.js",
+    "start": "node dist/src/server/index.js",
     "dev": "nodemon --exec ts-node src/server/index.ts",
-    "build": "tsc --outDir dist",
+    "clean": "rimraf dist",
+    "build": "npm run clean && tsc",
     "test": "jest"
   },
   "dependencies": {
@@ -19,7 +20,8 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "mongoose": "^7.6.3"
+    "mongoose": "^7.6.3",
+    "rimraf": "^5.0.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.15",

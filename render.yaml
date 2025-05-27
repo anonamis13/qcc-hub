@@ -3,7 +3,7 @@ services:
     name: qcc-life-group-health-report
     env: node
     buildCommand: npm install && npm run build
-    startCommand: node dist/server/index.js
+    startCommand: node dist/src/server/index.js
     envVars:
       - key: NODE_ENV
         value: production
