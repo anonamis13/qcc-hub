@@ -105,15 +105,7 @@ export const dbCache = {
 
       if (!row) return null;
 
-      // Check if data is expired
-      const age = Date.now() - row.timestamp;
-      if (age > ttlMinutes * 60 * 1000) {
-        // Data is expired, delete it
-        const deleteStmt = db.prepare('DELETE FROM cache WHERE key = ?');
-        deleteStmt.run(key);
-        return null;
-      }
-
+      // Always return cached data if it exists
       return JSON.parse(row.data) as T;
     } catch (error) {
       console.error(`Failed to get cache for key ${key}:`, error);
@@ -164,5 +156,22 @@ export const dbCache = {
   },
 
   // Expose cleanup function for manual triggering if needed
-  cleanup: cleanupOldData
+  cleanup: cleanupOldData,
+
+  needsRefresh: (key: string, ttlMinutes: number = 60): boolean => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare('SELECT timestamp FROM cache WHERE key = ?');
+      const row = stmt.get(key) as CacheRow | undefined;
+
+      if (!row) return true;
+
+      // Check if data is expired
+      const age = Date.now() - row.timestamp;
+      return age > ttlMinutes * 60 * 1000;
+    } catch (error) {
+      console.error(`Failed to check refresh status for key ${key}:`, error);
+      return true;
+    }
+  }
 }; 

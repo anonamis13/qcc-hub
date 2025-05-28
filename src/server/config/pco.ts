@@ -132,10 +132,12 @@ const pcoClient = axios.create({
   }
 });
 
-async function getAllGroups(): Promise<PCOGroup[]> {
+async function getAllGroups(forceRefresh: boolean = false): Promise<PCOGroup[]> {
   const cacheKey = 'all_groups';
   const cachedGroups = cache.get<PCOGroup[]>(cacheKey);
-  if (cachedGroups) {
+  
+  // Always use cache if available, unless force refresh is requested
+  if (cachedGroups && !forceRefresh) {
     console.log('Using cached groups data');
     return cachedGroups;
   }
@@ -167,15 +169,15 @@ async function getAllGroups(): Promise<PCOGroup[]> {
     await delay(100);
   }
 
-  // Cache the results for 5 minutes
+  // Cache the results
   cache.set(cacheKey, allGroups);
   return allGroups;
 }
 
-export const getPeopleGroups = async (groupTypeId?: number) => {
+export const getPeopleGroups = async (groupTypeId?: number, forceRefresh: boolean = false) => {
   try {
     // Get all groups with pagination
-    const allGroups = await getAllGroups();
+    const allGroups = await getAllGroups(forceRefresh);
     
     if (!groupTypeId) {
       return { data: allGroups };
@@ -197,10 +199,12 @@ export const getPeopleGroups = async (groupTypeId?: number) => {
   }
 };
 
-export const getGroupEvents = async (groupId: string, showAllEvents: boolean = false) => {
+export const getGroupEvents = async (groupId: string, showAllEvents: boolean = false, forceRefresh: boolean = false) => {
   const cacheKey = `events_${groupId}_${showAllEvents}`;
   const cachedEvents = cache.get<PCOEvent[]>(cacheKey);
-  if (cachedEvents) {
+  
+  // Always use cache if available, unless force refresh is requested
+  if (cachedEvents && !forceRefresh) {
     console.log(`Using cached events data for group ${groupId}`);
     return cachedEvents;
   }
@@ -254,10 +258,12 @@ export const getGroupEvents = async (groupId: string, showAllEvents: boolean = f
   });
 };
 
-export const getEventAttendance = async (eventId: string) => {
+export const getEventAttendance = async (eventId: string, forceRefresh: boolean = false) => {
   const cacheKey = `attendance_${eventId}`;
   const cachedAttendance = cache.get<{data: PCOAttendance[], meta: {total_count: number}}>(cacheKey);
-  if (cachedAttendance) {
+  
+  // Always use cache if available, unless force refresh is requested
+  if (cachedAttendance && !forceRefresh) {
     console.log(`Using cached attendance data for event ${eventId}`);
     return cachedAttendance;
   }
@@ -297,15 +303,15 @@ export const getEventAttendance = async (eventId: string) => {
 };
 
 // Get all attendance data for a group
-export const getGroupAttendance = async (groupId: string, showAllEvents: boolean = false) => {
+export const getGroupAttendance = async (groupId: string, showAllEvents: boolean = false, forceRefresh: boolean = false) => {
   return retryWithBackoff(async () => {
     try {
       // First get all events for this group
-      const events = await getGroupEvents(groupId, showAllEvents);
+      const events = await getGroupEvents(groupId, showAllEvents, forceRefresh);
       
       // Get attendance for each event
       const attendancePromises = events.map(async (event) => {
-        const attendance = await getEventAttendance(event.id);
+        const attendance = await getEventAttendance(event.id, forceRefresh);
         
         // Count attendees using the total from meta and counting present from data
         const totalAttendees = attendance.meta.total_count;

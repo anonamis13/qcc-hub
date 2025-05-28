@@ -28,7 +28,8 @@ const formatDate = (dateString: string) => {
 app.get('/api/group-stats/:groupId', async (req, res) => {
   try {
     const { groupId } = req.params;
-    const stats = await getGroupAttendance(groupId);
+    const forceRefresh = req.query.forceRefresh === 'true';
+    const stats = await getGroupAttendance(groupId, false, forceRefresh);
     res.json(stats.overall_statistics);
   } catch (error) {
     console.error(`Error fetching stats for group ${req.params.groupId}:`, error);
@@ -41,12 +42,13 @@ app.get('/api/load-groups', async (req, res) => {
   try {
     const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
     const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
+    const forceRefresh = req.query.forceRefresh === 'true';
 
     if (groupTypeIdFromEnv && isNaN(groupTypeId)) {
       console.warn(`Warning: PCO_GROUP_TYPE_ID environment variable ('${groupTypeIdFromEnv}') is not a valid number. Using default 429361.`);
     }
 
-    const result = await getPeopleGroups(groupTypeId);
+    const result = await getPeopleGroups(groupTypeId, forceRefresh);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch groups' });
@@ -58,7 +60,9 @@ app.get('/api/check-cache', async (req, res) => {
   try {
     const cacheKey = 'all_groups';
     const cachedGroups = cache.get(cacheKey);
-    res.json({ hasCachedData: !!cachedGroups });
+    res.json({ 
+      hasCachedData: !!cachedGroups
+    });
   } catch (error) {
     res.status(500).json({ error: 'Failed to check cache status' });
   }
@@ -222,6 +226,9 @@ app.get('', async (req, res) => {
             const initialMessage = document.getElementById('initialMessage');
             const lastUpdate = document.getElementById('lastUpdate');
 
+            // Add a global variable to track force refresh state
+            let forceRefreshParam = '';
+
             function formatLastUpdateTime(timestamp) {
               if (!timestamp) return '';
               const date = new Date(timestamp);
@@ -250,11 +257,39 @@ app.get('', async (req, res) => {
               }
             }
 
+            // Check cache and load data if available
+            async function checkCacheAndLoad() {
+              try {
+                const response = await fetch('/api/check-cache');
+                if (!response.ok) throw new Error('Failed to check cache');
+                const { hasCachedData } = await response.json();
+                
+                if (hasCachedData) {
+                  // Always load cached data
+                  loadGroups();
+                  await updateLastUpdateTime();
+                  loadDataBtn.textContent = 'Refresh Data';
+                  loadDataBtn.style.backgroundColor = '#007bff';
+                } else {
+                  // If no cached data, show initial load message
+                  loadDataBtn.disabled = false;
+                  loadDataBtn.textContent = 'Load Data';
+                  initialMessage.textContent = 'No data available. Click "Load Data" to fetch Life Groups data.';
+                }
+              } catch (error) {
+                console.error('Error checking cache:', error);
+                loadDataBtn.disabled = false;
+                loadDataBtn.textContent = 'Load Data';
+                initialMessage.textContent = 'Error checking data status. Click "Load Data" to try fetching Life Groups data.';
+              }
+            }
+
             async function loadGroups() {
               try {
                 loadDataBtn.disabled = true;
                 loadDataBtn.textContent = 'Loading...';
                 
+                // Never force refresh on initial load
                 const response = await fetch('/api/load-groups');
                 if (!response.ok) throw new Error('Failed to fetch groups');
                 const result = await response.json();
@@ -297,40 +332,11 @@ app.get('', async (req, res) => {
               result.data.forEach(group => updateGroupStats(group.id));
             }
 
-            // Check cache and load data if available
-            async function checkCacheAndLoad() {
-              try {
-                const response = await fetch('/api/check-cache');
-                if (!response.ok) throw new Error('Failed to check cache');
-                const { hasCachedData } = await response.json();
-                
-                if (hasCachedData) {
-                  // If we have cached data, load it immediately
-                  loadGroups();
-                  await updateLastUpdateTime();
-                } else {
-                  // If no cached data, show the button and initial message
-                  loadDataBtn.disabled = false;
-                  initialMessage.textContent = 'Click "Load Data" to fetch and display the Life Groups data.';
-                }
-              } catch (error) {
-                console.error('Error checking cache:', error);
-                loadDataBtn.disabled = false;
-                initialMessage.textContent = 'Click "Load Data" to fetch and display the Life Groups data.';
-              }
-            }
-
-            // Add click event listener
-            loadDataBtn.addEventListener('click', loadGroups);
-
-            // Check cache when page loads
-            checkCacheAndLoad();
-
             // Function to update stats for a group
             async function updateGroupStats(groupId) {
               const container = document.querySelector(\`#group-\${groupId} .stats-container\`);
               try {
-                const response = await fetch(\`/api/group-stats/\${groupId}\`);
+                const response = await fetch(\`/api/group-stats/\${groupId}\${forceRefreshParam}\`);
                 if (!response.ok) throw new Error('Failed to fetch stats');
                 const stats = await response.json();
                 
@@ -339,27 +345,57 @@ app.get('', async (req, res) => {
                 else if (stats.overall_attendance_rate >= 50) rateClass = 'attendance-warning';
                 else if (stats.overall_attendance_rate > 0) rateClass = 'attendance-poor';
 
-                container.innerHTML = stats ? \`
-                  <div class="stat">
-                    <div class="stat-value">\${stats.average_attendance}</div>
-                    <div class="stat-label">Avg. Attendance</div>
-                  </div>
-                  <div class="stat">
-                    <div class="stat-value \${rateClass}">\${stats.overall_attendance_rate}%</div>
-                    <div class="stat-label">Attendance Rate</div>
-                  </div>
-                  <div class="stat">
-                    <div class="stat-value">\${stats.events_with_attendance}</div>
-                    <div class="stat-label">Events</div>
-                  </div>
-                \` : \`
-                  <div class="no-data">No attendance data available</div>
-                \`;
+                if (container) {
+                  container.innerHTML = stats ? \`
+                    <div class="stat">
+                      <div class="stat-value">\${stats.average_attendance}</div>
+                      <div class="stat-label">Avg. Attendance</div>
+                    </div>
+                    <div class="stat">
+                      <div class="stat-value \${rateClass}">\${stats.overall_attendance_rate}%</div>
+                      <div class="stat-label">Attendance Rate</div>
+                    </div>
+                    <div class="stat">
+                      <div class="stat-value">\${stats.events_with_attendance}</div>
+                      <div class="stat-label">Events</div>
+                    </div>
+                  \` : \`
+                    <div class="no-data">No attendance data available</div>
+                  \`;
+                }
               } catch (error) {
                 console.error('Error fetching stats:', error);
-                container.innerHTML = \`<div class="no-data">Failed to load statistics</div>\`;
+                if (container) {
+                  container.innerHTML = \`<div class="no-data">Failed to load statistics</div>\`;
+                }
               }
             }
+
+            // Add click event listener
+            loadDataBtn.addEventListener('click', async () => {
+              loadDataBtn.textContent = 'Refreshing...';
+              loadDataBtn.style.backgroundColor = '#007bff';
+              
+              // Set force refresh parameter
+              forceRefreshParam = '?forceRefresh=true';
+              
+              // Add forceRefresh parameter when clicking the button
+              const response = await fetch('/api/load-groups?forceRefresh=true');
+              if (!response.ok) throw new Error('Failed to fetch groups');
+              const result = await response.json();
+              displayGroups(result);
+              await updateLastUpdateTime();
+              
+              // Update button state
+              loadDataBtn.textContent = 'Refresh Data';
+              loadDataBtn.style.backgroundColor = '#007bff';
+              
+              // Clear the force refresh parameter
+              forceRefreshParam = '';
+            });
+
+            // Check cache and load data when page loads
+            checkCacheAndLoad();
           </script>
         </body>
       </html>
@@ -375,11 +411,12 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
   try {
     const { groupId } = req.params;
     const showAllEvents = req.query.showAll === 'true';
-    console.log('Request params:', { groupId, showAllEvents, query: req.query });
+    const forceRefresh = req.query.forceRefresh === 'true';
+    console.log('Request params:', { groupId, showAllEvents, forceRefresh, query: req.query });
     
     const [group, attendanceData] = await Promise.all([
       getGroup(groupId),
-      getGroupAttendance(groupId, showAllEvents)
+      getGroupAttendance(groupId, showAllEvents, forceRefresh)
     ]);
     
     const html = `
@@ -599,6 +636,10 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
                 <span class="toggle-slider"></span>
               </label>
               <span class="toggle-label">Show all years</span>
+              <span id="toggleLoadingMessage" style="color: #666; display: none; align-items: center;">
+                <div class="loading" style="width: 16px; height: 16px; margin: 0 8px;"></div>
+                Loading events...
+              </span>
               <span class="date-range">
                 Showing events from: ${showAllEvents ? 'All years' : 'Current year'}
               </span>
@@ -607,6 +648,8 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
             <script>
               document.getElementById('showAllEvents').addEventListener('change', function() {
                 console.log('Toggle changed:', this.checked);
+                const loadingMessage = document.getElementById('toggleLoadingMessage');
+                loadingMessage.style.display = 'flex';
                 const newUrl = new URL(window.location.href);
                 newUrl.searchParams.set('showAll', this.checked);
                 console.log('Redirecting to:', newUrl.toString());
