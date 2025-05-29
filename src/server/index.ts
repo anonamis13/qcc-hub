@@ -463,6 +463,10 @@ app.get('', async (req, res) => {
                 console.log('All data loaded:', { groups: result.data.length, stats: groupStats.filter(s => s !== null).length });
                 console.log('Check the console above for individual group API call counts');
                 
+                // Add a small delay to ensure all backend calculations are complete
+                console.log('Ensuring all calculations are complete...');
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
                 // Calculate total API calls made (rough estimate)
                 const totalEventsProcessed = groupStats.filter(s => s !== null).length * 40; // rough average
                 console.log(\`Estimated total API calls: ~\${totalEventsProcessed + result.data.length + 1} (\${result.data.length} groups + \${totalEventsProcessed} events + 1 group list)\`);
@@ -483,19 +487,28 @@ app.get('', async (req, res) => {
                       else if (stats.overall_attendance_rate >= 50) rateClass = 'attendance-warning';
                       else if (stats.overall_attendance_rate > 0) rateClass = 'attendance-poor';
 
-                      statsHtml = 
-                        '<div class="stat">' +
-                          '<div class="stat-value">' + (stats.average_attendance || 0) + '</div>' +
-                          '<div class="stat-label">Avg. Attendance</div>' +
-                        '</div>' +
-                        '<div class="stat">' +
-                          '<div class="stat-value ' + rateClass + '">' + (stats.overall_attendance_rate || 0) + '%</div>' +
-                          '<div class="stat-label">Attendance Rate</div>' +
-                        '</div>' +
-                        '<div class="stat">' +
-                          '<div class="stat-value">' + (stats.events_with_attendance || 0) + '</div>' +
-                          '<div class="stat-label">Events</div>' +
-                        '</div>';
+                      // Validate stats - if they seem suspicious, show a warning
+                      const isSuspicious = stats.events_with_attendance === 0 || 
+                                         (stats.average_attendance === 0 && stats.overall_attendance_rate > 0) ||
+                                         (stats.overall_attendance_rate === 0 && stats.average_attendance > 0);
+
+                      if (isSuspicious) {
+                        statsHtml = '<div class="no-data">Stats calculating... (refresh if this persists)</div>';
+                      } else {
+                        statsHtml = 
+                          '<div class="stat">' +
+                            '<div class="stat-value">' + (stats.average_attendance || 0) + '</div>' +
+                            '<div class="stat-label">Avg. Attendance</div>' +
+                          '</div>' +
+                          '<div class="stat">' +
+                            '<div class="stat-value ' + rateClass + '">' + (stats.overall_attendance_rate || 0) + '%</div>' +
+                            '<div class="stat-label">Attendance Rate</div>' +
+                          '</div>' +
+                          '<div class="stat">' +
+                            '<div class="stat-value">' + (stats.events_with_attendance || 0) + '</div>' +
+                            '<div class="stat-label">Events</div>' +
+                          '</div>';
+                      }
                     } else {
                       statsHtml = '<div class="no-data">Failed to load statistics</div>';
                     }
