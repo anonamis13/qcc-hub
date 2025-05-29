@@ -390,7 +390,34 @@ app.get('', async (req, res) => {
             }
 
             // Add click event listener
-            loadDataBtn.addEventListener('click', async () => {
+            loadDataBtn.addEventListener('click', async (event) => {
+              // Check if it's been less than 1 hour since last refresh (unless shift-clicked)
+              if (!event.shiftKey) {
+                try {
+                  const response = await fetch('/api/cache-info');
+                  if (response.ok) {
+                    const { timestamp } = await response.json();
+                    if (timestamp) {
+                      const hoursSinceLastUpdate = (Date.now() - timestamp) / (1000 * 60 * 60);
+                      if (hoursSinceLastUpdate < 1) {
+                        const confirmed = confirm(
+                          \`Data was last refreshed less than 1 hour ago.\\n\\n\` +
+                          \`Are you sure you want to refresh now?\\n\\n\`
+                        );
+                        if (!confirmed) {
+                          return; // Exit without refreshing
+                        }
+                      }
+                    }
+                  }
+                } catch (error) {
+                  console.warn('Could not check last update time:', error);
+                  // If we can't check, proceed with refresh
+                }
+              } else {
+                console.log('Shift-click detected, bypassing confirmation dialog');
+              }
+
               const loadingHtml = '<span>Refreshing...</span><span class="est-time">est. time ≈ 3 min.</span>';
               loadDataBtn.innerHTML = loadingHtml;
               loadDataBtn.style.backgroundColor = '#007bff';
@@ -444,36 +471,46 @@ app.get('', async (req, res) => {
                 // For the stats, we can use cached event data since event attendance doesn't change frequently
                 // Only the group membership (total_count) needs to be updated, which is handled by the groups refresh
                 console.log('Starting to fetch stats for', result.data.length, 'groups (current year only)');
-                const attendancePromises = result.data.map(group => 
-                  fetch('/api/group-stats/' + group.id + '?forceRefresh=true') // We do need forceRefresh to recalculate with new membership
-                    .then(response => {
-                      if (!response.ok) {
-                        console.warn('Failed to fetch stats for group', group.id);
-                        return null;
-                      }
-                      return response.json();
-                    })
-                    .catch(error => {
-                      console.warn('Error fetching stats for group', group.id, error);
-                      return null;
-                    })
-                );
                 
-                const groupStats = await Promise.all(attendancePromises);
+                // Process groups sequentially to avoid cache race conditions
+                const groupStats = [];
+                for (let i = 0; i < result.data.length; i++) {
+                  const group = result.data[i];
+                  try {
+                    console.log(\`Processing group \${i + 1}/\${result.data.length}: \${group.attributes.name}\`);
+                    const response = await fetch('/api/group-stats/' + group.id + '?forceRefresh=true');
+                    if (!response.ok) {
+                      console.warn('Failed to fetch stats for group', group.id);
+                      groupStats.push(null);
+                    } else {
+                      const stats = await response.json();
+                      groupStats.push(stats);
+                    }
+                  } catch (error) {
+                    console.warn('Error fetching stats for group', group.id, error);
+                    groupStats.push(null);
+                  }
+                }
+                
                 console.log('All data loaded:', { groups: result.data.length, stats: groupStats.filter(s => s !== null).length });
                 console.log('Check the console above for individual group API call counts');
                 
-                // Add a small delay to ensure all backend calculations are complete
-                console.log('Ensuring all calculations are complete...');
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                // Add a brief delay to ensure all cache writes from individual group processing are complete
+                console.log('Ensuring all cache writes are complete...');
+                await new Promise(resolve => setTimeout(resolve, 1000));
                 
-                // Calculate total API calls made (rough estimate)
-                const totalEventsProcessed = groupStats.filter(s => s !== null).length * 40; // rough average
-                console.log(\`Estimated total API calls: ~\${totalEventsProcessed + result.data.length + 1} (\${result.data.length} groups + \${totalEventsProcessed} events + 1 group list)\`);
+                // Remove the artificial delay since we're now processing sequentially
+                console.log('Data processing complete, displaying results...');
 
                 // Load aggregate chart with cached data (no forceRefresh to avoid duplicate API calls)
                 await loadAggregateData(false);
 
+                // Force a page refresh to ensure we display consistent cached data
+                console.log('Refreshing page to display consistent data...');
+                window.location.reload();
+                
+                // The code below will run after the page refresh loads the cached data
+                
                 // Prepare the HTML with stats data first
                 const groupsHtml = result.data
                   .sort((a, b) => a.attributes.name.localeCompare(b.attributes.name))
