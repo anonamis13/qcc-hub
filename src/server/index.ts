@@ -79,6 +79,107 @@ app.get('/api/cache-info', async (req, res) => {
   }
 });
 
+// Add new endpoint for aggregated attendance data
+app.get('/api/aggregate-attendance', async (req, res) => {
+  try {
+    const forceRefresh = req.query.forceRefresh === 'true';
+    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
+    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
+
+    // Get all groups first
+    const groups = await getPeopleGroups(groupTypeId, forceRefresh);
+    
+    // Get attendance data for each group
+    const attendancePromises = groups.data.map(group => 
+      getGroupAttendance(group.id, false, forceRefresh)
+    );
+    
+    const allGroupsAttendance = await Promise.all(attendancePromises);
+    
+    // Create a map of week -> attendance data
+    const weekMap = new Map();
+    
+    // Helper function to get Wednesday of the week for any given date
+    const getWednesdayOfWeek = (date: Date) => {
+      const result = new Date(date);
+      const day = result.getDay();
+      
+      // If it's Sunday (0) through Tuesday (2), get previous Wednesday
+      if (day < 3) {
+        result.setDate(result.getDate() - (day + 4));
+      }
+      // If it's Wednesday (3) through Saturday (6), get this week's Wednesday
+      else {
+        result.setDate(result.getDate() - (day - 3));
+      }
+      
+      // Reset time to midnight to ensure consistent dates
+      result.setHours(0, 0, 0, 0);
+      return result;
+    };
+    
+    allGroupsAttendance.forEach(groupData => {
+      groupData.events.forEach(event => {
+        if (!event.event.canceled && event.attendance_summary.present_count > 0) {
+          const eventDate = new Date(event.event.date);
+          const dayOfWeek = eventDate.getDay();
+          
+          // Only process Wednesday and Thursday events
+          if (dayOfWeek === 3 || dayOfWeek === 4) {
+            // Get the Wednesday of this week
+            const wednesday = getWednesdayOfWeek(eventDate);
+            const weekKey = wednesday.toISOString().split('T')[0];
+            
+            const existing = weekMap.get(weekKey) || { 
+              totalPresent: 0,
+              totalMembers: 0,
+              totalVisitors: 0,
+              groupsProcessed: new Set(),
+              daysWithAttendance: new Set()
+            };
+            
+            // Add this group's data if we haven't processed it for this week
+            const groupKey = `${event.event.id}-${dayOfWeek}`;
+            if (!existing.groupsProcessed.has(groupKey)) {
+              existing.totalPresent += event.attendance_summary.present_members;
+              existing.totalVisitors += event.attendance_summary.present_visitors;
+              
+              // Only count total members once per group per week
+              if (!existing.groupsProcessed.has(event.event.id)) {
+                existing.totalMembers += event.attendance_summary.total_count;
+              }
+              
+              existing.groupsProcessed.add(groupKey);
+              existing.groupsProcessed.add(event.event.id);
+              existing.daysWithAttendance.add(dayOfWeek);
+            }
+            
+            weekMap.set(weekKey, existing);
+          }
+        }
+      });
+    });
+    
+    // Convert map to array and sort by date
+    const aggregatedData = Array.from(weekMap.entries())
+      .map(([weekKey, data]) => ({
+        date: weekKey,
+        totalPresent: data.totalPresent,
+        totalVisitors: data.totalVisitors,
+        totalWithVisitors: data.totalPresent + data.totalVisitors,
+        totalMembers: data.totalMembers,
+        attendanceRate: Math.round((data.totalPresent / data.totalMembers) * 100),
+        daysIncluded: Array.from(data.daysWithAttendance).length
+      }))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    
+    res.json(aggregatedData);
+  } catch (error) {
+    console.error('Error fetching aggregate attendance:', error);
+    res.status(500).json({ error: 'Failed to fetch aggregate attendance data' });
+  }
+});
+
 //Home Page
 app.get('', async (req, res) => {
   try {
@@ -87,6 +188,7 @@ app.get('', async (req, res) => {
       <html>
         <head>
           <title>Queen City Church - Life Groups Health Report</title>
+          <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
           <style>
             body {
               font-family: Arial, sans-serif;
@@ -177,6 +279,15 @@ app.get('', async (req, res) => {
               cursor: pointer;
               margin-bottom: 20px;
               transition: all 0.3s ease;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              min-width: 160px;
+            }
+            #loadDataBtn .est-time {
+              font-size: 12px;
+              opacity: 0.8;
+              margin-top: 4px;
             }
             #loadDataBtn:hover:not(:disabled) {
               background-color: #0056b3;
@@ -199,20 +310,41 @@ app.get('', async (req, res) => {
               padding: 40px;
               font-size: 18px;
             }
+            .elapsed-time {
+              display: block;
+              font-size: 14px;
+              color: #666;
+              margin-top: 10px;
+            }
             #lastUpdate {
               margin: 10px 0;
               color: #666;
               font-size: 14px;
               display: none;
             }
+            .chart-container {
+              background-color: white;
+              padding: 20px;
+              border-radius: 8px;
+              margin: 20px 0;
+              height: 400px;
+            }
           </style>
         </head>
         <body>
           <div class="container">
             <h1>Queen City Church - Life Groups Health Report</h1>
-            <button id="loadDataBtn">Load Data</button>
+            <button id="loadDataBtn">
+              <span>Load Data</span>
+              <span class="est-time">est. time ≈ 3 min.</span>
+            </button>
             <p id="lastUpdate"></p>
             <p id="groupCount"></p>
+            
+            <div class="chart-container">
+              <canvas id="aggregateChart"></canvas>
+            </div>
+            
             <div id="initialMessage" class="initial-message">
               Loading...
             </div>
@@ -257,6 +389,159 @@ app.get('', async (req, res) => {
               }
             }
 
+            // Add click event listener
+            loadDataBtn.addEventListener('click', async () => {
+              const loadingHtml = '<span>Refreshing...</span><span class="est-time">est. time ≈ 3 min.</span>';
+              loadDataBtn.innerHTML = loadingHtml;
+              loadDataBtn.style.backgroundColor = '#007bff';
+              loadDataBtn.disabled = true;
+
+              // Clear everything and show loading state
+              groupList.innerHTML = '';
+              groupList.style.display = 'none';
+              groupCount.style.display = 'none';
+              
+              // Hide chart container while loading
+              const chartContainer = document.querySelector('.chart-container');
+              if (chartContainer) {
+                chartContainer.style.display = 'none';
+              }
+              
+              initialMessage.textContent = 'Loading fresh data...';
+              const elapsedTimeSpan = document.createElement('span');
+              elapsedTimeSpan.className = 'elapsed-time';
+              initialMessage.appendChild(elapsedTimeSpan);
+              initialMessage.style.display = 'block';
+
+              // Start timer
+              const startTime = Date.now();
+              const updateElapsedTime = () => {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                const minutes = Math.floor(elapsed / 60);
+                const seconds = elapsed % 60;
+                elapsedTimeSpan.textContent = \`Time elapsed: \${minutes}:\${seconds.toString().padStart(2, '0')}\`;
+              };
+              const timerInterval = setInterval(updateElapsedTime, 1000);
+              updateElapsedTime(); // Show initial time
+
+              // Clear the chart
+              const chartCanvas = document.getElementById('aggregateChart');
+              if (chartCanvas) {
+                const ctx = chartCanvas.getContext('2d');
+                ctx.clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+              }
+              
+              try {
+                // Fetch all data first
+                console.log('Starting data refresh...');
+                
+                // Only fetch groups once
+                const groupsResponse = await fetch('/api/load-groups?forceRefresh=true');
+                if (!groupsResponse.ok) throw new Error('Failed to fetch groups');
+                const result = await groupsResponse.json();
+                console.log('Groups fetched:', result.data.length);
+
+                // For the stats, we can use cached event data since event attendance doesn't change frequently
+                // Only the group membership (total_count) needs to be updated, which is handled by the groups refresh
+                console.log('Starting to fetch stats for', result.data.length, 'groups (current year only)');
+                const attendancePromises = result.data.map(group => 
+                  fetch('/api/group-stats/' + group.id + '?forceRefresh=true') // We do need forceRefresh to recalculate with new membership
+                    .then(response => {
+                      if (!response.ok) {
+                        console.warn('Failed to fetch stats for group', group.id);
+                        return null;
+                      }
+                      return response.json();
+                    })
+                    .catch(error => {
+                      console.warn('Error fetching stats for group', group.id, error);
+                      return null;
+                    })
+                );
+                
+                const groupStats = await Promise.all(attendancePromises);
+                console.log('All data loaded:', { groups: result.data.length, stats: groupStats.filter(s => s !== null).length });
+                console.log('Check the console above for individual group API call counts');
+                
+                // Calculate total API calls made (rough estimate)
+                const totalEventsProcessed = groupStats.filter(s => s !== null).length * 40; // rough average
+                console.log(\`Estimated total API calls: ~\${totalEventsProcessed + result.data.length + 1} (\${result.data.length} groups + \${totalEventsProcessed} events + 1 group list)\`);
+
+                // Load aggregate chart with cached data (no forceRefresh to avoid duplicate API calls)
+                await loadAggregateData(false);
+
+                // Prepare the HTML with stats data first
+                const groupsHtml = result.data
+                  .sort((a, b) => a.attributes.name.localeCompare(b.attributes.name))
+                  .map((group, index) => {
+                    const stats = groupStats[index];
+                    let statsHtml = '';
+                    
+                    if (stats) {
+                      let rateClass = '';
+                      if (stats.overall_attendance_rate >= 70) rateClass = 'attendance-good';
+                      else if (stats.overall_attendance_rate >= 50) rateClass = 'attendance-warning';
+                      else if (stats.overall_attendance_rate > 0) rateClass = 'attendance-poor';
+
+                      statsHtml = 
+                        '<div class="stat">' +
+                          '<div class="stat-value">' + (stats.average_attendance || 0) + '</div>' +
+                          '<div class="stat-label">Avg. Attendance</div>' +
+                        '</div>' +
+                        '<div class="stat">' +
+                          '<div class="stat-value ' + rateClass + '">' + (stats.overall_attendance_rate || 0) + '%</div>' +
+                          '<div class="stat-label">Attendance Rate</div>' +
+                        '</div>' +
+                        '<div class="stat">' +
+                          '<div class="stat-value">' + (stats.events_with_attendance || 0) + '</div>' +
+                          '<div class="stat-label">Events</div>' +
+                        '</div>';
+                    } else {
+                      statsHtml = '<div class="no-data">Failed to load statistics</div>';
+                    }
+
+                    return '<li class="group-item" id="group-' + group.id + '">' +
+                      '<a href="/groups/' + group.id + '/attendance">' +
+                        group.attributes.name +
+                      '</a>' +
+                      '<div class="stats-container" id="stats-' + group.id + '">' +
+                        statsHtml +
+                      '</div>' +
+                    '</li>';
+                  }).join('');
+
+                // Now display everything at once
+                groupList.style.display = 'block';
+                initialMessage.style.display = 'none';
+                groupCount.textContent = \`\${result.filtered_count} total groups.\`;
+                groupCount.style.display = 'block';
+                groupList.innerHTML = groupsHtml;
+                
+                // Show chart container now that data is loaded
+                if (chartContainer) {
+                  chartContainer.style.display = 'block';
+                }
+                
+                console.log('Display complete');
+                await updateLastUpdateTime();
+                clearInterval(timerInterval); // Stop the timer
+                const totalTime = Math.floor((Date.now() - startTime) / 1000);
+                const totalMinutes = Math.floor(totalTime / 60);
+                const totalSeconds = totalTime % 60;
+                console.log(\`Total refresh time: \${totalMinutes}:\${totalSeconds.toString().padStart(2, '0')} (\${totalTime} seconds)\`);
+              } catch (error) {
+                console.error('Error refreshing data:', error);
+                initialMessage.textContent = 'Failed to refresh data. Please try again.';
+                alert('Failed to refresh data. Please try again.');
+              } finally {
+                // Update button state
+                const refreshHtml = '<span>Refresh Data</span><span class="est-time">est. time ≈ 3 min.</span>';
+                loadDataBtn.innerHTML = refreshHtml;
+                loadDataBtn.style.backgroundColor = '#007bff';
+                loadDataBtn.disabled = false;
+              }
+            });
+
             // Check cache and load data if available
             async function checkCacheAndLoad() {
               try {
@@ -264,22 +549,25 @@ app.get('', async (req, res) => {
                 if (!response.ok) throw new Error('Failed to check cache');
                 const { hasCachedData } = await response.json();
                 
+                const buttonHtml = '<span>Refresh Data</span><span class="est-time">est. time ≈ 3 min.</span>';
+                const initialButtonHtml = '<span>Load Data</span><span class="est-time">est. time ≈ 3 min.</span>';
+                
                 if (hasCachedData) {
                   // Always load cached data
                   loadGroups();
                   await updateLastUpdateTime();
-                  loadDataBtn.textContent = 'Refresh Data';
+                  loadDataBtn.innerHTML = buttonHtml;
                   loadDataBtn.style.backgroundColor = '#007bff';
                 } else {
                   // If no cached data, show initial load message
                   loadDataBtn.disabled = false;
-                  loadDataBtn.textContent = 'Load Data';
+                  loadDataBtn.innerHTML = initialButtonHtml;
                   initialMessage.textContent = 'No data available. Click "Load Data" to fetch Life Groups data.';
                 }
               } catch (error) {
                 console.error('Error checking cache:', error);
                 loadDataBtn.disabled = false;
-                loadDataBtn.textContent = 'Load Data';
+                loadDataBtn.innerHTML = '<span>Load Data</span><span class="est-time">est. time ≈ 3 min.</span>';
                 initialMessage.textContent = 'Error checking data status. Click "Load Data" to try fetching Life Groups data.';
               }
             }
@@ -287,18 +575,23 @@ app.get('', async (req, res) => {
             async function loadGroups() {
               try {
                 loadDataBtn.disabled = true;
-                loadDataBtn.textContent = 'Loading...';
+                loadDataBtn.innerHTML = '<span>Loading...</span><span class="est-time">est. time ≈ 3 min.</span>';
                 
-                // Never force refresh on initial load
+                // Only load groups, don't load aggregate data here to avoid duplicate API calls
                 const response = await fetch('/api/load-groups');
+                
                 if (!response.ok) throw new Error('Failed to fetch groups');
                 const result = await response.json();
                 
                 displayGroups(result);
+                
+                // Load aggregate data separately after groups are displayed
+                await loadAggregateData();
                 await updateLastUpdateTime();
               } catch (error) {
                 console.error('Error:', error);
-                loadDataBtn.textContent = 'Load Data';
+                loadDataBtn.disabled = false;
+                loadDataBtn.innerHTML = '<span>Load Data</span><span class="est-time">est. time ≈ 3 min.</span>';
                 initialMessage.textContent = 'Failed to load groups. Please try again.';
                 initialMessage.style.display = 'block';
                 alert('Failed to load groups. Please try again.');
@@ -326,7 +619,7 @@ app.get('', async (req, res) => {
                   </li>
                 \`).join('');
 
-              loadDataBtn.textContent = 'Refresh Data';
+              loadDataBtn.innerHTML = '<span>Refresh Data</span><span class="est-time">est. time ≈ 3 min.</span>';
               
               // Load stats for each group
               result.data.forEach(group => updateGroupStats(group.id));
@@ -371,28 +664,121 @@ app.get('', async (req, res) => {
               }
             }
 
-            // Add click event listener
-            loadDataBtn.addEventListener('click', async () => {
-              loadDataBtn.textContent = 'Refreshing...';
-              loadDataBtn.style.backgroundColor = '#007bff';
-              
-              // Set force refresh parameter
-              forceRefreshParam = '?forceRefresh=true';
-              
-              // Add forceRefresh parameter when clicking the button
-              const response = await fetch('/api/load-groups?forceRefresh=true');
-              if (!response.ok) throw new Error('Failed to fetch groups');
-              const result = await response.json();
-              displayGroups(result);
-              await updateLastUpdateTime();
-              
-              // Update button state
-              loadDataBtn.textContent = 'Refresh Data';
-              loadDataBtn.style.backgroundColor = '#007bff';
-              
-              // Clear the force refresh parameter
-              forceRefreshParam = '';
-            });
+            // Add function to load and display aggregate data
+            async function loadAggregateData(forceRefresh = false) {
+              try {
+                const refreshParam = forceRefresh ? '?forceRefresh=true' : '';
+                const response = await fetch('/api/aggregate-attendance' + refreshParam);
+                if (!response.ok) throw new Error('Failed to fetch aggregate data');
+                const aggregateData = await response.json();
+                
+                const ctx = document.getElementById('aggregateChart').getContext('2d');
+                
+                // Clear any existing chart
+                if (window.aggregateChartInstance) {
+                  window.aggregateChartInstance.destroy();
+                }
+                
+                window.aggregateChartInstance = new Chart(ctx, {
+                  type: 'line',
+                  data: {
+                    labels: aggregateData.map(item => {
+                      // Get the Sunday of the week
+                      const date = new Date(item.date);
+                      const sunday = new Date(date);
+                      const day = sunday.getDay();
+                      sunday.setDate(sunday.getDate() - day); // Go back to Sunday (0 days from Sunday, 3 from Wed, 4 from Thu)
+                      
+                      return 'Week of ' + sunday.toLocaleDateString('en-US', { 
+                        month: 'short', 
+                        day: 'numeric',
+                        year: 'numeric'
+                      });
+                    }),
+                    datasets: [
+                      {
+                        label: 'Visitors + Members',
+                        data: aggregateData.map(item => item.totalWithVisitors),
+                        borderColor: '#28a745',
+                        backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                      },
+                      {
+                        label: 'Members Present',
+                        data: aggregateData.map(item => item.totalPresent),
+                        borderColor: '#007bff',
+                        backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                      },
+                      {
+                        label: 'Total Members',
+                        data: aggregateData.map(item => item.totalMembers),
+                        borderColor: '#6c757d',
+                        backgroundColor: 'rgba(108, 117, 125, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                      }
+                    ]
+                  },
+                  options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      title: {
+                        display: true,
+                        text: 'Weekly Life Groups Attendance Trends (Wed-Thu Combined)'
+                      },
+                      subtitle: {
+                        display: true,
+                        text: 'Click a dataset color to exclude it from the chart. Hover over a data point to see more info. Data shows current year, past events only.',
+                        font: {
+                          size: 12
+                        },
+                        color: '#666'
+                      },
+                      tooltip: {
+                        callbacks: {
+                          afterBody: function(context) {
+                            const dataIndex = context[0].dataIndex;
+                            const data = aggregateData[dataIndex];
+                            return [
+                              'Weekly Attendance Rate: ' + data.attendanceRate + '%',
+                              'Members Present: ' + data.totalPresent,
+                              'Visitors: +' + data.totalVisitors,
+                              'Total with Visitors: ' + data.totalWithVisitors,
+                              'Days with Data: ' + data.daysIncluded + ' (Wed/Thu)'
+                            ];
+                          }
+                        }
+                      }
+                    },
+                    scales: {
+                      y: {
+                        beginAtZero: true,
+                        title: {
+                          display: true,
+                          text: 'Number of People'
+                        }
+                      },
+                      x: {
+                        title: {
+                          display: true,
+                          text: 'Week'
+                        },
+                        ticks: {
+                          maxRotation: 45,
+                          minRotation: 45
+                        }
+                      }
+                    }
+                  }
+                });
+              } catch (error) {
+                console.error('Error loading aggregate data:', error);
+              }
+            }
 
             // Check cache and load data when page loads
             checkCacheAndLoad();
@@ -670,7 +1056,7 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
                   <th>Members</th>
                   <th>Visitors</th>
                   <th>Total Present</th>
-                  <th>Total Members</th>
+                  <th>Registered Members</th>
                   <th>Members Attendance Rate</th>
                 </tr>
               </thead>
@@ -684,27 +1070,24 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
                     else if (rate >= 50) rateClass = 'attendance-warning';
                     
                     const rowClass = event.event.canceled ? 'canceled-event' : '';
-                    const eventUrl = `https://groups.planningcenteronline.com/groups/${groupId}/events/${event.event.id}`;
+                    const eventUrl = 'https://groups.planningcenteronline.com/groups/' + groupId + '/events/' + event.event.id;
                     
-                    return `
-                      <tr class="${rowClass}">
-                        <td>
-                          ${formatDate(event.event.date)}
-                          ${event.event.canceled ? '<span class="canceled-label"> (CANCELED)</span>' : ''}
-                        </td>
-                        <td>
-                          <a href="${eventUrl}" rel="noopener noreferrer" 
-                             class="${rowClass}">Attendance</a>
-                        </td>
-                        <td>${event.attendance_summary.present_members}</td>
-                        <td>${event.attendance_summary.present_visitors > 0 ? 
-                             `<span class="visitor-count">+${event.attendance_summary.present_visitors}</span>` : 
-                             '0'}</td>
-                        <td>${event.attendance_summary.present_count}</td>
-                        <td>${event.attendance_summary.total_count}</td>
-                        <td class="${rateClass}">${rate}%</td>
-                      </tr>
-                    `;
+                    return '<tr class="' + rowClass + '">' +
+                           '<td>' +
+                           formatDate(event.event.date) +
+                           (event.event.canceled ? '<span class="canceled-label"> (CANCELED)</span>' : '') +
+                           '</td>' +
+                           '<td>' +
+                           '<a href="' + eventUrl + '" rel="noopener noreferrer" class="' + rowClass + '">Attendance</a>' +
+                           '</td>' +
+                           '<td>' + event.attendance_summary.present_members + '</td>' +
+                           '<td>' + (event.attendance_summary.present_visitors > 0 ? 
+                                   '<span class="visitor-count">+' + event.attendance_summary.present_visitors + '</span>' : 
+                                   '0') + '</td>' +
+                           '<td>' + event.attendance_summary.present_count + '</td>' +
+                           '<td>' + event.attendance_summary.total_count + '</td>' +
+                           '<td class="' + rateClass + '">' + rate + '%</td>' +
+                           '</tr>';
                   }).join('')}
               </tbody>
             </table>
@@ -788,5 +1171,5 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
 
 // Start server
 app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
+  console.log('Server running at http://localhost:' + port);
 }); 

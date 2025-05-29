@@ -12,8 +12,8 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // Retry function with exponential backoff
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
-  retries = 3,
-  baseDelay = 1000
+  retries = 5,
+  baseDelay = 2000
 ): Promise<T> {
   try {
     return await fn();
@@ -24,9 +24,9 @@ async function retryWithBackoff<T>(
 
     // Get retry-after header or use exponential backoff
     const retryAfter = parseInt(error.response.headers['retry-after'] || '0');
-    const waitTime = retryAfter * 1000 || baseDelay * Math.pow(2, 4 - retries);
+    const waitTime = retryAfter * 1000 || baseDelay * Math.pow(2, 6 - retries);
     
-    console.log(`Rate limited. Waiting ${waitTime/1000} seconds before retry. ${retries - 1} retries remaining.`);
+    console.log(`Rate limited. Waiting ${waitTime/1000}s (${retries - 1} retries left)`);
     await delay(waitTime);
     
     return retryWithBackoff(fn, retries - 1, baseDelay);
@@ -223,7 +223,12 @@ export const getGroupEvents = async (groupId: string, showAllEvents: boolean = f
       if (!showAllEvents) {
         const currentYear = new Date().getFullYear();
         const startOfYear = new Date(currentYear, 0, 1); // Month is 0-indexed (0 for January)
+        const today = new Date();
+        today.setHours(23, 59, 59, 999); // Include events from today
+        
         queryParams['where[starts_at][gte]'] = startOfYear.toISOString();
+        queryParams['where[starts_at][lte]'] = today.toISOString(); // Only past/today events
+        console.log(`Filtering events from ${startOfYear.toISOString()} to ${today.toISOString()} for group ${groupId}`);
       }
 
       console.log('Query parameters:', queryParams);
@@ -264,7 +269,6 @@ export const getEventAttendance = async (eventId: string, forceRefresh: boolean 
   
   // Always use cache if available, unless force refresh is requested
   if (cachedAttendance && !forceRefresh) {
-    console.log(`Using cached attendance data for event ${eventId}`);
     return cachedAttendance;
   }
 
@@ -278,7 +282,7 @@ export const getEventAttendance = async (eventId: string, forceRefresh: boolean 
       let nextPage = response.data.links?.next;
       while (nextPage) {
         // Add a delay between pagination requests
-        await delay(100);
+        await delay(200);
         
         const nextResponse = await pcoClient.get<PCOAttendanceResponse>(nextPage);
         attendances = [...attendances, ...nextResponse.data.data];
@@ -296,7 +300,8 @@ export const getEventAttendance = async (eventId: string, forceRefresh: boolean 
       cache.set(cacheKey, result);
       return result;
     } catch (error) {
-      console.error('Error fetching event attendance:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`Error fetching attendance for event ${eventId}:`, errorMessage);
       throw error;
     }
   });
@@ -308,6 +313,7 @@ export const getGroupAttendance = async (groupId: string, showAllEvents: boolean
     try {
       // First get all events for this group
       const events = await getGroupEvents(groupId, showAllEvents, forceRefresh);
+      console.log(`Group ${groupId}: ${events.length} events (${showAllEvents ? 'all years' : 'current year'})`);
       
       // Get attendance for each event
       const attendancePromises = events.map(async (event) => {
@@ -338,6 +344,7 @@ export const getGroupAttendance = async (groupId: string, showAllEvents: boolean
       });
 
       const attendanceData = await Promise.all(attendancePromises);
+      console.log(`Group ${groupId}: Processed ${events.length} events successfully`);
       
       // Calculate overall statistics (only including events with attendance)
       const currentDate = new Date();
