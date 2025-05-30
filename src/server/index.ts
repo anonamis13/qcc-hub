@@ -526,6 +526,25 @@ app.get('', async (req, res) => {
               border-radius: 8px;
               margin: 20px 0;
               height: 400px;
+              position: relative;
+            }
+            .chart-loading {
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%);
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 15px;
+              color: #666;
+              font-size: 16px;
+            }
+            .chart-loading .loading {
+              width: 40px;
+              height: 40px;
+              border: 4px solid #f3f3f3;
+              border-top: 4px solid #007bff;
             }
           </style>
         </head>
@@ -540,6 +559,10 @@ app.get('', async (req, res) => {
             <p id="groupCount"></p>
             
             <div class="chart-container">
+              <div id="chartLoading" class="chart-loading">
+                <div class="loading"></div>
+                <span>Loading chart data...</span>
+              </div>
               <canvas id="aggregateChart"></canvas>
             </div>
             
@@ -813,7 +836,10 @@ app.get('', async (req, res) => {
                   loadDataBtn.innerHTML = buttonHtml;
                   loadDataBtn.style.backgroundColor = '#007bff';
                 } else {
-                  // If no cached data, show initial load message
+                  // If no cached data, show initial load message and hide chart loading
+                  const chartLoading = document.getElementById('chartLoading');
+                  if (chartLoading) chartLoading.style.display = 'none';
+                  
                   loadDataBtn.disabled = false;
                   loadDataBtn.innerHTML = initialButtonHtml;
                   initialMessage.textContent = 'No data available. Click "Load Data" to fetch Life Groups data.';
@@ -920,7 +946,14 @@ app.get('', async (req, res) => {
 
             // Add function to load and display aggregate data
             async function loadAggregateData(forceRefresh = false) {
+              const chartLoading = document.getElementById('chartLoading');
+              const chartCanvas = document.getElementById('aggregateChart');
+              
               try {
+                // Show loading indicator and hide chart
+                if (chartLoading) chartLoading.style.display = 'flex';
+                if (chartCanvas) chartCanvas.style.display = 'none';
+                
                 const refreshParam = forceRefresh ? '?forceRefresh=true' : '';
                 const response = await fetch('/api/aggregate-attendance' + refreshParam);
                 if (!response.ok) throw new Error('Failed to fetch aggregate data');
@@ -1031,6 +1064,10 @@ app.get('', async (req, res) => {
                 });
               } catch (error) {
                 console.error('Error loading aggregate data:', error);
+              } finally {
+                // Hide loading indicator and show chart
+                if (chartLoading) chartLoading.style.display = 'none';
+                if (chartCanvas) chartCanvas.style.display = 'block';
               }
             }
 
@@ -1086,6 +1123,25 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
               border-radius: 8px;
               margin: 20px 0;
               height: 400px;
+              position: relative;
+            }
+            .chart-loading {
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%);
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 15px;
+              color: #666;
+              font-size: 16px;
+            }
+            .chart-loading .loading {
+              width: 40px;
+              height: 40px;
+              border: 4px solid #f3f3f3;
+              border-top: 4px solid #007bff;
             }
             h1, h2 {
               color: #333;
@@ -1299,6 +1355,10 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
             </script>
 
             <div class="chart-container">
+              <div id="chartLoading" class="chart-loading">
+                <div class="loading"></div>
+                <span>Loading chart data...</span>
+              </div>
               <canvas id="attendanceChart"></canvas>
             </div>
 
