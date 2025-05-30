@@ -227,13 +227,15 @@ export const getGroupEvents = async (groupId: string, showAllEvents: boolean = f
       // Only add date filter if we're not showing all events
       if (!showAllEvents) {
         const currentYear = new Date().getFullYear();
-        const startOfYear = new Date(currentYear, 0, 1); // Month is 0-indexed (0 for January)
+        // Use UTC to avoid timezone differences between dev and prod
+        const startOfYear = new Date(Date.UTC(currentYear, 0, 1)); // January 1st at 00:00 UTC
         const today = new Date();
-        today.setHours(23, 59, 59, 999); // Include events from today
+        // Set to end of day in UTC to be inclusive
+        const endOfToday = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 23, 59, 59, 999));
         
         queryParams['where[starts_at][gte]'] = startOfYear.toISOString();
-        queryParams['where[starts_at][lte]'] = today.toISOString(); // Only past/today events
-        console.log(`Filtering events from ${startOfYear.toISOString()} to ${today.toISOString()} for group ${groupId}`);
+        queryParams['where[starts_at][lte]'] = endOfToday.toISOString(); // Only past/today events
+        console.log(`Filtering events from ${startOfYear.toISOString()} to ${endOfToday.toISOString()} for group ${groupId}`);
       }
 
       console.log('Query parameters:', queryParams);
