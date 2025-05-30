@@ -180,6 +180,95 @@ app.get('/api/aggregate-attendance', async (req, res) => {
   }
 });
 
+// Add new debugging endpoint
+app.get('/api/debug-info', async (req, res) => {
+  try {
+    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
+    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
+    
+    // Get basic environment info
+    const envInfo = {
+      nodeEnv: process.env.NODE_ENV,
+      groupTypeId: groupTypeId,
+      groupTypeIdSource: groupTypeIdFromEnv ? 'env' : 'default',
+      hasApiCreds: !!(process.env.PCO_APP_ID && process.env.PCO_SECRET),
+      currentTime: new Date().toISOString(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+    };
+
+    // Get cache stats
+    const cacheStats = cache.getStats();
+    
+    // Get group count
+    const groups = await getPeopleGroups(groupTypeId, false);
+    
+    res.json({
+      environment: envInfo,
+      cache: cacheStats,
+      groupCount: groups.data.length,
+      filteredCount: groups.filtered_count,
+      groupIds: groups.data.map(g => g.id).sort()
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get debug info', details: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
+// Add new endpoint to check specific week data
+app.get('/api/debug-week/:date', async (req, res) => {
+  try {
+    const { date } = req.params; // Expected format: YYYY-MM-DD
+    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
+    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
+    
+    const groups = await getPeopleGroups(groupTypeId, false);
+    
+    // Get attendance data for each group for the specific week
+    const attendancePromises = groups.data.map(async group => {
+      const attendance = await getGroupAttendance(group.id, false, false);
+      // Filter events for the specific week
+      const targetDate = new Date(date);
+      const weekStart = new Date(targetDate);
+      weekStart.setDate(targetDate.getDate() - targetDate.getDay()); // Get Sunday
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6); // Get Saturday
+      
+      const weekEvents = attendance.events.filter(event => {
+        const eventDate = new Date(event.event.date);
+        return eventDate >= weekStart && eventDate <= weekEnd && !event.event.canceled;
+      });
+      
+      return {
+        groupId: group.id,
+        groupName: group.attributes.name,
+        weekEvents: weekEvents.map(e => ({
+          date: e.event.date,
+          totalMembers: e.attendance_summary.total_count,
+          presentMembers: e.attendance_summary.present_members,
+          visitors: e.attendance_summary.present_visitors
+        }))
+      };
+    });
+    
+    const weekData = await Promise.all(attendancePromises);
+    const totalMembers = weekData.reduce((sum, group) => {
+      const groupMax = Math.max(...group.weekEvents.map(e => e.totalMembers), 0);
+      return sum + groupMax;
+    }, 0);
+    
+    res.json({
+      requestedDate: date,
+      weekStart: new Date(new Date(date).getTime() - new Date(date).getDay() * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      totalGroups: groups.data.length,
+      groupsWithData: weekData.filter(g => g.weekEvents.length > 0).length,
+      totalMembers: totalMembers,
+      groupBreakdown: weekData.filter(g => g.weekEvents.length > 0)
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get week debug info', details: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
 //Home Page
 app.get('', async (req, res) => {
   try {
