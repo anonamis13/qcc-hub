@@ -320,6 +320,60 @@ app.get('/api/clear-cache', async (req, res) => {
   }
 });
 
+// Add new endpoint to debug specific group attendance data
+app.get('/api/debug-group/:groupId', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const forceRefresh = req.query.forceRefresh === 'true';
+    
+    console.log(`Debugging group ${groupId}, forceRefresh: ${forceRefresh}`);
+    
+    const attendanceData = await getGroupAttendance(groupId, false, forceRefresh);
+    
+    // Filter for February events specifically
+    const februaryEvents = attendanceData.events.filter(event => {
+      const eventDate = new Date(event.event.date);
+      return eventDate.getMonth() === 1 && eventDate.getFullYear() === 2025; // February = month 1
+    });
+    
+    // Also filter for Wed/Thu February events
+    const wedThuFebEvents = februaryEvents.filter(event => {
+      const dayOfWeek = new Date(event.event.date).getDay();
+      return dayOfWeek === 3 || dayOfWeek === 4; // Wednesday or Thursday
+    });
+    
+    const debugInfo = {
+      environment: process.env.NODE_ENV || 'development',
+      groupId: groupId,
+      totalEvents: attendanceData.events.length,
+      februaryEvents: februaryEvents.length,
+      wedThuFebEvents: wedThuFebEvents.length,
+      februaryEventDetails: februaryEvents.map(event => ({
+        date: event.event.date,
+        dayOfWeek: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(event.event.date).getDay()],
+        canceled: event.event.canceled,
+        presentCount: event.attendance_summary.present_count,
+        presentMembers: event.attendance_summary.present_members,
+        presentVisitors: event.attendance_summary.present_visitors,
+        totalCount: event.attendance_summary.total_count
+      })),
+      cacheKey: `events_${groupId}_false`,
+      timestamp: new Date().toISOString()
+    };
+    
+    console.log('Group debug info:', debugInfo);
+    
+    res.json(debugInfo);
+  } catch (error) {
+    console.error(`Error debugging group ${req.params.groupId}:`, error);
+    res.status(500).json({ 
+      error: 'Failed to debug group', 
+      details: error instanceof Error ? error.message : 'Unknown error',
+      groupId: req.params.groupId
+    });
+  }
+});
+
 //Home Page
 app.get('', async (req, res) => {
   try {
