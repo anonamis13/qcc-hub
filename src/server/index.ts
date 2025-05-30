@@ -226,12 +226,16 @@ app.get('/api/debug-week/:date', async (req, res) => {
     // Get attendance data for each group for the specific week
     const attendancePromises = groups.data.map(async group => {
       const attendance = await getGroupAttendance(group.id, false, false);
-      // Filter events for the specific week
-      const targetDate = new Date(date);
+      // Filter events for the specific week using UTC to avoid timezone issues
+      const targetDate = new Date(date + 'T00:00:00.000Z'); // Force UTC
       const weekStart = new Date(targetDate);
-      weekStart.setDate(targetDate.getDate() - targetDate.getDay()); // Get Sunday
+      
+      // Get the Sunday of the week - use UTC methods to avoid timezone issues
+      const dayOfWeek = weekStart.getUTCDay();
+      weekStart.setUTCDate(weekStart.getUTCDate() - dayOfWeek); // Go back to Sunday
+      
       const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekStart.getDate() + 6); // Get Saturday
+      weekEnd.setUTCDate(weekStart.getUTCDate() + 6); // Get Saturday
       
       const weekEvents = attendance.events.filter(event => {
         const eventDate = new Date(event.event.date);
@@ -256,9 +260,14 @@ app.get('/api/debug-week/:date', async (req, res) => {
       return sum + groupMax;
     }, 0);
     
+    // Calculate week start using UTC to ensure consistency
+    const targetDateUTC = new Date(date + 'T00:00:00.000Z');
+    const weekStartUTC = new Date(targetDateUTC);
+    weekStartUTC.setUTCDate(targetDateUTC.getUTCDate() - targetDateUTC.getUTCDay());
+    
     res.json({
       requestedDate: date,
-      weekStart: new Date(new Date(date).getTime() - new Date(date).getDay() * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      weekStart: weekStartUTC.toISOString().split('T')[0],
       totalGroups: groups.data.length,
       groupsWithData: weekData.filter(g => g.weekEvents.length > 0).length,
       totalMembers: totalMembers,
