@@ -269,6 +269,16 @@ app.get('/api/debug-week/:date', async (req, res) => {
   }
 });
 
+// Add new endpoint to clear cache
+app.get('/api/clear-cache', async (req, res) => {
+  try {
+    cache.clear();
+    res.json({ message: 'Cache cleared successfully. Next data refresh will fetch fresh data.' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to clear cache', details: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
 //Home Page
 app.get('', async (req, res) => {
   try {
