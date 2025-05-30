@@ -132,7 +132,7 @@ app.get('/api/aggregate-attendance', async (req, res) => {
       groupData.events.forEach(event => {
         if (!event.event.canceled && event.attendance_summary.present_count > 0) {
           const eventDate = new Date(event.event.date);
-          const dayOfWeek = eventDate.getDay();
+          const dayOfWeek = eventDate.getUTCDay(); // Use UTC to avoid timezone issues
           
           // Only process Wednesday and Thursday events
           if (dayOfWeek === 3 || dayOfWeek === 4) {
@@ -338,7 +338,7 @@ app.get('/api/debug-group/:groupId', async (req, res) => {
     
     // Also filter for Wed/Thu February events
     const wedThuFebEvents = februaryEvents.filter(event => {
-      const dayOfWeek = new Date(event.event.date).getDay();
+      const dayOfWeek = new Date(event.event.date).getUTCDay(); // Use UTC to avoid timezone issues
       return dayOfWeek === 3 || dayOfWeek === 4; // Wednesday or Thursday
     });
     
@@ -350,7 +350,7 @@ app.get('/api/debug-group/:groupId', async (req, res) => {
       wedThuFebEvents: wedThuFebEvents.length,
       februaryEventDetails: februaryEvents.map(event => ({
         date: event.event.date,
-        dayOfWeek: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(event.event.date).getDay()],
+        dayOfWeek: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(event.event.date).getUTCDay()], // Use UTC
         canceled: event.event.canceled,
         presentCount: event.attendance_summary.present_count,
         presentMembers: event.attendance_summary.present_members,
