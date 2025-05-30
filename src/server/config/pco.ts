@@ -12,19 +12,24 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // Retry function with exponential backoff
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
-  retries = 5,
-  baseDelay = 2000
+  retries = 8,
+  baseDelay = 3000
 ): Promise<T> {
   try {
     return await fn();
   } catch (error) {
     if (!(error instanceof AxiosError) || !error.response || error.response.status !== 429 || retries === 0) {
+      if (retries > 0 && error instanceof AxiosError && error.response?.status !== 404) {
+        console.log(`Non-429 error, retrying... (${retries - 1} retries left): ${error.message}`);
+        await delay(baseDelay);
+        return retryWithBackoff(fn, retries - 1, baseDelay);
+      }
       throw error;
     }
 
     // Get retry-after header or use exponential backoff
     const retryAfter = parseInt(error.response.headers['retry-after'] || '0');
-    const waitTime = retryAfter * 1000 || baseDelay * Math.pow(2, 6 - retries);
+    const waitTime = retryAfter * 1000 || baseDelay * Math.pow(2, 9 - retries);
     
     console.log(`Rate limited. Waiting ${waitTime/1000}s (${retries - 1} retries left)`);
     await delay(waitTime);

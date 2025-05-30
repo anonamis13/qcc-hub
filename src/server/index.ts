@@ -585,17 +585,23 @@ app.get('', async (req, res) => {
                 for (let i = 0; i < result.data.length; i++) {
                   const group = result.data[i];
                   try {
-                    console.log(\`Processing group \${i + 1}/\${result.data.length}: \${group.attributes.name}\`);
+                    console.log(\`Processing group \${i + 1}/\${result.data.length}: \${group.attributes.name} (ID: \${group.id})\`);
                     const response = await fetch('/api/group-stats/' + group.id + '?forceRefresh=true');
                     if (!response.ok) {
-                      console.warn('Failed to fetch stats for group', group.id);
+                      console.error('Failed to fetch stats for group', group.id, 'Status:', response.status, response.statusText);
                       groupStats.push(null);
                     } else {
                       const stats = await response.json();
+                      console.log(\`✓ Group \${group.id} processed: \${stats.events_with_attendance} events\`);
                       groupStats.push(stats);
                     }
+                    
+                    // Add delay between group processing to reduce API load (especially important for production)
+                    if (i < result.data.length - 1) { // Don't delay after the last group
+                      await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay between groups
+                    }
                   } catch (error) {
-                    console.warn('Error fetching stats for group', group.id, error);
+                    console.error('Error fetching stats for group', group.id, error);
                     groupStats.push(null);
                   }
                 }
