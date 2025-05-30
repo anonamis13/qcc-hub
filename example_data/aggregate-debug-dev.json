@@ -1,0 +1,142 @@
+=== AGGREGATE CALCULATION DEBUG ===
+Environment: development
+Total groups: 21
+Group 1 (ID: 2290946): 13 events
+February event found: 2025-02-27T23:30:00Z (Thu) -> Week: 2025-02-26
+  Members: 14, Visitors: 1, Total: 31
+February event found: 2025-02-20T23:30:00Z (Thu) -> Week: 2025-02-19
+  Members: 16, Visitors: 1, Total: 34
+February event found: 2025-02-13T23:30:00Z (Thu) -> Week: 2025-02-12
+  Members: 13, Visitors: 2, Total: 31
+Group 2 (ID: 2290973): 12 events
+February event found: 2025-02-26T23:30:00Z (Wed) -> Week: 2025-02-26
+  Members: 14, Visitors: null, Total: 20
+February event found: 2025-02-20T00:00:00Z (Wed) -> Week: 2025-02-19
+  Members: 7, Visitors: null, Total: 20
+February event found: 2025-02-13T00:00:00Z (Wed) -> Week: 2025-02-12
+  Members: 8, Visitors: null, Total: 19
+Group 3 (ID: 2290983): 12 events
+February event found: 2025-02-26T23:30:00Z (Wed) -> Week: 2025-02-26
+  Members: 7, Visitors: null, Total: 22
+February event found: 2025-02-19T23:30:00Z (Wed) -> Week: 2025-02-19
+  Members: 6, Visitors: null, Total: 22
+February event found: 2025-02-12T23:30:00Z (Wed) -> Week: 2025-02-12
+  Members: 7, Visitors: null, Total: 22
+Group 4 (ID: 2290990): 12 events
+February event found: 2025-02-27T00:00:00Z (Wed) -> Week: 2025-02-26
+  Members: 10, Visitors: 1, Total: 19
+February event found: 2025-02-20T00:00:00Z (Wed) -> Week: 2025-02-19
+  Members: 8, Visitors: null, Total: 18
+February event found: 2025-02-13T00:00:00Z (Wed) -> Week: 2025-02-12
+  Members: 12, Visitors: null, Total: 18
+Group 5 (ID: 2291004): 12 events
+February event found: 2025-02-27T00:00:00Z (Wed) -> Week: 2025-02-26
+  Members: 10, Visitors: null, Total: 12
+February event found: 2025-02-20T00:00:00Z (Wed) -> Week: 2025-02-19
+  Members: 4, Visitors: null, Total: 12
+February event found: 2025-02-13T00:00:00Z (Wed) -> Week: 2025-02-12
+  Members: 5, Visitors: null, Total: 14
+Group 6 (ID: 2291010): 13 events
+February event found: 2025-02-28T00:00:00Z (Thu) -> Week: 2025-02-26
+  Members: 14, Visitors: null, Total: 41
+February event found: 2025-02-21T00:00:00Z (Thu) -> Week: 2025-02-19
+  Members: 17, Visitors: null, Total: 40
+February event found: 2025-02-14T00:00:00Z (Thu) -> Week: 2025-02-12
+  Members: 12, Visitors: null, Total: 43
+Group 7 (ID: 2291011): 12 events
+February event found: 2025-02-26T23:30:00Z (Wed) -> Week: 2025-02-26
+  Members: 12, Visitors: null, Total: 21
+February event found: 2025-02-19T23:30:00Z (Wed) -> Week: 2025-02-19
+  Members: 12, Visitors: null, Total: 26
+February event found: 2025-02-12T23:30:00Z (Wed) -> Week: 2025-02-12
+  Members: 11, Visitors: 3, Total: 25
+Group 8 (ID: 2291015): 12 events
+February event found: 2025-02-27T00:00:00Z (Wed) -> Week: 2025-02-26
+  Members: 16, Visitors: null, Total: 53
+February event found: 2025-02-20T00:00:00Z (Wed) -> Week: 2025-02-19
+  Members: 17, Visitors: null, Total: 53
+February event found: 2025-02-13T00:00:00Z (Wed) -> Week: 2025-02-12
+  Members: 19, Visitors: null, Total: 51
+Group 9 (ID: 2291017): 12 events
+February event found: 2025-02-26T23:30:00Z (Wed) -> Week: 2025-02-26
+  Members: 14, Visitors: null, Total: 19
+February event found: 2025-02-19T23:30:00Z (Wed) -> Week: 2025-02-19
+  Members: 16, Visitors: null, Total: 19
+February event found: 2025-02-12T23:30:00Z (Wed) -> Week: 2025-02-12
+  Members: 11, Visitors: null, Total: 19
+Group 10 (ID: 2291021): 12 events
+February event found: 2025-02-26T23:30:00Z (Wed) -> Week: 2025-02-26
+  Members: 8, Visitors: null, Total: 28
+February event found: 2025-02-19T23:30:00Z (Wed) -> Week: 2025-02-19
+  Members: 7, Visitors: null, Total: 27
+February event found: 2025-02-12T23:30:00Z (Wed) -> Week: 2025-02-12
+  Members: 10, Visitors: null, Total: 28
+Group 11 (ID: 2291027): 12 events
+February event found: 2025-02-26T23:00:00Z (Wed) -> Week: 2025-02-26
+  Members: 4, Visitors: null, Total: 6
+February event found: 2025-02-19T23:00:00Z (Wed) -> Week: 2025-02-19
+  Members: 6, Visitors: null, Total: 6
+Group 12 (ID: 2291031): 13 events
+February event found: 2025-02-27T22:30:00Z (Thu) -> Week: 2025-02-26
+  Members: 18, Visitors: null, Total: 28
+February event found: 2025-02-20T23:30:00Z (Thu) -> Week: 2025-02-19
+  Members: 7, Visitors: 2, Total: 27
+February event found: 2025-02-13T23:30:00Z (Thu) -> Week: 2025-02-12
+  Members: 10, Visitors: null, Total: 26
+Group 13 (ID: 2291035): 12 events
+February event found: 2025-02-26T23:15:00Z (Wed) -> Week: 2025-02-26
+  Members: 10, Visitors: null, Total: 25
+February event found: 2025-02-19T23:15:00Z (Wed) -> Week: 2025-02-19
+  Members: 13, Visitors: null, Total: 25
+February event found: 2025-02-12T23:15:00Z (Wed) -> Week: 2025-02-12
+  Members: 11, Visitors: 3, Total: 22
+Group 14 (ID: 2291038): 12 events
+February event found: 2025-02-19T23:30:00Z (Wed) -> Week: 2025-02-19
+  Members: 12, Visitors: null, Total: 30
+February event found: 2025-02-12T23:30:00Z (Wed) -> Week: 2025-02-12
+  Members: 17, Visitors: null, Total: 30
+Group 15 (ID: 2345819): 12 events
+February event found: 2025-02-27T00:00:00Z (Wed) -> Week: 2025-02-26
+  Members: 13, Visitors: null, Total: 23
+February event found: 2025-02-20T00:00:00Z (Wed) -> Week: 2025-02-19
+  Members: 13, Visitors: null, Total: 22
+February event found: 2025-02-13T00:00:00Z (Wed) -> Week: 2025-02-12
+  Members: 12, Visitors: null, Total: 26
+Group 16 (ID: 2345848): 13 events
+February event found: 2025-02-27T23:30:00Z (Thu) -> Week: 2025-02-26
+  Members: 8, Visitors: null, Total: 8
+February event found: 2025-02-13T23:30:00Z (Thu) -> Week: 2025-02-12
+  Members: 6, Visitors: null, Total: 8
+Group 17 (ID: 2363026): 12 events
+February event found: 2025-02-26T23:30:00Z (Wed) -> Week: 2025-02-26
+  Members: 21, Visitors: null, Total: 47
+February event found: 2025-02-19T23:30:00Z (Wed) -> Week: 2025-02-19
+  Members: 20, Visitors: null, Total: 49
+February event found: 2025-02-12T23:30:00Z (Wed) -> Week: 2025-02-12
+  Members: 24, Visitors: null, Total: 46
+Group 18 (ID: 2385028): 12 events
+February event found: 2025-02-26T23:30:00Z (Wed) -> Week: 2025-02-26
+  Members: 10, Visitors: null, Total: 25
+February event found: 2025-02-19T23:30:00Z (Wed) -> Week: 2025-02-19
+  Members: 10, Visitors: null, Total: 25
+Group 19 (ID: 2603028): 14 events
+February event found: 2025-02-21T00:00:00Z (Thu) -> Week: 2025-02-19
+  Members: 8, Visitors: null, Total: 18
+February event found: 2025-02-14T00:00:00Z (Thu) -> Week: 2025-02-12
+  Members: 8, Visitors: null, Total: 16
+Group 20 (ID: 2620360): 9 events
+Group 21 (ID: 2692913): 0 events
+Total Wed/Thu events processed: 223
+February events found: 52
+Weeks found: [
+  '2025-02-12', '2025-02-19',
+  '2025-02-26', '2025-03-12',
+  '2025-03-19', '2025-03-26',
+  '2025-04-09', '2025-04-16',
+  '2025-04-23', '2025-05-14',
+  '2025-05-21', '2025-05-28'
+]
+Week 2025-02-26: 203 present, 428 members, groups: 34
+Week 2025-02-19: 199 present, 473 members, groups: 36
+Week 2025-02-12: 196 present, 444 members, groups: 34
+=== END AGGREGATE DEBUG ===

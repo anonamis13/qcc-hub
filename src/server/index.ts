@@ -99,6 +99,11 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     // Create a map of week -> attendance data
     const weekMap = new Map();
     
+    // Add debug logging
+    console.log('=== AGGREGATE CALCULATION DEBUG ===');
+    console.log('Environment:', process.env.NODE_ENV || 'development');
+    console.log('Total groups:', allGroupsAttendance.length);
+    
     // Helper function to get Wednesday of the week for any given date
     const getWednesdayOfWeek = (date: Date) => {
       const result = new Date(date);
@@ -118,7 +123,12 @@ app.get('/api/aggregate-attendance', async (req, res) => {
       return result;
     };
     
-    allGroupsAttendance.forEach(groupData => {
+    let totalEventsProcessed = 0;
+    let februaryEventsFound = 0;
+    
+    allGroupsAttendance.forEach((groupData, groupIndex) => {
+      console.log(`Group ${groupIndex + 1} (ID: ${groupData.group_id}): ${groupData.events.length} events`);
+      
       groupData.events.forEach(event => {
         if (!event.event.canceled && event.attendance_summary.present_count > 0) {
           const eventDate = new Date(event.event.date);
@@ -126,9 +136,18 @@ app.get('/api/aggregate-attendance', async (req, res) => {
           
           // Only process Wednesday and Thursday events
           if (dayOfWeek === 3 || dayOfWeek === 4) {
+            totalEventsProcessed++;
+            
             // Get the Wednesday of this week
             const wednesday = getWednesdayOfWeek(eventDate);
             const weekKey = wednesday.toISOString().split('T')[0];
+            
+            // Debug February events specifically
+            if (weekKey.startsWith('2025-02')) {
+              februaryEventsFound++;
+              console.log(`February event found: ${event.event.date} (${dayOfWeek === 3 ? 'Wed' : 'Thu'}) -> Week: ${weekKey}`);
+              console.log(`  Members: ${event.attendance_summary.present_members}, Visitors: ${event.attendance_summary.present_visitors}, Total: ${event.attendance_summary.total_count}`);
+            }
             
             const existing = weekMap.get(weekKey) || { 
               totalPresent: 0,
@@ -160,6 +179,17 @@ app.get('/api/aggregate-attendance', async (req, res) => {
       });
     });
     
+    console.log('Total Wed/Thu events processed:', totalEventsProcessed);
+    console.log('February events found:', februaryEventsFound);
+    console.log('Weeks found:', Array.from(weekMap.keys()).sort());
+    
+    // Log February specific data
+    weekMap.forEach((data, weekKey) => {
+      if (weekKey.startsWith('2025-02')) {
+        console.log(`Week ${weekKey}: ${data.totalPresent} present, ${data.totalMembers} members, groups: ${data.groupsProcessed.size}`);
+      }
+    });
+    
     // Convert map to array and sort by date
     const aggregatedData = Array.from(weekMap.entries())
       .map(([weekKey, data]) => ({
@@ -172,6 +202,8 @@ app.get('/api/aggregate-attendance', async (req, res) => {
         daysIncluded: Array.from(data.daysWithAttendance).length
       }))
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    
+    console.log('=== END AGGREGATE DEBUG ===');
     
     res.json(aggregatedData);
   } catch (error) {
