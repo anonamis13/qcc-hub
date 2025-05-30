@@ -385,6 +385,7 @@ app.get('', async (req, res) => {
       <html>
         <head>
           <title>Queen City Church - Life Groups Health Report</title>
+          <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
           <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
           <style>
             body {
@@ -1063,6 +1064,7 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
       <html>
         <head>
           <title>${group.attributes.name} - Attendance Report</title>
+          <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
           <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
           <style>
             body {
