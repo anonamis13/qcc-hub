@@ -102,19 +102,19 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     // Helper function to get Wednesday of the week for any given date
     const getWednesdayOfWeek = (date: Date) => {
       const result = new Date(date);
-      const day = result.getDay();
+      const day = result.getUTCDay(); // Use UTC to avoid timezone issues
       
       // If it's Sunday (0) through Tuesday (2), get previous Wednesday
       if (day < 3) {
-        result.setDate(result.getDate() - (day + 4));
+        result.setUTCDate(result.getUTCDate() - (day + 4));
       }
       // If it's Wednesday (3) through Saturday (6), get this week's Wednesday
       else {
-        result.setDate(result.getDate() - (day - 3));
+        result.setUTCDate(result.getUTCDate() - (day - 3));
       }
       
-      // Reset time to midnight to ensure consistent dates
-      result.setHours(0, 0, 0, 0);
+      // Reset time to midnight UTC to ensure consistent dates
+      result.setUTCHours(0, 0, 0, 0);
       return result;
     };
     
