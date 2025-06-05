@@ -377,6 +377,155 @@ app.get('/api/debug-group/:groupId', async (req, res) => {
   }
 });
 
+// Add new endpoint to debug Family Group tags
+app.get('/api/debug-family-groups', async (req, res) => {
+  try {
+    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
+    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
+    
+    const groups = await getPeopleGroups(groupTypeId, false);
+    
+    const familyGroups = groups.data.filter(group => group.isFamilyGroup);
+    const regularGroups = groups.data.filter(group => !group.isFamilyGroup);
+    
+    res.json({
+      totalGroups: groups.data.length,
+      familyGroups: familyGroups.length,
+      regularGroups: regularGroups.length,
+      familyGroupNames: familyGroups.map(g => g.attributes.name),
+      regularGroupNames: regularGroups.map(g => g.attributes.name)
+    });
+  } catch (error) {
+    console.error('Error debugging Family Groups:', error);
+    res.status(500).json({ 
+      error: 'Failed to debug Family Groups', 
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Add debug endpoint for Family Group metrics
+app.get('/api/debug-family-metrics/:groupId', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    console.log(`Testing Family Group metrics for group ${groupId}...`);
+    
+    const attendanceData = await getGroupAttendance(groupId, false, false);
+    const stats = attendanceData.overall_statistics;
+    const hasFamilyMetrics = 'familyGroup' in stats;
+    
+    // Create a detailed breakdown showing ALL events (including cancelled/zero attendance) for position identification
+    const eventsByMonth = new Map();
+    const allPastEvents = attendanceData.events.filter(event => 
+      new Date(event.event.date) <= new Date()
+    );
+    
+    allPastEvents.forEach(event => {
+      const eventDate = new Date(event.event.date);
+      const monthKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}`;
+      
+      if (!eventsByMonth.has(monthKey)) {
+        eventsByMonth.set(monthKey, []);
+      }
+      eventsByMonth.get(monthKey).push({
+        date: event.event.date,
+        canceled: event.event.canceled,
+        present: event.attendance_summary.present_members,
+        total: event.attendance_summary.total_count,
+        rate: event.attendance_summary.attendance_rate,
+        validForCalculation: !event.event.canceled && event.attendance_summary.present_count > 0
+      });
+    });
+    
+    // Sort events within each month
+    eventsByMonth.forEach((monthEvents: any[]) => {
+      monthEvents.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    });
+    
+    const monthlyBreakdown = Array.from(eventsByMonth.entries()).map(([month, events]: [string, any[]]) => {
+      const breakdown = {
+        month,
+        totalEvents: events.length,
+        mothersNight: null as any,
+        fathersNight: null as any,
+        familyNight: null as any,
+        hasParentsData: false,
+        hasFamilyData: false
+      };
+
+      // Process each position
+      for (let i = 0; i < events.length && i < 3; i++) {
+        const event = events[i];
+        
+        if (i === 0) {
+          // 1st meeting = Mothers Night
+          breakdown.mothersNight = {
+            ...event,
+            meetingType: 'Mothers Night',
+            calculatedRate: event.validForCalculation 
+              ? Math.round((event.present / Math.ceil(event.total / 2)) * 100) + '%' 
+              : 'N/A (cancelled or no attendance)',
+            usedInCalculation: event.validForCalculation
+          };
+          if (event.validForCalculation) breakdown.hasParentsData = true;
+        } else if (i === 1) {
+          // 2nd meeting = Fathers Night
+          breakdown.fathersNight = {
+            ...event,
+            meetingType: 'Fathers Night',
+            calculatedRate: event.validForCalculation 
+              ? Math.round((event.present / Math.ceil(event.total / 2)) * 100) + '%' 
+              : 'N/A (cancelled or no attendance)',
+            usedInCalculation: event.validForCalculation
+          };
+          if (event.validForCalculation) breakdown.hasParentsData = true;
+        } else if (i === 2) {
+          // 3rd meeting = Family Night
+          breakdown.familyNight = {
+            ...event,
+            meetingType: 'Family Night',
+            calculatedRate: event.validForCalculation 
+              ? event.rate + '%' 
+              : 'N/A (cancelled or no attendance)',
+            usedInCalculation: event.validForCalculation
+          };
+          if (event.validForCalculation) breakdown.hasFamilyData = true;
+        }
+      }
+
+      return breakdown;
+    });
+    
+    res.json({
+      groupId: groupId,
+      isFamilyGroup: hasFamilyMetrics,
+      regularStats: {
+        totalEvents: stats.total_events,
+        eventsWithAttendance: stats.events_with_attendance,
+        averageAttendance: stats.average_attendance,
+        averageMembers: stats.average_members,
+        overallAttendanceRate: stats.overall_attendance_rate
+      },
+      familyGroupStats: hasFamilyMetrics ? (stats as any).familyGroup : null,
+      monthlyBreakdown: monthlyBreakdown,
+      explanation: {
+        methodology: "All events (including cancelled) are used to determine meeting positions. Only non-cancelled events with attendance are used in calculations.",
+        positions: {
+          "1st meeting": "Mothers Night (present / half of total members)",
+          "2nd meeting": "Fathers Night (present / half of total members)", 
+          "3rd meeting": "Family Night (present / total members)"
+        }
+      }
+    });
+  } catch (error) {
+    console.error(`Error testing Family Group metrics for ${req.params.groupId}:`, error);
+    res.status(500).json({ 
+      error: 'Failed to test Family Group metrics', 
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
 //Home Page
 app.get('', async (req, res) => {
   try {
@@ -432,7 +581,7 @@ app.get('', async (req, res) => {
               display: flex;
               gap: 20px;
               color: #666;
-              min-width: 300px;
+              min-width: 600px;
               justify-content: flex-end;
             }
             .stat {
@@ -758,11 +907,53 @@ app.get('', async (req, res) => {
 
                       if (isSuspicious) {
                         statsHtml = '<div class="no-data">Stats calculating... (refresh if this persists)</div>';
+                      } else if (group.isFamilyGroup && stats.familyGroup) {
+                        // Family Group specific stats - calculate separate color classes for each rate
+                        const getColorClass = (rate) => {
+                          if (rate >= 70) return 'attendance-good';
+                          else if (rate >= 50) return 'attendance-warning';
+                          else if (rate > 0) return 'attendance-poor';
+                          return '';
+                        };
+                        
+                        const parentsRateClass = getColorClass(stats.familyGroup.parentsNightsRate || 0);
+                        const familyRateClass = getColorClass(stats.familyGroup.familyNightsRate || 0);
+                        
+                        statsHtml = 
+                          '<div class="stat">' +
+                            '<div class="stat-value">' + (stats.familyGroup.parentsNightsAttendance || 0) + '</div>' +
+                            '<div class="stat-label">Parents Nights Avg.</div>' +
+                          '</div>' +
+                          '<div class="stat">' +
+                            '<div class="stat-value">' + (stats.familyGroup.familyNightsAttendance || 0) + '</div>' +
+                            '<div class="stat-label">Family Nights Avg.</div>' +
+                          '</div>' +
+                          '<div class="stat">' +
+                            '<div class="stat-value">' + (stats.average_members || 0) + '</div>' +
+                            '<div class="stat-label">Avg. Membership</div>' +
+                          '</div>' +
+                          '<div class="stat">' +
+                            '<div class="stat-value ' + parentsRateClass + '">' + (stats.familyGroup.parentsNightsRate || 0) + '%</div>' +
+                            '<div class="stat-label">Parents Nights %</div>' +
+                          '</div>' +
+                          '<div class="stat">' +
+                            '<div class="stat-value ' + familyRateClass + '">' + (stats.familyGroup.familyNightsRate || 0) + '%</div>' +
+                            '<div class="stat-label">Family Nights %</div>' +
+                          '</div>' +
+                          '<div class="stat">' +
+                            '<div class="stat-value">' + (stats.events_with_attendance || 0) + '</div>' +
+                            '<div class="stat-label">Events</div>' +
+                          '</div>';
                       } else {
+                        // Regular group stats
                         statsHtml = 
                           '<div class="stat">' +
                             '<div class="stat-value">' + (stats.average_attendance || 0) + '</div>' +
                             '<div class="stat-label">Avg. Attendance</div>' +
+                          '</div>' +
+                          '<div class="stat">' +
+                            '<div class="stat-value">' + (stats.average_members || 0) + '</div>' +
+                            '<div class="stat-label">Avg. Membership</div>' +
                           '</div>' +
                           '<div class="stat">' +
                             '<div class="stat-value ' + rateClass + '">' + (stats.overall_attendance_rate || 0) + '%</div>' +
@@ -777,7 +968,7 @@ app.get('', async (req, res) => {
                       statsHtml = '<div class="no-data">Failed to load statistics</div>';
                     }
 
-                    return '<li class="group-item" id="group-' + group.id + '">' +
+                    return '<li class="group-item' + (group.isFamilyGroup ? ' family-group' : '') + '" id="group-' + group.id + '">' +
                       '<a href="/groups/' + group.id + '/attendance">' +
                         group.attributes.name +
                       '</a>' +
@@ -889,7 +1080,7 @@ app.get('', async (req, res) => {
               groupList.innerHTML = result.data
                 .sort((a, b) => a.attributes.name.localeCompare(b.attributes.name))
                 .map(group => \`
-                  <li class="group-item" id="group-\${group.id}">
+                  <li class="group-item\${group.isFamilyGroup ? ' family-group' : ''}" id="group-\${group.id}">
                     <a href="/groups/\${group.id}/attendance">
                       \${group.attributes.name}
                     </a>
@@ -919,22 +1110,71 @@ app.get('', async (req, res) => {
                 else if (stats.overall_attendance_rate > 0) rateClass = 'attendance-poor';
 
                 if (container) {
-                  container.innerHTML = stats ? \`
-                    <div class="stat">
-                      <div class="stat-value">\${stats.average_attendance}</div>
-                      <div class="stat-label">Avg. Attendance</div>
-                    </div>
-                    <div class="stat">
-                      <div class="stat-value \${rateClass}">\${stats.overall_attendance_rate}%</div>
-                      <div class="stat-label">Attendance Rate</div>
-                    </div>
-                    <div class="stat">
-                      <div class="stat-value">\${stats.events_with_attendance}</div>
-                      <div class="stat-label">Events</div>
-                    </div>
-                  \` : \`
-                    <div class="no-data">No attendance data available</div>
-                  \`;
+                  const isFamilyGroup = document.querySelector(\`#group-\${groupId}\`).classList.contains('family-group');
+                  
+                  if (isFamilyGroup && stats.familyGroup) {
+                    // Family Group specific stats - calculate separate color classes for each rate
+                    const getColorClass = (rate) => {
+                      if (rate >= 70) return 'attendance-good';
+                      else if (rate >= 50) return 'attendance-warning';
+                      else if (rate > 0) return 'attendance-poor';
+                      return '';
+                    };
+                    
+                    const parentsRateClass = getColorClass(stats.familyGroup.parentsNightsRate || 0);
+                    const familyRateClass = getColorClass(stats.familyGroup.familyNightsRate || 0);
+                    
+                    container.innerHTML = \`
+                      <div class="stat">
+                        <div class="stat-value">\${stats.familyGroup.parentsNightsAttendance}</div>
+                        <div class="stat-label">Parents Nights Avg.</div>
+                      </div>
+                      <div class="stat">
+                        <div class="stat-value">\${stats.familyGroup.familyNightsAttendance}</div>
+                        <div class="stat-label">Family Nights Avg.</div>
+                      </div>
+                      <div class="stat">
+                        <div class="stat-value">\${stats.average_members}</div>
+                        <div class="stat-label">Avg. Membership</div>
+                      </div>
+                      <div class="stat">
+                        <div class="stat-value \${parentsRateClass}">\${stats.familyGroup.parentsNightsRate}%</div>
+                        <div class="stat-label">Parents Nights %</div>
+                      </div>
+                      <div class="stat">
+                        <div class="stat-value \${familyRateClass}">\${stats.familyGroup.familyNightsRate}%</div>
+                        <div class="stat-label">Family Nights %</div>
+                      </div>
+                      <div class="stat">
+                        <div class="stat-value">\${stats.events_with_attendance}</div>
+                        <div class="stat-label">Events</div>
+                      </div>
+                    \`;
+                  } else {
+                    // Regular group stats
+                    container.innerHTML = \`
+                      <div class="stat">
+                        <div class="stat-value">\${stats.average_attendance}</div>
+                        <div class="stat-label">Avg. Attendance</div>
+                      </div>
+                      <div class="stat">
+                        <div class="stat-value">\${stats.average_members}</div>
+                        <div class="stat-label">Avg. Membership</div>
+                      </div>
+                      <div class="stat">
+                        <div class="stat-value \${rateClass}">\${stats.overall_attendance_rate}%</div>
+                        <div class="stat-label">Attendance Rate</div>
+                      </div>
+                      <div class="stat">
+                        <div class="stat-value">\${stats.events_with_attendance}</div>
+                        <div class="stat-label">Events</div>
+                      </div>
+                    \`;
+                  }
+                } else {
+                  if (container) {
+                    container.innerHTML = \`<div class="no-data">No attendance data available</div>\`;
+                  }
                 }
               } catch (error) {
                 console.error('Error fetching stats:', error);
@@ -1327,6 +1567,33 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
               </div>
             </div>
             
+            ${'familyGroup' in attendanceData.overall_statistics ? `
+            <div class="stats-card">
+              <h2>Family Group Breakdown</h2>
+              <div class="stats-note">
+                Specialized metrics for Family Groups with separate Parents Nights (Mothers + Fathers) and Family Nights meetings.
+              </div>
+              <div class="stats-grid">
+                <div class="stat-item">
+                  <div class="stat-value">${(attendanceData.overall_statistics as any).familyGroup.parentsNightsAttendance}</div>
+                  <div class="stat-label">Parents Nights Avg. Attendance</div>
+                </div>
+                <div class="stat-item">
+                  <div class="stat-value">${(attendanceData.overall_statistics as any).familyGroup.familyNightsAttendance}</div>
+                  <div class="stat-label">Family Nights Avg. Attendance</div>
+                </div>
+                <div class="stat-item">
+                  <div class="stat-value ${(attendanceData.overall_statistics as any).familyGroup.parentsNightsRate >= 70 ? 'attendance-good' : (attendanceData.overall_statistics as any).familyGroup.parentsNightsRate >= 50 ? 'attendance-warning' : 'attendance-poor'}">${(attendanceData.overall_statistics as any).familyGroup.parentsNightsRate}%</div>
+                  <div class="stat-label">Parents Nights Attendance Rate</div>
+                </div>
+                <div class="stat-item">
+                  <div class="stat-value ${(attendanceData.overall_statistics as any).familyGroup.familyNightsRate >= 70 ? 'attendance-good' : (attendanceData.overall_statistics as any).familyGroup.familyNightsRate >= 50 ? 'attendance-warning' : 'attendance-poor'}">${(attendanceData.overall_statistics as any).familyGroup.familyNightsRate}%</div>
+                  <div class="stat-label">Family Nights Attendance Rate</div>
+                </div>
+              </div>
+            </div>
+            ` : ''}
+            
             <div class="toggle-container">
               <label class="toggle-switch">
                 <input type="checkbox" id="showAllEvents" ${showAllEvents ? 'checked' : ''}>
@@ -1411,6 +1678,11 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
           <script>
             const ctx = document.getElementById('attendanceChart').getContext('2d');
             
+            // Hide loading indicator and show chart when ready
+            const chartLoading = document.getElementById('chartLoading');
+            if (chartLoading) chartLoading.style.display = 'none';
+            document.getElementById('attendanceChart').style.display = 'block';
+            
             // Prepare data for the chart
             const chartData = ${JSON.stringify(attendanceData.events
               .filter(event => !event.event.canceled && event.attendance_summary.present_count > 0)
@@ -1467,6 +1739,10 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
                     title: {
                       display: true,
                       text: 'Date'
+                    },
+                    ticks: {
+                      maxRotation: 45,
+                      minRotation: 45
                     }
                   }
                 }

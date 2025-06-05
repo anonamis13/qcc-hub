@@ -1,0 +1,17 @@
+Users: lauren, hannah, caleb
+eventually coaches will use
+
+Features:
+
+nightly auto-refresh
+!differentiate family groups
+missing persons report (data point on graph show names of missing members?)
+last 30 days, number of people who have left/joined a group
+!display average membership next to avg. attendance
+home page sort function (group type, attendance rate, group size)
+multi-select groups to show data on home page
+compare graphs function?
+home page all historical data
+did the group report attendance this week?
+month-over-month and year-over-year percentage
+fix show historical data on individual group page

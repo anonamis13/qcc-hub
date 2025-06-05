@@ -38,6 +38,16 @@ async function retryWithBackoff<T>(
   }
 }
 
+interface PCOTag {
+  type: string;
+  id: string;
+  attributes: {
+    name: string;
+    color?: string;
+    [key: string]: any;
+  };
+}
+
 interface PCOGroup {
   type: string;
   id: string;
@@ -52,12 +62,19 @@ interface PCOGroup {
         id: string;
       };
     };
+    tags?: {
+      data: Array<{
+        type: string;
+        id: string;
+      }>;
+    };
     [key: string]: any;
   };
 }
 
 interface PCOResponse {
   data: PCOGroup[];
+  included?: Array<PCOTag | any>;
   meta: {
     total_count: number;
     count: number;
@@ -154,7 +171,7 @@ async function getAllGroups(forceRefresh: boolean = false): Promise<PCOGroup[]> 
   while (true) {
     const response = await pcoClient.get<PCOResponse>('/groups/v2/groups', {
       params: {
-        include: 'group_type',
+        include: 'group_type,tags',
         per_page: PER_PAGE,
         offset: offset
       }
@@ -174,10 +191,48 @@ async function getAllGroups(forceRefresh: boolean = false): Promise<PCOGroup[]> 
     await delay(100);
   }
 
+  console.log(`Total groups fetched: ${allGroups.length}`);
+  
   // Cache the results
   cache.set(cacheKey, allGroups);
   return allGroups;
 }
+
+// Function to get tags for a specific group
+export const getGroupTags = async (groupId: string, forceRefresh: boolean = false) => {
+  const cacheKey = `tags_${groupId}`;
+  const cachedTags = cache.get<PCOTag[]>(cacheKey);
+  
+  // Always use cache if available, unless force refresh is requested
+  if (cachedTags && !forceRefresh) {
+    return cachedTags;
+  }
+
+  return retryWithBackoff(async () => {
+    try {
+      const response = await pcoClient.get(`/groups/v2/groups/${groupId}/tags`);
+      const tags = response.data.data as PCOTag[];
+      
+      // Cache the results
+      cache.set(cacheKey, tags);
+      return tags;
+    } catch (error) {
+      console.error(`Error fetching tags for group ${groupId}:`, error);
+      return []; // Return empty array on error
+    }
+  });
+};
+
+// Helper function to check if a group is a Family Group using direct tag lookup
+const isFamilyGroup = async (groupId: string): Promise<boolean> => {
+  try {
+    const tags = await getGroupTags(groupId, false);
+    return tags.some(tag => tag.id === '1252160');
+  } catch (error) {
+    console.error(`Error checking if group ${groupId} is family group:`, error);
+    return false;
+  }
+};
 
 export const getPeopleGroups = async (groupTypeId?: number, forceRefresh: boolean = false) => {
   try {
@@ -185,7 +240,17 @@ export const getPeopleGroups = async (groupTypeId?: number, forceRefresh: boolea
     const allGroups = await getAllGroups(forceRefresh);
     
     if (!groupTypeId) {
-      return { data: allGroups };
+      // Check each group for Family Group status
+      const groupsWithFamilyStatus = await Promise.all(
+        allGroups.map(async (group) => ({
+          ...group,
+          isFamilyGroup: await isFamilyGroup(group.id)
+        }))
+      );
+      
+      return { 
+        data: groupsWithFamilyStatus
+      };
     }
 
     // Filter groups by group type ID
@@ -193,8 +258,16 @@ export const getPeopleGroups = async (groupTypeId?: number, forceRefresh: boolea
       group.relationships.group_type.data.id === groupTypeId.toString()
     );
     
+    // Check each filtered group for Family Group status
+    const groupsWithFamilyStatus = await Promise.all(
+      filteredGroups.map(async (group) => ({
+        ...group,
+        isFamilyGroup: await isFamilyGroup(group.id)
+      }))
+    );
+    
     return {
-      data: filteredGroups,
+      data: groupsWithFamilyStatus,
       filtered_count: filteredGroups.length,
       total_count: allGroups.length
     };
@@ -387,24 +460,49 @@ export const getGroupAttendance = async (groupId: string, showAllEvents: boolean
         event.attendance_summary.present_count > 0
       ).length;
 
+      // Check if this is a Family Group and calculate special metrics
+      const isFamily = await isFamilyGroup(groupId);
+      let familyGroupMetrics = null;
+      
+      if (isFamily) {
+        familyGroupMetrics = calculateFamilyGroupMetrics(attendanceData);
+      }
+
+      const baseStats = {
+        total_events: overallStats.total_events,
+        events_with_attendance: eventsWithAttendance,
+        average_attendance: overallStats.total_events > 0 
+          ? Math.round(overallStats.total_attendance / overallStats.total_events)
+          : 0,
+        average_members: overallStats.total_events > 0
+          ? Math.round(overallStats.total_possible / overallStats.total_events)
+          : 0,
+        average_visitors: overallStats.total_events > 0
+          ? Math.round(overallStats.total_visitors / overallStats.total_events)
+          : 0,
+        overall_attendance_rate: overallStats.total_possible > 0
+          ? Math.round((overallStats.total_attendance / overallStats.total_possible) * 100)
+          : 0
+      };
+
       return {
         group_id: groupId,
-        overall_statistics: {
-          total_events: overallStats.total_events,
-          events_with_attendance: eventsWithAttendance,
-          average_attendance: overallStats.total_events > 0 
-            ? Math.round(overallStats.total_attendance / overallStats.total_events)
-            : 0,
-          average_members: overallStats.total_events > 0
-            ? Math.round(overallStats.total_members / overallStats.total_events)
-            : 0,
-          average_visitors: overallStats.total_events > 0
-            ? Math.round(overallStats.total_visitors / overallStats.total_events)
-            : 0,
-          overall_attendance_rate: overallStats.total_possible > 0
-            ? Math.round((overallStats.total_attendance / overallStats.total_possible) * 100)
-            : 0
-        },
+        overall_statistics: isFamily ? {
+          ...baseStats,
+          familyGroup: {
+            parentsNightsRate: familyGroupMetrics?.parentsNightsRate || 0,
+            familyNightsRate: familyGroupMetrics?.familyNightsRate || 0,
+            parentsNightsAttendance: familyGroupMetrics?.parentsNightsAttendance || 0,
+            familyNightsAttendance: familyGroupMetrics?.familyNightsAttendance || 0,
+            eventsBreakdown: familyGroupMetrics?.eventsBreakdown || {
+              totalMonths: 0,
+              monthsWithCompleteData: 0,
+              mothersNightsCount: 0,
+              fathersNightsCount: 0,
+              familyNightsCount: 0
+            }
+          }
+        } : baseStats,
         events: attendanceData
       };
     } catch (error) {
@@ -435,6 +533,179 @@ export const getGroup = async (groupId: string) => {
       throw error;
     }
   });
+};
+
+// Helper function to calculate Family Group specific metrics
+const calculateFamilyGroupMetrics = (events: Array<{
+  event: {
+    id: string;
+    name: string;
+    date: string;
+    canceled: boolean;
+  };
+  attendance_summary: {
+    total_count: number;
+    present_count: number;
+    present_members: number;
+    present_visitors: number;
+    absent_count: number;
+    attendance_rate: number;
+  };
+}>) => {
+  const currentDate = new Date();
+  
+  // Get all events that are in the past (including cancelled and zero attendance)
+  // We need ALL events to determine correct positioning
+  const allPastEvents = events.filter(event => 
+    new Date(event.event.date) <= currentDate
+  );
+
+  // Group ALL events by month (YYYY-MM format) - including cancelled/zero attendance
+  const eventsByMonth = new Map<string, typeof allPastEvents>();
+  
+  allPastEvents.forEach(event => {
+    const eventDate = new Date(event.event.date);
+    const monthKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}`;
+    
+    if (!eventsByMonth.has(monthKey)) {
+      eventsByMonth.set(monthKey, []);
+    }
+    eventsByMonth.get(monthKey)!.push(event);
+  });
+
+  // Sort events within each month by date to get correct chronological order
+  eventsByMonth.forEach((monthEvents) => {
+    monthEvents.sort((a, b) => new Date(a.event.date).getTime() - new Date(b.event.date).getTime());
+  });
+
+  let totalParentsNightsRate = 0;
+  let totalFamilyNightsRate = 0;
+  let monthsWithParentsData = 0;
+  let monthsWithFamilyData = 0;
+  
+  // Track attendance totals for averages
+  let totalParentsNightsAttendance = 0;
+  let totalFamilyNightsAttendance = 0;
+  let parentsNightsEventsCount = 0;
+  let familyNightsEventsCount = 0;
+  
+  let mothersNightsCount = 0;
+  let fathersNightsCount = 0;
+  let familyNightsCount = 0;
+
+  // Calculate metrics for each month
+  eventsByMonth.forEach((monthEvents, monthKey) => {
+    // We can process any month that has at least 1 event
+    // The position tells us what type of meeting it is
+    let mothersNightRate = 0;
+    let fathersNightRate = 0;
+    let familyNightRate = 0;
+    let hasMothersData = false;
+    let hasFathersData = false;
+    let hasFamilyData = false;
+
+    // Process each position (1st, 2nd, 3rd meeting)
+    for (let i = 0; i < monthEvents.length && i < 3; i++) {
+      const event = monthEvents[i];
+      const isValidForCalculation = !event.event.canceled && event.attendance_summary.present_count > 0;
+
+      if (i === 0) {
+        // 1st meeting = Mothers Night
+        if (isValidForCalculation) {
+          const mothersHalfMembers = Math.ceil(event.attendance_summary.total_count / 2);
+          mothersNightRate = mothersHalfMembers > 0 
+            ? (event.attendance_summary.present_members / mothersHalfMembers) * 100 
+            : 0;
+          hasMothersData = true;
+          // Track attendance for average calculation
+          totalParentsNightsAttendance += event.attendance_summary.present_members;
+          parentsNightsEventsCount++;
+        }
+        mothersNightsCount++; // Count all Mothers Nights (even cancelled)
+      } else if (i === 1) {
+        // 2nd meeting = Fathers Night
+        if (isValidForCalculation) {
+          const fathersHalfMembers = Math.ceil(event.attendance_summary.total_count / 2);
+          fathersNightRate = fathersHalfMembers > 0 
+            ? (event.attendance_summary.present_members / fathersHalfMembers) * 100 
+            : 0;
+          hasFathersData = true;
+          // Track attendance for average calculation
+          totalParentsNightsAttendance += event.attendance_summary.present_members;
+          parentsNightsEventsCount++;
+        }
+        fathersNightsCount++; // Count all Fathers Nights (even cancelled)
+      } else if (i === 2) {
+        // 3rd meeting = Family Night
+        if (isValidForCalculation) {
+          familyNightRate = event.attendance_summary.attendance_rate;
+          hasFamilyData = true;
+          // Track attendance for average calculation
+          totalFamilyNightsAttendance += event.attendance_summary.present_members;
+          familyNightsEventsCount++;
+        }
+        familyNightsCount++; // Count all Family Nights (even cancelled)
+      }
+    }
+
+    // Calculate Parents Nights average for this month (if we have any parents data)
+    if (hasMothersData || hasFathersData) {
+      let monthParentsRate = 0;
+      let parentsNightsWithData = 0;
+      
+      if (hasMothersData) {
+        monthParentsRate += mothersNightRate;
+        parentsNightsWithData++;
+      }
+      if (hasFathersData) {
+        monthParentsRate += fathersNightRate;
+        parentsNightsWithData++;
+      }
+      
+      if (parentsNightsWithData > 0) {
+        totalParentsNightsRate += (monthParentsRate / parentsNightsWithData);
+        monthsWithParentsData++;
+      }
+    }
+
+    // Include Family Night data if available
+    if (hasFamilyData) {
+      totalFamilyNightsRate += familyNightRate;
+      monthsWithFamilyData++;
+    }
+  });
+
+  const avgParentsNightsRate = monthsWithParentsData > 0 
+    ? Math.round(totalParentsNightsRate / monthsWithParentsData) 
+    : 0;
+    
+  const avgFamilyNightsRate = monthsWithFamilyData > 0 
+    ? Math.round(totalFamilyNightsRate / monthsWithFamilyData) 
+    : 0;
+
+  // Calculate average attendance numbers
+  const avgParentsNightsAttendance = parentsNightsEventsCount > 0 
+    ? Math.round(totalParentsNightsAttendance / parentsNightsEventsCount)
+    : 0;
+    
+  const avgFamilyNightsAttendance = familyNightsEventsCount > 0 
+    ? Math.round(totalFamilyNightsAttendance / familyNightsEventsCount)
+    : 0;
+  
+  return {
+    parentsNightsRate: avgParentsNightsRate,
+    familyNightsRate: avgFamilyNightsRate,
+    parentsNightsAttendance: avgParentsNightsAttendance,
+    familyNightsAttendance: avgFamilyNightsAttendance,
+    eventsBreakdown: {
+      totalMonths: eventsByMonth.size,
+      monthsWithParentsData: monthsWithParentsData,
+      monthsWithFamilyData: monthsWithFamilyData,
+      mothersNightsCount: mothersNightsCount,
+      fathersNightsCount: fathersNightsCount,
+      familyNightsCount: familyNightsCount
+    }
+  };
 };
 
 export default pcoClient; 
