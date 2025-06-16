@@ -126,33 +126,39 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     let totalEventsProcessed = 0;
     let februaryEventsFound = 0;
     
+    // First pass: collect all weeks that have any events (for attendance data)
+    const weeksWithEvents = new Set();
     allGroupsAttendance.forEach((groupData, groupIndex) => {
       console.log(`Group ${groupIndex + 1} (ID: ${groupData.group_id}): ${groupData.events.length} events`);
       
       groupData.events.forEach(event => {
-        if (!event.event.canceled && event.attendance_summary.present_count > 0) {
-          const eventDate = new Date(event.event.date);
-          // Use local time (Eastern) since Life Groups meet Wed/Thu in Cincinnati
-          const dayOfWeek = eventDate.getDay();
+        const eventDate = new Date(event.event.date);
+        const dayOfWeek = eventDate.getDay();
+        
+        // Only process Wednesday and Thursday events
+        if (dayOfWeek === 3 || dayOfWeek === 4) {
+          const wednesday = getWednesdayOfWeek(eventDate);
+          const weekKey = wednesday.toISOString().split('T')[0];
+          weeksWithEvents.add(weekKey);
           
-          // Only process Wednesday and Thursday events
-          if (dayOfWeek === 3 || dayOfWeek === 4) {
+          // Only count attendance for non-cancelled events with attendance
+          if (!event.event.canceled && event.attendance_summary.present_count > 0) {
             totalEventsProcessed++;
             
-            // Get the Wednesday of this week
-            const wednesday = getWednesdayOfWeek(eventDate);
-            const weekKey = wednesday.toISOString().split('T')[0];
-            
             // Debug February events specifically
-            if (weekKey.startsWith('2025-02')) {
+            if ((weekKey as string).startsWith('2025-02')) {
               februaryEventsFound++;
               console.log(`February event found: ${event.event.date} (${dayOfWeek === 3 ? 'Wed' : 'Thu'}) -> Week: ${weekKey}`);
               console.log(`  Members: ${event.attendance_summary.present_members}, Visitors: ${event.attendance_summary.present_visitors}, Total: ${event.attendance_summary.total_count}`);
+              
+              // Debug week calculation
+              const eventDateForDebug = new Date(event.event.date);
+              const wednesdayForDebug = getWednesdayOfWeek(eventDateForDebug);
+              console.log(`  Event date: ${eventDateForDebug.toISOString()}, Calculated Wednesday: ${wednesdayForDebug.toISOString()}`);
             }
             
             const existing = weekMap.get(weekKey) || { 
               totalPresent: 0,
-              totalMembers: 0,
               totalVisitors: 0,
               groupsProcessed: new Set(),
               daysWithAttendance: new Set()
@@ -163,11 +169,6 @@ app.get('/api/aggregate-attendance', async (req, res) => {
             if (!existing.groupsProcessed.has(groupKey)) {
               existing.totalPresent += event.attendance_summary.present_members;
               existing.totalVisitors += event.attendance_summary.present_visitors;
-              
-              // Only count total members once per group per week
-              if (!existing.groupsProcessed.has(event.event.id)) {
-                existing.totalMembers += event.attendance_summary.total_count;
-              }
               
               existing.groupsProcessed.add(groupKey);
               existing.groupsProcessed.add(event.event.id);
@@ -180,16 +181,120 @@ app.get('/api/aggregate-attendance', async (req, res) => {
       });
     });
     
+    // Second pass: calculate total membership for each week (including ALL groups)
+    weeksWithEvents.forEach(weekKey => {
+      const existing = weekMap.get(weekKey) || { 
+        totalPresent: 0,
+        totalVisitors: 0,
+        groupsProcessed: new Set(),
+        daysWithAttendance: new Set()
+      };
+      
+      // Calculate total membership from ALL groups for this week
+      let totalMembers = 0;
+      const groupsWithMembershipData = new Set();
+      
+      allGroupsAttendance.forEach(groupData => {
+        // Find the most recent total_count for this group in this week
+        let maxTotalCount = 0;
+        let membershipSource = 'none';
+        
+        // First, try to get membership data from events in the target week
+        groupData.events.forEach(event => {
+          const eventDate = new Date(event.event.date);
+          const dayOfWeek = eventDate.getDay();
+          
+          // Only Wed/Thu events
+          if (dayOfWeek === 3 || dayOfWeek === 4) {
+            const eventWednesday = getWednesdayOfWeek(eventDate);
+            const eventWeekKey = eventWednesday.toISOString().split('T')[0];
+            
+            // If this event is in our target week and has reliable attendance data
+            if (eventWeekKey === weekKey && !event.event.canceled && event.attendance_summary.present_count >= 0 && event.attendance_summary.total_count > 0) {
+              maxTotalCount = Math.max(maxTotalCount, event.attendance_summary.total_count);
+              membershipSource = 'week_events';
+            }
+          }
+        });
+        
+        // If no reliable attendance data for this week, find the most recent reliable data from any week
+        if (maxTotalCount === 0) {
+          let mostRecentEvent: any = null;
+          let mostRecentDate: Date | null = null;
+          
+          // Set a reasonable time limit for fallback data (e.g., within the last 3 months)
+          const weekDate = new Date(weekKey + 'T00:00:00.000Z');
+          const threeMonthsAgo = new Date(weekDate);
+          threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+          
+          groupData.events.forEach(event => {
+            const eventDate = new Date(event.event.date);
+            // Find the most recent event with reliable attendance data (within reasonable time frame)
+            if (!event.event.canceled && 
+                event.attendance_summary.present_count >= 0 && 
+                event.attendance_summary.total_count > 0 &&
+                eventDate >= threeMonthsAgo && // Don't use data older than 3 months
+                eventDate <= weekDate && // Don't use future data
+                (!mostRecentDate || eventDate > mostRecentDate)) {
+              mostRecentEvent = event;
+              mostRecentDate = eventDate;
+            }
+          });
+          
+          if (mostRecentEvent && mostRecentEvent.attendance_summary) {
+            maxTotalCount = mostRecentEvent.attendance_summary.total_count;
+            membershipSource = 'most_recent_reliable_event';
+            
+            // Add debug logging for February weeks specifically
+            if ((weekKey as string).startsWith('2025-02')) {
+              console.log(`  February fallback for group ${groupData.group_id}: using event from ${mostRecentEvent.event.date} (${maxTotalCount} members)`);
+            }
+          }
+        }
+        
+        if (maxTotalCount > 0) {
+          totalMembers += maxTotalCount;
+          groupsWithMembershipData.add(groupData.group_id);
+          console.log(`  Group ${groupData.group_id}: ${maxTotalCount} members (source: ${membershipSource})`);
+        } else {
+          console.log(`  Group ${groupData.group_id}: No reliable membership data found`);
+        }
+      });
+      
+      existing.totalMembers = totalMembers;
+      weekMap.set(weekKey, existing);
+      
+      console.log(`Week ${weekKey}: ${existing.totalPresent} present, ${totalMembers} total members from ${groupsWithMembershipData.size} groups`);
+      
+      // Add detailed February debugging
+      if ((weekKey as string).startsWith('2025-02')) {
+        console.log(`  February week ${weekKey} details:`);
+        console.log(`    Groups with week events: ${Array.from(groupsWithMembershipData).filter(id => 
+          allGroupsAttendance.find(g => g.group_id === id)?.events.some(e => {
+            const eventDate = new Date(e.event.date);
+            const dayOfWeek = eventDate.getDay();
+            if (dayOfWeek !== 3 && dayOfWeek !== 4) return false;
+            const eventWednesday = getWednesdayOfWeek(eventDate);
+            const eventWeekKey = eventWednesday.toISOString().split('T')[0];
+            return eventWeekKey === weekKey && !e.event.canceled && e.attendance_summary.present_count >= 0 && e.attendance_summary.total_count > 0;
+          })
+        ).length}`);
+        console.log(`    Groups using fallback data: ${Array.from(groupsWithMembershipData).length - Array.from(groupsWithMembershipData).filter(id => 
+          allGroupsAttendance.find(g => g.group_id === id)?.events.some(e => {
+            const eventDate = new Date(e.event.date);
+            const dayOfWeek = eventDate.getDay();
+            if (dayOfWeek !== 3 && dayOfWeek !== 4) return false;
+            const eventWednesday = getWednesdayOfWeek(eventDate);
+            const eventWeekKey = eventWednesday.toISOString().split('T')[0];
+            return eventWeekKey === weekKey && !e.event.canceled && e.attendance_summary.present_count >= 0 && e.attendance_summary.total_count > 0;
+          })
+        ).length}`);
+      }
+    });
+    
     console.log('Total Wed/Thu events processed:', totalEventsProcessed);
     console.log('February events found:', februaryEventsFound);
     console.log('Weeks found:', Array.from(weekMap.keys()).sort());
-    
-    // Log February specific data
-    weekMap.forEach((data, weekKey) => {
-      if (weekKey.startsWith('2025-02')) {
-        console.log(`Week ${weekKey}: ${data.totalPresent} present, ${data.totalMembers} members, groups: ${data.groupsProcessed.size}`);
-      }
-    });
     
     // Convert map to array and sort by date
     const aggregatedData = Array.from(weekMap.entries())
@@ -199,7 +304,7 @@ app.get('/api/aggregate-attendance', async (req, res) => {
         totalVisitors: data.totalVisitors,
         totalWithVisitors: data.totalPresent + data.totalVisitors,
         totalMembers: data.totalMembers,
-        attendanceRate: Math.round((data.totalPresent / data.totalMembers) * 100),
+        attendanceRate: data.totalMembers > 0 ? Math.round((data.totalPresent / data.totalMembers) * 100) : 0,
         daysIncluded: Array.from(data.daysWithAttendance).length
       }))
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
