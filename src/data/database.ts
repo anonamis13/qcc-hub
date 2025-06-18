@@ -42,7 +42,7 @@ function cleanupOldData() {
     const deleteStmt = db.prepare('DELETE FROM cache WHERE timestamp < ?');
     const result = deleteStmt.run(cutoffTime);
     
-    console.log(`Cleaned up ${result.changes} old records from the database`);
+
   } catch (error) {
     console.error('Error during database cleanup:', error);
   }
@@ -50,7 +50,6 @@ function cleanupOldData() {
 
 function initializeDb() {
   if (!db) {
-    console.log('Initializing SQLite database at:', dbPath);
     // Ensure the directory exists
     try {
       const dbDir = path.dirname(dbPath);
@@ -75,7 +74,7 @@ function initializeDb() {
       // Schedule regular cleanup
       setInterval(cleanupOldData, CLEANUP_INTERVAL);
       
-      console.log('Successfully initialized SQLite database');
+
     } catch (error) {
       console.error('Error initializing database:', error);
       throw error;

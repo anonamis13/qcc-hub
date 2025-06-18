@@ -3,6 +3,9 @@ eventually coaches will use
 
 Features:
 
+fix first week of february data
+show number of groups on tooltip
+
 fix show historical data on individual group page
 home page all historical data
 home page sort function (group type, attendance rate, group size)

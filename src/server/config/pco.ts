@@ -160,7 +160,7 @@ async function getAllGroups(forceRefresh: boolean = false): Promise<PCOGroup[]> 
   
   // Always use cache if available, unless force refresh is requested
   if (cachedGroups && !forceRefresh) {
-    console.log('Using cached groups data');
+
     return cachedGroups;
   }
 
@@ -191,7 +191,7 @@ async function getAllGroups(forceRefresh: boolean = false): Promise<PCOGroup[]> 
     await delay(100);
   }
 
-  console.log(`Total groups fetched: ${allGroups.length}`);
+
   
   // Cache the results
   cache.set(cacheKey, allGroups);
@@ -283,13 +283,13 @@ export const getGroupEvents = async (groupId: string, showAllEvents: boolean = f
   
   // Always use cache if available, unless force refresh is requested
   if (cachedEvents && !forceRefresh) {
-    console.log(`Using cached events data for group ${groupId}`);
+
     return cachedEvents;
   }
 
   return retryWithBackoff(async () => {
     try {
-      console.log('Fetching events with showAllEvents:', showAllEvents);
+    
       
       // Construct query parameters
       const queryParams: Record<string, string> = {
@@ -308,10 +308,7 @@ export const getGroupEvents = async (groupId: string, showAllEvents: boolean = f
         
         queryParams['where[starts_at][gte]'] = startOfYear.toISOString();
         queryParams['where[starts_at][lte]'] = endOfToday.toISOString(); // Only past/today events
-        console.log(`Filtering events from ${startOfYear.toISOString()} to ${endOfToday.toISOString()} for group ${groupId}`);
       }
-
-      console.log('Query parameters:', queryParams);
 
       // Get events specifically for this group
       const response = await pcoClient.get(`/groups/v2/groups/${groupId}/events`, {
@@ -331,7 +328,7 @@ export const getGroupEvents = async (groupId: string, showAllEvents: boolean = f
         nextPage = nextResponse.data.links?.next;
       }
       
-      console.log(`Found ${events.length} total events after pagination`);
+
       
       // Cache the results
       cache.set(cacheKey, events);
@@ -393,7 +390,7 @@ export const getGroupAttendance = async (groupId: string, showAllEvents: boolean
     try {
       // First get all events for this group
       const events = await getGroupEvents(groupId, showAllEvents, forceRefresh);
-      console.log(`Group ${groupId}: ${events.length} events (${showAllEvents ? 'all years' : 'current year'})`);
+
       
       // Get attendance for each event
       const attendancePromises = events.map(async (event) => {
@@ -424,7 +421,7 @@ export const getGroupAttendance = async (groupId: string, showAllEvents: boolean
       });
 
       const attendanceData = await Promise.all(attendancePromises);
-      console.log(`Group ${groupId}: Processed ${events.length} events successfully`);
+
       
       // Calculate overall statistics (only including events with attendance)
       const currentDate = new Date();
@@ -516,7 +513,7 @@ export const getGroup = async (groupId: string) => {
   const cacheKey = `group_${groupId}`;
   const cachedGroup = cache.get<PCOGroup>(cacheKey);
   if (cachedGroup) {
-    console.log(`Using cached group data for ${groupId}`);
+
     return cachedGroup;
   }
 

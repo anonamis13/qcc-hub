@@ -90,19 +90,40 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     const groups = await getPeopleGroups(groupTypeId, forceRefresh);
     
     // Get attendance data for each group
+    // For aggregate calculations, we need some historical data to find fallback membership counts
+    // Use current year + previous year to capture November 2024 data for early 2025 weeks
     const attendancePromises = groups.data.map(group => 
       getGroupAttendance(group.id, false, forceRefresh)
     );
     
     const allGroupsAttendance = await Promise.all(attendancePromises);
     
+    // For groups that are missing membership data in early weeks, fetch additional historical data
+    // But keep it separate so it's only used for fallback membership, not for creating weeks
+    const historicalFallbackData = new Map();
+    const needsHistoricalData = new Set(['2291027', '2385028']); // Groups we know need November 2024 data
+    
+    // Fetch historical data only for groups that need it, but keep it separate
+    for (const groupId of needsHistoricalData) {
+      try {
+        const historicalData = await getGroupAttendance(groupId, true, forceRefresh);
+        // Only keep events from previous years for fallback purposes
+        const currentYear = new Date().getFullYear();
+        const historicalEvents = historicalData.events.filter(event => {
+          const eventYear = new Date(event.event.date).getFullYear();
+          return eventYear < currentYear; // Only previous year events
+        });
+        historicalFallbackData.set(groupId, historicalEvents);
+
+      } catch (error) {
+        console.error(`Failed to fetch historical data for group ${groupId}:`, error);
+      }
+    }
+    
     // Create a map of week -> attendance data
     const weekMap = new Map();
     
-    // Add debug logging
-    console.log('=== AGGREGATE CALCULATION DEBUG ===');
-    console.log('Environment:', process.env.NODE_ENV || 'development');
-    console.log('Total groups:', allGroupsAttendance.length);
+
     
     // Helper function to get Wednesday of the week for any given date
     const getWednesdayOfWeek = (date: Date) => {
@@ -123,13 +144,9 @@ app.get('/api/aggregate-attendance', async (req, res) => {
       return result;
     };
     
-    let totalEventsProcessed = 0;
-    let februaryEventsFound = 0;
-    
     // First pass: collect all weeks that have any events (for attendance data)
     const weeksWithEvents = new Set();
     allGroupsAttendance.forEach((groupData, groupIndex) => {
-      console.log(`Group ${groupIndex + 1} (ID: ${groupData.group_id}): ${groupData.events.length} events`);
       
       groupData.events.forEach(event => {
         const eventDate = new Date(event.event.date);
@@ -139,23 +156,19 @@ app.get('/api/aggregate-attendance', async (req, res) => {
         if (dayOfWeek === 3 || dayOfWeek === 4) {
           const wednesday = getWednesdayOfWeek(eventDate);
           const weekKey = wednesday.toISOString().split('T')[0];
-          weeksWithEvents.add(weekKey);
           
-          // Only count attendance for non-cancelled events with attendance
-          if (!event.event.canceled && event.attendance_summary.present_count > 0) {
-            totalEventsProcessed++;
+          // For events with 0 attendance, only include if the event date is at least yesterday
+          const yesterday = new Date();
+          yesterday.setDate(yesterday.getDate() - 1);
+          yesterday.setHours(23, 59, 59, 999); // End of yesterday
+          
+          // Only count attendance for non-cancelled events with attendance or events from yesterday/earlier
+          if (!event.event.canceled && 
+              (event.attendance_summary.present_count > 0 || 
+               (event.attendance_summary.present_count === 0 && eventDate <= yesterday))) {
             
-            // Debug February events specifically
-            if ((weekKey as string).startsWith('2025-02')) {
-              februaryEventsFound++;
-              console.log(`February event found: ${event.event.date} (${dayOfWeek === 3 ? 'Wed' : 'Thu'}) -> Week: ${weekKey}`);
-              console.log(`  Members: ${event.attendance_summary.present_members}, Visitors: ${event.attendance_summary.present_visitors}, Total: ${event.attendance_summary.total_count}`);
-              
-              // Debug week calculation
-              const eventDateForDebug = new Date(event.event.date);
-              const wednesdayForDebug = getWednesdayOfWeek(eventDateForDebug);
-              console.log(`  Event date: ${eventDateForDebug.toISOString()}, Calculated Wednesday: ${wednesdayForDebug.toISOString()}`);
-            }
+            // Only add weeks that have valid events
+            weeksWithEvents.add(weekKey);
             
             const existing = weekMap.get(weekKey) || { 
               totalPresent: 0,
@@ -210,7 +223,13 @@ app.get('/api/aggregate-attendance', async (req, res) => {
             const eventWeekKey = eventWednesday.toISOString().split('T')[0];
             
             // If this event is in our target week and has reliable attendance data
-            if (eventWeekKey === weekKey && !event.event.canceled && event.attendance_summary.present_count >= 0 && event.attendance_summary.total_count > 0) {
+            // For events with 0 attendance, only include if the event date is at least yesterday
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            yesterday.setHours(23, 59, 59, 999); // End of yesterday
+            
+            if (eventWeekKey === weekKey && !event.event.canceled && event.attendance_summary.present_count >= 0 && event.attendance_summary.total_count > 0 &&
+                (event.attendance_summary.present_count > 0 || eventDate <= yesterday)) {
               maxTotalCount = Math.max(maxTotalCount, event.attendance_summary.total_count);
               membershipSource = 'week_events';
             }
@@ -219,82 +238,57 @@ app.get('/api/aggregate-attendance', async (req, res) => {
         
         // If no reliable attendance data for this week, find the most recent reliable data from any week
         if (maxTotalCount === 0) {
-          let mostRecentEvent: any = null;
-          let mostRecentDate: Date | null = null;
-          
-          // Set a reasonable time limit for fallback data (e.g., within the last 3 months)
+          // For early 2025 weeks, we need to look back to November 2024 for some groups
+          // Set a reasonable time limit for fallback data (e.g., within the last 4 months)
           const weekDate = new Date(weekKey + 'T00:00:00.000Z');
-          const threeMonthsAgo = new Date(weekDate);
-          threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+          const fourMonthsAgo = new Date(weekDate);
+          fourMonthsAgo.setMonth(fourMonthsAgo.getMonth() - 4);
           
-          groupData.events.forEach(event => {
-            const eventDate = new Date(event.event.date);
-            // Find the most recent event with reliable attendance data (within reasonable time frame)
-            if (!event.event.canceled && 
-                event.attendance_summary.present_count >= 0 && 
-                event.attendance_summary.total_count > 0 &&
-                eventDate >= threeMonthsAgo && // Don't use data older than 3 months
-                eventDate <= weekDate && // Don't use future data
-                (!mostRecentDate || eventDate > mostRecentDate)) {
-              mostRecentEvent = event;
-              mostRecentDate = eventDate;
-            }
-          });
+          // Sort events by date (most recent first) and find the first valid one
+          // Only look at events that are not in the future relative to the week we're calculating
+          // Include historical fallback data if available for this group
+          let eventsToSearch = groupData.events.slice(); // Create a copy
+          if (historicalFallbackData.has(groupData.group_id)) {
+            eventsToSearch = eventsToSearch.concat(historicalFallbackData.get(groupData.group_id));
+          }
+          
+          const mostRecentEvent = eventsToSearch
+            .filter(event => {
+              const eventDate = new Date(event.event.date);
+              return eventDate <= weekDate; // Only consider events up to the week we're calculating
+            })
+            .sort((a, b) => new Date(b.event.date).getTime() - new Date(a.event.date).getTime())
+            .find(event => {
+              const eventDate = new Date(event.event.date);
+              // For events with 0 attendance, only include if the event date is at least yesterday
+              const yesterday = new Date();
+              yesterday.setDate(yesterday.getDate() - 1);
+              yesterday.setHours(23, 59, 59, 999); // End of yesterday
+              
+              return !event.event.canceled && 
+                     event.attendance_summary.present_count >= 0 && 
+                     event.attendance_summary.total_count > 0 &&
+                     eventDate >= fourMonthsAgo && // Don't use data older than 4 months
+                     (event.attendance_summary.present_count > 0 || eventDate <= yesterday); // Only use 0-attendance events if they're from yesterday or earlier
+            });
           
           if (mostRecentEvent && mostRecentEvent.attendance_summary) {
             maxTotalCount = mostRecentEvent.attendance_summary.total_count;
             membershipSource = 'most_recent_reliable_event';
             
-            // Add debug logging for February weeks specifically
-            if ((weekKey as string).startsWith('2025-02')) {
-              console.log(`  February fallback for group ${groupData.group_id}: using event from ${mostRecentEvent.event.date} (${maxTotalCount} members)`);
-            }
+
           }
         }
         
         if (maxTotalCount > 0) {
           totalMembers += maxTotalCount;
           groupsWithMembershipData.add(groupData.group_id);
-          console.log(`  Group ${groupData.group_id}: ${maxTotalCount} members (source: ${membershipSource})`);
-        } else {
-          console.log(`  Group ${groupData.group_id}: No reliable membership data found`);
         }
       });
       
       existing.totalMembers = totalMembers;
       weekMap.set(weekKey, existing);
-      
-      console.log(`Week ${weekKey}: ${existing.totalPresent} present, ${totalMembers} total members from ${groupsWithMembershipData.size} groups`);
-      
-      // Add detailed February debugging
-      if ((weekKey as string).startsWith('2025-02')) {
-        console.log(`  February week ${weekKey} details:`);
-        console.log(`    Groups with week events: ${Array.from(groupsWithMembershipData).filter(id => 
-          allGroupsAttendance.find(g => g.group_id === id)?.events.some(e => {
-            const eventDate = new Date(e.event.date);
-            const dayOfWeek = eventDate.getDay();
-            if (dayOfWeek !== 3 && dayOfWeek !== 4) return false;
-            const eventWednesday = getWednesdayOfWeek(eventDate);
-            const eventWeekKey = eventWednesday.toISOString().split('T')[0];
-            return eventWeekKey === weekKey && !e.event.canceled && e.attendance_summary.present_count >= 0 && e.attendance_summary.total_count > 0;
-          })
-        ).length}`);
-        console.log(`    Groups using fallback data: ${Array.from(groupsWithMembershipData).length - Array.from(groupsWithMembershipData).filter(id => 
-          allGroupsAttendance.find(g => g.group_id === id)?.events.some(e => {
-            const eventDate = new Date(e.event.date);
-            const dayOfWeek = eventDate.getDay();
-            if (dayOfWeek !== 3 && dayOfWeek !== 4) return false;
-            const eventWednesday = getWednesdayOfWeek(eventDate);
-            const eventWeekKey = eventWednesday.toISOString().split('T')[0];
-            return eventWeekKey === weekKey && !e.event.canceled && e.attendance_summary.present_count >= 0 && e.attendance_summary.total_count > 0;
-          })
-        ).length}`);
-      }
     });
-    
-    console.log('Total Wed/Thu events processed:', totalEventsProcessed);
-    console.log('February events found:', februaryEventsFound);
-    console.log('Weeks found:', Array.from(weekMap.keys()).sort());
     
     // Convert map to array and sort by date
     const aggregatedData = Array.from(weekMap.entries())
@@ -307,9 +301,8 @@ app.get('/api/aggregate-attendance', async (req, res) => {
         attendanceRate: data.totalMembers > 0 ? Math.round((data.totalPresent / data.totalMembers) * 100) : 0,
         daysIncluded: Array.from(data.daysWithAttendance).length
       }))
+      .filter(week => week.totalMembers > 0 || week.totalPresent > 0) // Only include weeks with actual data
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    
-    console.log('=== END AGGREGATE DEBUG ===');
     
     res.json(aggregatedData);
   } catch (error) {
@@ -432,8 +425,6 @@ app.get('/api/debug-group/:groupId', async (req, res) => {
     const { groupId } = req.params;
     const forceRefresh = req.query.forceRefresh === 'true';
     
-    console.log(`Debugging group ${groupId}, forceRefresh: ${forceRefresh}`);
-    
     const attendanceData = await getGroupAttendance(groupId, false, forceRefresh);
     
     // Filter for February events specifically
@@ -468,8 +459,6 @@ app.get('/api/debug-group/:groupId', async (req, res) => {
       cacheKey: `events_${groupId}_false`,
       timestamp: new Date().toISOString()
     };
-    
-    console.log('Group debug info:', debugInfo);
     
     res.json(debugInfo);
   } catch (error) {
@@ -513,8 +502,6 @@ app.get('/api/debug-family-groups', async (req, res) => {
 app.get('/api/debug-family-metrics/:groupId', async (req, res) => {
   try {
     const { groupId } = req.params;
-    console.log(`Testing Family Group metrics for group ${groupId}...`);
-    
     const attendanceData = await getGroupAttendance(groupId, false, false);
     const stats = attendanceData.overall_statistics;
     const hasFamilyMetrics = 'familyGroup' in stats;
@@ -889,8 +876,6 @@ app.get('', async (req, res) => {
                   console.warn('Could not check last update time:', error);
                   // If we can't check, proceed with refresh
                 }
-              } else {
-                console.log('Shift-click detected, bypassing confirmation dialog');
               }
 
               const loadingHtml = '<span>Refreshing...</span><span class="est-time">est. time ≈ 3 min.</span>';
@@ -935,33 +920,25 @@ app.get('', async (req, res) => {
               
               try {
                 // Fetch all data first
-                console.log('Starting data refresh...');
                 
                 // Only fetch groups once
                 const groupsResponse = await fetch('/api/load-groups?forceRefresh=true');
                 if (!groupsResponse.ok) throw new Error('Failed to fetch groups');
                 const result = await groupsResponse.json();
-                console.log('Groups fetched:', result.data.length);
-
-                // For the stats, we can use cached event data since event attendance doesn't change frequently
-                // Only the group membership (total_count) needs to be updated, which is handled by the groups refresh
-                console.log('Starting to fetch stats for', result.data.length, 'groups (current year only)');
                 
                 // Process groups sequentially to avoid cache race conditions
                 const groupStats = [];
-                for (let i = 0; i < result.data.length; i++) {
-                  const group = result.data[i];
-                  try {
-                    console.log(\`Processing group \${i + 1}/\${result.data.length}: \${group.attributes.name} (ID: \${group.id})\`);
-                    const response = await fetch('/api/group-stats/' + group.id + '?forceRefresh=true');
-                    if (!response.ok) {
-                      console.error('Failed to fetch stats for group', group.id, 'Status:', response.status, response.statusText);
-                      groupStats.push(null);
-                    } else {
-                      const stats = await response.json();
-                      console.log(\`✓ Group \${group.id} processed: \${stats.events_with_attendance} events\`);
-                      groupStats.push(stats);
-                    }
+                                  for (let i = 0; i < result.data.length; i++) {
+                    const group = result.data[i];
+                    try {
+                      const response = await fetch('/api/group-stats/' + group.id + '?forceRefresh=true');
+                      if (!response.ok) {
+                        console.error('Failed to fetch stats for group', group.id, 'Status:', response.status, response.statusText);
+                        groupStats.push(null);
+                      } else {
+                        const stats = await response.json();
+                        groupStats.push(stats);
+                      }
                     
                     // Add delay between group processing to reduce API load (especially important for production)
                     if (i < result.data.length - 1) { // Don't delay after the last group
@@ -973,22 +950,14 @@ app.get('', async (req, res) => {
                   }
                 }
                 
-                console.log('All data loaded:', { groups: result.data.length, stats: groupStats.filter(s => s !== null).length });
-                console.log('Check the console above for individual group API call counts');
-                
-                // Add a brief delay to ensure all cache writes from individual group processing are complete
-                console.log('Ensuring all cache writes are complete...');
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                
-                // Remove the artificial delay since we're now processing sequentially
-                console.log('Data processing complete, displaying results...');
+                                  // Add a brief delay to ensure all cache writes from individual group processing are complete
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                  
+                  // Load aggregate chart with cached data (no forceRefresh to avoid duplicate API calls)
+                  await loadAggregateData(false);
 
-                // Load aggregate chart with cached data (no forceRefresh to avoid duplicate API calls)
-                await loadAggregateData(false);
-
-                // Force a page refresh to ensure we display consistent cached data
-                console.log('Refreshing page to display consistent data...');
-                window.location.reload();
+                  // Force a page refresh to ensure we display consistent cached data
+                  window.location.reload();
                 
                 // The code below will run after the page refresh loads the cached data
                 
@@ -1095,13 +1064,8 @@ app.get('', async (req, res) => {
                   chartContainer.style.display = 'block';
                 }
                 
-                console.log('Display complete');
                 await updateLastUpdateTime();
                 clearInterval(timerInterval); // Stop the timer
-                const totalTime = Math.floor((Date.now() - startTime) / 1000);
-                const totalMinutes = Math.floor(totalTime / 60);
-                const totalSeconds = totalTime % 60;
-                console.log(\`Total refresh time: \${totalMinutes}:\${totalSeconds.toString().padStart(2, '0')} (\${totalTime} seconds)\`);
               } catch (error) {
                 console.error('Error refreshing data:', error);
                 initialMessage.textContent = 'Failed to refresh data. Please try again.';
@@ -1434,7 +1398,7 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
     const { groupId } = req.params;
     const showAllEvents = req.query.showAll === 'true';
     const forceRefresh = req.query.forceRefresh === 'true';
-    console.log('Request params:', { groupId, showAllEvents, forceRefresh, query: req.query });
+
     
     const [group, attendanceData] = await Promise.all([
       getGroup(groupId),
@@ -1715,15 +1679,13 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
             </div>
 
             <script>
-              document.getElementById('showAllEvents').addEventListener('change', function() {
-                console.log('Toggle changed:', this.checked);
-                const loadingMessage = document.getElementById('toggleLoadingMessage');
-                loadingMessage.style.display = 'flex';
-                const newUrl = new URL(window.location.href);
-                newUrl.searchParams.set('showAll', this.checked);
-                console.log('Redirecting to:', newUrl.toString());
-                window.location.href = newUrl.toString();
-              });
+                          document.getElementById('showAllEvents').addEventListener('change', function() {
+              const loadingMessage = document.getElementById('toggleLoadingMessage');
+              loadingMessage.style.display = 'flex';
+              const newUrl = new URL(window.location.href);
+              newUrl.searchParams.set('showAll', this.checked);
+              window.location.href = newUrl.toString();
+            });
             </script>
 
             <div class="chart-container">
