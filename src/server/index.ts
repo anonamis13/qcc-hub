@@ -29,7 +29,8 @@ app.get('/api/group-stats/:groupId', async (req, res) => {
   try {
     const { groupId } = req.params;
     const forceRefresh = req.query.forceRefresh === 'true';
-    const stats = await getGroupAttendance(groupId, false, forceRefresh);
+    const showAll = req.query.showAll === 'true';
+    const stats = await getGroupAttendance(groupId, showAll, forceRefresh);
     res.json(stats.overall_statistics);
   } catch (error) {
     console.error(`Error fetching stats for group ${req.params.groupId}:`, error);
@@ -364,7 +365,8 @@ app.get('/api/aggregate-attendance', async (req, res) => {
         totalWithVisitors: data.totalPresent + data.totalVisitors,
         totalMembers: data.totalMembers,
         attendanceRate: data.totalMembers > 0 ? Math.round((data.totalPresent / data.totalMembers) * 100) : 0,
-        daysIncluded: Array.from(data.daysWithAttendance).length
+        daysIncluded: Array.from(data.daysWithAttendance).length,
+        groupsWithData: data.groupsWithAttendance.size
       }))
       .filter(week => week.totalMembers > 0 || week.totalPresent > 0) // Only include weeks with actual data
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -966,10 +968,10 @@ app.get('', async (req, res) => {
               <span class="toggle-label">Show all years</span>
               <span id="chartToggleLoadingMessage" style="color: #666; display: none; align-items: center;">
                 <div class="loading" style="width: 16px; height: 16px; margin: 0 8px;"></div>
-                Loading chart data...
+                Updating data...
               </span>
               <span class="date-range" id="chartDateRange">
-                Showing events from: Current year
+                Showing data from: Current year
               </span>
             </div>
             
@@ -1154,7 +1156,10 @@ app.get('', async (req, res) => {
                       }
                     }
                     
-                    const response = await fetch('/api/group-stats/' + group.id + '?forceRefresh=true');
+                    const params = new URLSearchParams();
+                    params.set('forceRefresh', 'true');
+                    if (isHistoricalRefresh) params.set('showAll', 'true');
+                    const response = await fetch('/api/group-stats/' + group.id + '?' + params.toString());
                     
                     if (!response.ok) {
                       const errorText = await response.text();
@@ -1426,14 +1431,24 @@ app.get('', async (req, res) => {
               loadDataBtn.innerHTML = '<span>Refresh Data</span><span class="est-time">est. time ≈ 3 min.</span>';
               
               // Load stats for each group
-              result.data.forEach(group => updateGroupStats(group.id));
+              result.data.forEach(group => {
+                const showAllYears = document.getElementById('showAllYears').checked;
+                updateGroupStats(group.id, showAllYears);
+              });
             }
 
             // Function to update stats for a group
-            async function updateGroupStats(groupId) {
+            async function updateGroupStats(groupId, showAllYears = false, forceRefresh = false) {
               const container = document.querySelector(\`#group-\${groupId} .stats-container\`);
               try {
-                const response = await fetch(\`/api/group-stats/\${groupId}\${forceRefreshParam}\`);
+                // Build query parameters
+                const params = new URLSearchParams();
+                if (forceRefresh) params.set('forceRefresh', 'true');
+                if (showAllYears) params.set('showAll', 'true');
+                const queryString = params.toString();
+                const url = \`/api/group-stats/\${groupId}\` + (queryString ? '?' + queryString : '');
+                
+                const response = await fetch(url);
                 if (!response.ok) throw new Error('Failed to fetch stats');
                 const stats = await response.json();
                 
@@ -1585,6 +1600,19 @@ app.get('', async (req, res) => {
                   window.aggregateChartInstance.destroy();
                 }
                 
+                // Calculate year boundaries for vertical lines
+                const yearBoundaries = [];
+                if (showAllYears && aggregateData.length > 0) {
+                  let currentYear = null;
+                  aggregateData.forEach((item, index) => {
+                    const itemYear = new Date(item.date).getFullYear();
+                    if (currentYear !== null && itemYear !== currentYear) {
+                      yearBoundaries.push(index);
+                    }
+                    currentYear = itemYear;
+                  });
+                }
+
                 window.aggregateChartInstance = new Chart(ctx, {
                   type: 'line',
                   data: {
@@ -1628,6 +1656,28 @@ app.get('', async (req, res) => {
                       }
                     ]
                   },
+                  plugins: showAllYears && yearBoundaries.length > 0 ? [{
+                    id: 'yearSeparators',
+                    afterDraw: function(chart) {
+                      const ctx = chart.ctx;
+                      const chartArea = chart.chartArea;
+                      
+                      ctx.save();
+                      ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+                      ctx.lineWidth = 1;
+                      ctx.setLineDash([5, 5]);
+                      
+                      yearBoundaries.forEach(boundaryIndex => {
+                        const x = chart.scales.x.getPixelForValue(boundaryIndex);
+                        ctx.beginPath();
+                        ctx.moveTo(x, chartArea.top);
+                        ctx.lineTo(x, chartArea.bottom);
+                        ctx.stroke();
+                      });
+                      
+                      ctx.restore();
+                    }
+                  }] : [],
                   options: {
                     responsive: true,
                     maintainAspectRatio: false,
@@ -1654,6 +1704,7 @@ app.get('', async (req, res) => {
                               'Members Present: ' + data.totalPresent,
                               'Visitors: +' + data.totalVisitors,
                               'Total with Visitors: ' + data.totalWithVisitors,
+                              'Groups with Data: ' + data.groupsWithData,
                               'Days with Data: ' + data.daysIncluded + ' (Wed/Thu)'
                             ];
                           }
@@ -1708,7 +1759,7 @@ app.get('', async (req, res) => {
                 // Update date range indicator
                 const dateRangeElement = document.getElementById('chartDateRange');
                 if (dateRangeElement) {
-                  dateRangeElement.textContent = 'Showing events from: ' + (showAllYears ? 'All years' : 'Current year');
+                  dateRangeElement.textContent = 'Showing data from: ' + (showAllYears ? 'All years' : 'Current year');
                 }
               }
             }
@@ -1718,8 +1769,31 @@ app.get('', async (req, res) => {
               const loadingMessage = document.getElementById('chartToggleLoadingMessage');
               if (loadingMessage) loadingMessage.style.display = 'flex';
               
+              const showAllYears = this.checked;
+              
               try {
+                // Update chart data
                 await loadAggregateData(false);
+                
+                // Update all group stats to reflect the new time period
+                const groupItems = document.querySelectorAll('[id^="group-"]');
+                
+                // Show loading spinners for all groups first
+                const groupIds = [];
+                for (const groupItem of groupItems) {
+                  const groupId = groupItem.id.replace('group-', '');
+                  groupIds.push(groupId);
+                  // Show loading spinner for this group's stats
+                  const statsContainer = groupItem.querySelector('.stats-container');
+                  if (statsContainer) {
+                    statsContainer.innerHTML = '<div class="loading"></div>';
+                  }
+                }
+                
+                // Update all stats in parallel (much faster)
+                await Promise.all(groupIds.map(groupId => 
+                  updateGroupStats(groupId, showAllYears, false)
+                ));
               } catch (error) {
                 console.error('Error loading chart data:', error);
               } finally {
@@ -2058,6 +2132,7 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
               </thead>
               <tbody>
                 ${attendanceData.events
+                  .filter(event => new Date(event.event.date) <= new Date()) // Only show past/today events
                   .sort((a, b) => new Date(b.event.date).getTime() - new Date(a.event.date).getTime())
                   .map(event => {
                     const rate = event.attendance_summary.attendance_rate;
@@ -2105,12 +2180,49 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
                 date: formatDate(event.event.date),
                 attendance: event.attendance_summary.present_count,
                 total: event.attendance_summary.total_count,
-                rate: event.attendance_summary.attendance_rate
+                rate: event.attendance_summary.attendance_rate,
+                rawDate: event.event.date
               }))
             )};
 
+            // Calculate year boundaries for vertical lines
+            const yearBoundaries = [];
+            const showAllEvents = ${showAllEvents};
+            if (showAllEvents && chartData.length > 0) {
+              let currentYear = null;
+              chartData.forEach((item, index) => {
+                const itemYear = new Date(item.rawDate).getFullYear();
+                if (currentYear !== null && itemYear !== currentYear) {
+                  yearBoundaries.push(index);
+                }
+                currentYear = itemYear;
+              });
+            }
+
             new Chart(ctx, {
               type: 'line',
+              plugins: showAllEvents && yearBoundaries.length > 0 ? [{
+                id: 'yearSeparators',
+                afterDraw: function(chart) {
+                  const ctx = chart.ctx;
+                  const chartArea = chart.chartArea;
+                  
+                  ctx.save();
+                  ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+                  ctx.lineWidth = 1;
+                  ctx.setLineDash([5, 5]);
+                  
+                  yearBoundaries.forEach(boundaryIndex => {
+                    const x = chart.scales.x.getPixelForValue(boundaryIndex);
+                    ctx.beginPath();
+                    ctx.moveTo(x, chartArea.top);
+                    ctx.lineTo(x, chartArea.bottom);
+                    ctx.stroke();
+                  });
+                  
+                  ctx.restore();
+                }
+              }] : [],
               data: {
                 labels: chartData.map(item => item.date),
                 datasets: [
