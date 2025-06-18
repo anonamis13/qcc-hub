@@ -40,16 +40,8 @@ app.get('/api/group-stats/:groupId', async (req, res) => {
 // Add new endpoint for loading group data
 app.get('/api/load-groups', async (req, res) => {
   try {
-    console.log('Load groups endpoint called');
-    
     // Check environment variables first
     const hasApiCreds = !!(process.env.PCO_APP_ID && process.env.PCO_SECRET);
-    console.log('Environment check:', {
-      hasApiCreds,
-      pcoAppIdExists: !!process.env.PCO_APP_ID,
-      pcoSecretExists: !!process.env.PCO_SECRET,
-      nodeEnv: process.env.NODE_ENV
-    });
     
     if (!hasApiCreds) {
       console.error('Missing PCO API credentials');
@@ -63,15 +55,11 @@ app.get('/api/load-groups', async (req, res) => {
     const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
     const forceRefresh = req.query.forceRefresh === 'true';
 
-    console.log('Request parameters:', { groupTypeId, forceRefresh, groupTypeIdFromEnv });
-
     if (groupTypeIdFromEnv && isNaN(groupTypeId)) {
       console.warn(`Warning: PCO_GROUP_TYPE_ID environment variable ('${groupTypeIdFromEnv}') is not a valid number. Using default 429361.`);
     }
 
-    console.log('Calling getPeopleGroups...');
     const result = await getPeopleGroups(groupTypeId, forceRefresh);
-    console.log('getPeopleGroups completed successfully. Groups count:', result.data?.length);
     
     res.json(result);
   } catch (error) {
@@ -145,24 +133,17 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
     const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
     
-    console.log('Aggregate attendance request:', { showAllEvents, forceRefresh, groupTypeId });
-
     // Get all groups first
-    console.log('Fetching groups...');
     const groups = await getPeopleGroups(groupTypeId, forceRefresh);
-    console.log('Groups fetched:', groups.data.length);
     
     // Get attendance data for each group
     // For aggregate calculations, we need some historical data to find fallback membership counts
     // Use current year + previous year to capture November 2024 data for early 2025 weeks
-    console.log('Fetching attendance data for all groups. ShowAllEvents:', showAllEvents);
     const attendancePromises = groups.data.map(group => 
       getGroupAttendance(group.id, showAllEvents, forceRefresh)
     );
     
-    console.log('Waiting for all group attendance data...');
     const allGroupsAttendance = await Promise.all(attendancePromises);
-    console.log('All group attendance data received');
     
     // For groups that are missing membership data in early weeks, fetch additional historical data
     // But keep it separate so it's only used for fallback membership, not for creating weeks
@@ -388,7 +369,6 @@ app.get('/api/aggregate-attendance', async (req, res) => {
       .filter(week => week.totalMembers > 0 || week.totalPresent > 0) // Only include weeks with actual data
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     
-    console.log('Returning aggregated data. Records:', aggregatedData.length);
     res.json(aggregatedData);
   } catch (error) {
     console.error('Error fetching aggregate attendance:', error);
@@ -971,14 +951,14 @@ app.get('', async (req, res) => {
         <body>
           <div class="container">
             <h1>Queen City Church - Life Groups Health Report</h1>
-            <button id="loadDataBtn">
+            <button id="loadDataBtn" title="Click to refresh current year data. Shift+Click to refresh ALL historical data.">
               <span>Load Data</span>
               <span class="est-time">est. time ≈ 3 min.</span>
             </button>
             <p id="lastUpdate"></p>
             <p id="groupCount"></p>
             
-            <div class="toggle-container">
+            <div class="toggle-container" id="toggleContainer" style="display: none;">
               <label class="toggle-switch">
                 <input type="checkbox" id="showAllYears">
                 <span class="toggle-slider"></span>
@@ -1047,8 +1027,20 @@ app.get('', async (req, res) => {
 
             // Add click event listener
             loadDataBtn.addEventListener('click', async (event) => {
-              // Check if it's been less than 1 hour since last refresh (unless shift-clicked)
-              if (!event.shiftKey) {
+              const isHistoricalRefresh = event.shiftKey;
+              
+              // Show confirmation for historical refresh
+              if (isHistoricalRefresh) {
+                const confirmed = confirm(
+                  \`This will refresh ALL historical data (all years) which may take 10+ minutes.\\n\\n\` +
+                  \`Are you sure you want to proceed?\\n\\n\` +
+                  \`(Regular refresh without Shift key only refreshes current year data)\`
+                );
+                if (!confirmed) {
+                  return; // Exit without refreshing
+                }
+              } else {
+                // Check if it's been less than 1 hour since last refresh for regular refresh
                 try {
                   const response = await fetch('/api/cache-info');
                   if (response.ok) {
@@ -1058,7 +1050,8 @@ app.get('', async (req, res) => {
                       if (hoursSinceLastUpdate < 1) {
                         const confirmed = confirm(
                           \`Data was last refreshed less than 1 hour ago.\\n\\n\` +
-                          \`Are you sure you want to refresh now?\\n\\n\`
+                          \`Are you sure you want to refresh now?\\n\\n\` +
+                          \`(Tip: Hold Shift while clicking to refresh ALL historical data)\`
                         );
                         if (!confirmed) {
                           return; // Exit without refreshing
@@ -1072,7 +1065,9 @@ app.get('', async (req, res) => {
                 }
               }
 
-              const loadingHtml = '<span>Refreshing...</span><span class="est-time">est. time ≈ 3 min.</span>';
+              const loadingHtml = isHistoricalRefresh 
+                ? '<span>Refreshing All Data...</span><span class="est-time">est. time ≈ 10+ min.</span>'
+                : '<span>Refreshing...</span><span class="est-time">est. time ≈ 3 min.</span>';
               loadDataBtn.innerHTML = loadingHtml;
               loadDataBtn.style.backgroundColor = '#007bff';
               loadDataBtn.disabled = true;
@@ -1082,13 +1077,21 @@ app.get('', async (req, res) => {
               groupList.style.display = 'none';
               groupCount.style.display = 'none';
               
+              // Hide toggle container while refreshing
+              const toggleContainer = document.getElementById('toggleContainer');
+              if (toggleContainer) {
+                toggleContainer.style.display = 'none';
+              }
+              
               // Hide chart container while loading
               const chartContainer = document.querySelector('.chart-container');
               if (chartContainer) {
                 chartContainer.style.display = 'none';
               }
               
-              initialMessage.textContent = 'Loading fresh data...';
+              initialMessage.textContent = isHistoricalRefresh 
+                ? 'Loading fresh data (including all historical data)...'
+                : 'Loading fresh data...';
               const elapsedTimeSpan = document.createElement('span');
               elapsedTimeSpan.className = 'elapsed-time';
               initialMessage.appendChild(elapsedTimeSpan);
@@ -1096,11 +1099,20 @@ app.get('', async (req, res) => {
 
               // Start timer
               const startTime = Date.now();
+              let currentGroupIndex = 0;
+              let totalGroups = 0;
+              
               const updateElapsedTime = () => {
                 const elapsed = Math.floor((Date.now() - startTime) / 1000);
                 const minutes = Math.floor(elapsed / 60);
                 const seconds = elapsed % 60;
-                elapsedTimeSpan.textContent = \`Time elapsed: \${minutes}:\${seconds.toString().padStart(2, '0')}\`;
+                const timeStr = \`\${minutes}:\${seconds.toString().padStart(2, '0')}\`;
+                
+                if (totalGroups > 0 && currentGroupIndex > 0) {
+                  elapsedTimeSpan.textContent = \`Time elapsed: \${timeStr} | Processing group \${currentGroupIndex} of \${totalGroups}\`;
+                } else {
+                  elapsedTimeSpan.textContent = \`Time elapsed: \${timeStr}\`;
+                }
               };
               const timerInterval = setInterval(updateElapsedTime, 1000);
               updateElapsedTime(); // Show initial time
@@ -1114,12 +1126,7 @@ app.get('', async (req, res) => {
               
               try {
                 // Fetch all data first
-                console.log('Starting data refresh...');
-                
-                // Only fetch groups once
-                console.log('Fetching groups...');
                 const groupsResponse = await fetch('/api/load-groups?forceRefresh=true');
-                console.log('Groups response status:', groupsResponse.status, groupsResponse.statusText);
                 
                 if (!groupsResponse.ok) {
                   const errorText = await groupsResponse.text();
@@ -1128,19 +1135,26 @@ app.get('', async (req, res) => {
                 }
                 
                 const result = await groupsResponse.json();
-                console.log('Groups fetched successfully. Count:', result.data?.length);
                 
                 // Process groups sequentially to avoid cache race conditions
                 const groupStats = [];
-                console.log('Starting to process', result.data.length, 'groups...');
+                totalGroups = result.data.length;
                 
                 for (let i = 0; i < result.data.length; i++) {
+                  currentGroupIndex = i + 1;
                   const group = result.data[i];
-                  console.log(\`Processing group \${i + 1}/\${result.data.length}: \${group.attributes.name} (ID: \${group.id})\`);
                   
                   try {
+                    // For historical refresh, we need to fetch both current year and all historical data
+                    if (isHistoricalRefresh) {
+                      // First fetch all historical attendance data to populate cache
+                      const historicalResponse = await fetch(\`/groups/\${group.id}/attendance?showAll=true&forceRefresh=true\`);
+                      if (!historicalResponse.ok) {
+                        console.warn(\`Failed to fetch historical data for group \${group.id}\`);
+                      }
+                    }
+                    
                     const response = await fetch('/api/group-stats/' + group.id + '?forceRefresh=true');
-                    console.log(\`Group \${group.id} response status:\`, response.status, response.statusText);
                     
                     if (!response.ok) {
                       const errorText = await response.text();
@@ -1148,33 +1162,42 @@ app.get('', async (req, res) => {
                       groupStats.push(null);
                     } else {
                       const stats = await response.json();
-                      console.log(\`Group \${group.id} stats fetched successfully\`);
                       groupStats.push(stats);
                     }
                     
                     // Add delay between group processing to reduce API load (especially important for production)
+                    // Use longer delay for historical refresh due to more intensive processing
                     if (i < result.data.length - 1) { // Don't delay after the last group
-                      await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay between groups
+                      const delayMs = isHistoricalRefresh ? 2000 : 500; // 2s for historical, 500ms for current year
+                      await new Promise(resolve => setTimeout(resolve, delayMs));
                     }
-                                  } catch (error) {
-                  console.error(\`Error fetching stats for group \${group.id} (\${group.attributes.name}):\`, error);
-                  groupStats.push(null);
+                  } catch (error) {
+                    console.error(\`Error fetching stats for group \${group.id} (\${group.attributes.name}):\`, error);
+                    groupStats.push(null);
+                  }
                 }
-              }
               
-              console.log('Finished processing groups. Successful:', groupStats.filter(s => s !== null).length, 'Failed:', groupStats.filter(s => s === null).length);
+                                              // Update progress message to show we're finishing up
+                currentGroupIndex = totalGroups;
+                initialMessage.textContent = isHistoricalRefresh 
+                  ? 'Finalizing data (including all historical data)...'
+                  : 'Finalizing data...';
                 
-                                  // Add a brief delay to ensure all cache writes from individual group processing are complete
-                  console.log('Waiting for cache writes to complete...');
-                  await new Promise(resolve => setTimeout(resolve, 1000));
-                  
-                  // Load aggregate chart with cached data (no forceRefresh to avoid duplicate API calls)
-                  console.log('Loading aggregate data...');
-                  await loadAggregateData(false);
-                  console.log('Aggregate data loaded successfully');
+                // Add a brief delay to ensure all cache writes from individual group processing are complete
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                // Load aggregate chart - use cached data since we just populated it
+                await loadAggregateData(false); // Always use cached data here since we just refreshed everything
 
+                  // If this was a historical refresh, set the toggle to show all years
+                  if (isHistoricalRefresh) {
+                    const showAllYearsToggle = document.getElementById('showAllYears');
+                    if (showAllYearsToggle) {
+                      showAllYearsToggle.checked = true;
+                    }
+                  }
+                  
                   // Force a page refresh to ensure we display consistent cached data
-                  console.log('Refreshing page...');
                   window.location.reload();
                 
                 // The code below will run after the page refresh loads the cached data
@@ -1277,6 +1300,12 @@ app.get('', async (req, res) => {
                 groupCount.style.display = 'block';
                 groupList.innerHTML = groupsHtml;
                 
+                // Show the toggle container now that we have data
+                const toggleContainer = document.getElementById('toggleContainer');
+                if (toggleContainer) {
+                  toggleContainer.style.display = 'flex';
+                }
+                
                 // Show chart container now that data is loaded
                 if (chartContainer) {
                   chartContainer.style.display = 'block';
@@ -1374,6 +1403,12 @@ app.get('', async (req, res) => {
               groupCount.style.display = 'block';
               initialMessage.style.display = 'none';
               groupList.style.display = 'block';
+              
+              // Show the toggle container now that we have data
+              const toggleContainer = document.getElementById('toggleContainer');
+              if (toggleContainer) {
+                toggleContainer.style.display = 'flex';
+              }
               
               groupList.innerHTML = result.data
                 .sort((a, b) => a.attributes.name.localeCompare(b.attributes.name))
@@ -1489,10 +1524,15 @@ app.get('', async (req, res) => {
               const showAllYears = document.getElementById('showAllYears').checked;
               
               try {
-                console.log('Loading aggregate data. ShowAllYears:', showAllYears, 'ForceRefresh:', forceRefresh);
-                
                 // Show loading indicator and hide chart
-                if (chartLoading) chartLoading.style.display = 'flex';
+                if (chartLoading) {
+                  chartLoading.style.display = 'flex';
+                  if (showAllYears) {
+                    chartLoading.innerHTML = '<div class="loading"></div><span>Loading historical data...</span>';
+                  } else {
+                    chartLoading.innerHTML = '<div class="loading"></div><span>Loading chart data...</span>';
+                  }
+                }
                 if (chartCanvas) chartCanvas.style.display = 'none';
                 
                 // Build query parameters
@@ -1502,19 +1542,34 @@ app.get('', async (req, res) => {
                 const queryString = params.toString();
                 const url = '/api/aggregate-attendance' + (queryString ? '?' + queryString : '');
                 
-                console.log('Fetching aggregate data from:', url);
+                // Add progress timer for long-running requests
+                let progressInterval;
+                if (showAllYears && chartLoading) {
+                  const startTime = Date.now();
+                  progressInterval = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                    const minutes = Math.floor(elapsed / 60);
+                    const seconds = elapsed % 60;
+                    const timeStr = \`\${minutes}:\${seconds.toString().padStart(2, '0')}\`;
+                    chartLoading.innerHTML = \`<div class="loading"></div><span>Loading historical data... \${timeStr} elapsed, this may take several minutes</span>\`;
+                  }, 1000);
+                }
                 
                 // Add timeout for aggregate data request
                 const controller = new AbortController();
+                const timeoutMinutes = showAllYears ? 10 : 2; // 10 minutes for all years, 2 for current year
+                const timeoutMs = timeoutMinutes * 60 * 1000;
+                
                 const timeoutId = setTimeout(() => {
-                  console.error('Aggregate data request timed out after 2 minutes');
+                  console.error(\`Aggregate data request timed out after \${timeoutMinutes} minutes\`);
+                  if (progressInterval) clearInterval(progressInterval);
                   controller.abort();
-                }, 120000); // 2 minute timeout
+                }, timeoutMs);
                 
                 const response = await fetch(url, { signal: controller.signal });
                 clearTimeout(timeoutId);
+                if (progressInterval) clearInterval(progressInterval);
                 
-                console.log('Aggregate response status:', response.status, response.statusText);
                 if (!response.ok) {
                   const errorText = await response.text();
                   console.error('Aggregate data response error:', errorText);
@@ -1522,7 +1577,6 @@ app.get('', async (req, res) => {
                 }
                 
                 const aggregateData = await response.json();
-                console.log('Aggregate data received. Records:', aggregateData.length);
                 
                 const ctx = document.getElementById('aggregateChart').getContext('2d');
                 
@@ -1627,8 +1681,6 @@ app.get('', async (req, res) => {
                     }
                   }
                 });
-                
-                console.log('Chart created successfully');
               } catch (error) {
                 console.error('Error loading aggregate data:', error);
                 console.error('Error details:', {
@@ -1637,9 +1689,16 @@ app.get('', async (req, res) => {
                   name: error.name
                 });
                 
+                // Clear any progress interval
+                if (progressInterval) clearInterval(progressInterval);
+                
                 // Show error in the chart area
                 if (chartLoading) {
-                  chartLoading.innerHTML = '<div style="color: red; text-align: center;"><strong>Error loading chart:</strong><br>' + error.message + '</div>';
+                  if (error.name === 'AbortError') {
+                    chartLoading.innerHTML = '<div style="color: red; text-align: center;"><strong>Request timed out</strong><br>Historical data loading took too long. The data may still be loading in the background - try toggling back to "Current Year" and then "Show All Years" again in a few minutes.</div>';
+                  } else {
+                    chartLoading.innerHTML = '<div style="color: red; text-align: center;"><strong>Error loading chart:</strong><br>' + error.message + '</div>';
+                  }
                 }
               } finally {
                 // Hide loading indicator and show chart
