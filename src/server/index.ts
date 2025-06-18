@@ -40,18 +40,76 @@ app.get('/api/group-stats/:groupId', async (req, res) => {
 // Add new endpoint for loading group data
 app.get('/api/load-groups', async (req, res) => {
   try {
+    console.log('Load groups endpoint called');
+    
+    // Check environment variables first
+    const hasApiCreds = !!(process.env.PCO_APP_ID && process.env.PCO_SECRET);
+    console.log('Environment check:', {
+      hasApiCreds,
+      pcoAppIdExists: !!process.env.PCO_APP_ID,
+      pcoSecretExists: !!process.env.PCO_SECRET,
+      nodeEnv: process.env.NODE_ENV
+    });
+    
+    if (!hasApiCreds) {
+      console.error('Missing PCO API credentials');
+      return res.status(500).json({ 
+        error: 'Server configuration error: Missing PCO API credentials',
+        details: 'PCO_APP_ID and PCO_SECRET environment variables are required'
+      });
+    }
+    
     const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
     const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
     const forceRefresh = req.query.forceRefresh === 'true';
+
+    console.log('Request parameters:', { groupTypeId, forceRefresh, groupTypeIdFromEnv });
 
     if (groupTypeIdFromEnv && isNaN(groupTypeId)) {
       console.warn(`Warning: PCO_GROUP_TYPE_ID environment variable ('${groupTypeIdFromEnv}') is not a valid number. Using default 429361.`);
     }
 
+    console.log('Calling getPeopleGroups...');
     const result = await getPeopleGroups(groupTypeId, forceRefresh);
+    console.log('getPeopleGroups completed successfully. Groups count:', result.data?.length);
+    
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch groups' });
+    console.error('Error in /api/load-groups:', error);
+    
+    let errorMessage = 'Failed to fetch groups';
+    let errorDetails = 'Unknown error';
+    
+    if (error instanceof Error) {
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
+      
+      errorDetails = error.message;
+      
+      // Provide more specific error messages
+      if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+        errorMessage = 'PCO API authentication failed';
+        errorDetails = 'Check PCO_APP_ID and PCO_SECRET environment variables';
+      } else if (error.message.includes('timeout') || error.message.includes('TIMEOUT')) {
+        errorMessage = 'Request timeout';
+        errorDetails = 'PCO API request timed out. This may be due to network issues.';
+      } else if (error.message.includes('ENOTFOUND') || error.message.includes('network')) {
+        errorMessage = 'Network error';
+        errorDetails = 'Unable to connect to PCO API. Check network connectivity.';
+      } else if (error.message.includes('database') || error.message.includes('cache')) {
+        errorMessage = 'Database/cache error';
+        errorDetails = error.message;
+      }
+    }
+    
+    res.status(500).json({ 
+      error: errorMessage,
+      details: errorDetails,
+      timestamp: new Date().toISOString()
+    });
   }
 });
 
@@ -86,18 +144,25 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     const showAllEvents = req.query.showAll === 'true';
     const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
     const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
+    
+    console.log('Aggregate attendance request:', { showAllEvents, forceRefresh, groupTypeId });
 
     // Get all groups first
+    console.log('Fetching groups...');
     const groups = await getPeopleGroups(groupTypeId, forceRefresh);
+    console.log('Groups fetched:', groups.data.length);
     
     // Get attendance data for each group
     // For aggregate calculations, we need some historical data to find fallback membership counts
     // Use current year + previous year to capture November 2024 data for early 2025 weeks
+    console.log('Fetching attendance data for all groups. ShowAllEvents:', showAllEvents);
     const attendancePromises = groups.data.map(group => 
       getGroupAttendance(group.id, showAllEvents, forceRefresh)
     );
     
+    console.log('Waiting for all group attendance data...');
     const allGroupsAttendance = await Promise.all(attendancePromises);
+    console.log('All group attendance data received');
     
     // For groups that are missing membership data in early weeks, fetch additional historical data
     // But keep it separate so it's only used for fallback membership, not for creating weeks
@@ -323,10 +388,20 @@ app.get('/api/aggregate-attendance', async (req, res) => {
       .filter(week => week.totalMembers > 0 || week.totalPresent > 0) // Only include weeks with actual data
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     
+    console.log('Returning aggregated data. Records:', aggregatedData.length);
     res.json(aggregatedData);
   } catch (error) {
     console.error('Error fetching aggregate attendance:', error);
-    res.status(500).json({ error: 'Failed to fetch aggregate attendance data' });
+    if (error instanceof Error) {
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
+      res.status(500).json({ error: 'Failed to fetch aggregate attendance data', details: error.message });
+    } else {
+      res.status(500).json({ error: 'Failed to fetch aggregate attendance data', details: 'Unknown error' });
+    }
   }
 });
 
@@ -435,6 +510,34 @@ app.get('/api/clear-cache', async (req, res) => {
     res.json({ message: 'Cache cleared successfully. Next data refresh will fetch fresh data.' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to clear cache', details: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
+// Add health check endpoint
+app.get('/api/health', async (req, res) => {
+  try {
+    const envInfo = {
+      status: 'ok',
+      nodeEnv: process.env.NODE_ENV,
+      hasApiCreds: !!(process.env.PCO_APP_ID && process.env.PCO_SECRET),
+      pcoAppIdExists: !!process.env.PCO_APP_ID,
+      pcoSecretExists: !!process.env.PCO_SECRET,
+      groupTypeId: process.env.PCO_GROUP_TYPE_ID || 'using default 429361',
+      memoryUsage: process.memoryUsage(),
+      uptime: process.uptime(),
+      platform: process.platform,
+      nodeVersion: process.version,
+      timestamp: new Date().toISOString()
+    };
+    
+    res.json(envInfo);
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error',
+      error: 'Health check failed', 
+      details: error instanceof Error ? error.message : 'Unknown error',
+      timestamp: new Date().toISOString()
+    });
   }
 });
 
@@ -1011,43 +1114,67 @@ app.get('', async (req, res) => {
               
               try {
                 // Fetch all data first
+                console.log('Starting data refresh...');
                 
                 // Only fetch groups once
+                console.log('Fetching groups...');
                 const groupsResponse = await fetch('/api/load-groups?forceRefresh=true');
-                if (!groupsResponse.ok) throw new Error('Failed to fetch groups');
+                console.log('Groups response status:', groupsResponse.status, groupsResponse.statusText);
+                
+                if (!groupsResponse.ok) {
+                  const errorText = await groupsResponse.text();
+                  console.error('Groups response error:', errorText);
+                  throw new Error('Failed to fetch groups: ' + groupsResponse.status + ' ' + errorText);
+                }
+                
                 const result = await groupsResponse.json();
+                console.log('Groups fetched successfully. Count:', result.data?.length);
                 
                 // Process groups sequentially to avoid cache race conditions
                 const groupStats = [];
-                                  for (let i = 0; i < result.data.length; i++) {
-                    const group = result.data[i];
-                    try {
-                      const response = await fetch('/api/group-stats/' + group.id + '?forceRefresh=true');
-                      if (!response.ok) {
-                        console.error('Failed to fetch stats for group', group.id, 'Status:', response.status, response.statusText);
-                        groupStats.push(null);
-                      } else {
-                        const stats = await response.json();
-                        groupStats.push(stats);
-                      }
+                console.log('Starting to process', result.data.length, 'groups...');
+                
+                for (let i = 0; i < result.data.length; i++) {
+                  const group = result.data[i];
+                  console.log(\`Processing group \${i + 1}/\${result.data.length}: \${group.attributes.name} (ID: \${group.id})\`);
+                  
+                  try {
+                    const response = await fetch('/api/group-stats/' + group.id + '?forceRefresh=true');
+                    console.log(\`Group \${group.id} response status:\`, response.status, response.statusText);
+                    
+                    if (!response.ok) {
+                      const errorText = await response.text();
+                      console.error('Failed to fetch stats for group', group.id, 'Status:', response.status, response.statusText, 'Error:', errorText);
+                      groupStats.push(null);
+                    } else {
+                      const stats = await response.json();
+                      console.log(\`Group \${group.id} stats fetched successfully\`);
+                      groupStats.push(stats);
+                    }
                     
                     // Add delay between group processing to reduce API load (especially important for production)
                     if (i < result.data.length - 1) { // Don't delay after the last group
                       await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay between groups
                     }
-                  } catch (error) {
-                    console.error('Error fetching stats for group', group.id, error);
-                    groupStats.push(null);
-                  }
+                                  } catch (error) {
+                  console.error(\`Error fetching stats for group \${group.id} (\${group.attributes.name}):\`, error);
+                  groupStats.push(null);
                 }
+              }
+              
+              console.log('Finished processing groups. Successful:', groupStats.filter(s => s !== null).length, 'Failed:', groupStats.filter(s => s === null).length);
                 
                                   // Add a brief delay to ensure all cache writes from individual group processing are complete
+                  console.log('Waiting for cache writes to complete...');
                   await new Promise(resolve => setTimeout(resolve, 1000));
                   
                   // Load aggregate chart with cached data (no forceRefresh to avoid duplicate API calls)
+                  console.log('Loading aggregate data...');
                   await loadAggregateData(false);
+                  console.log('Aggregate data loaded successfully');
 
                   // Force a page refresh to ensure we display consistent cached data
+                  console.log('Refreshing page...');
                   window.location.reload();
                 
                 // The code below will run after the page refresh loads the cached data
@@ -1159,8 +1286,19 @@ app.get('', async (req, res) => {
                 clearInterval(timerInterval); // Stop the timer
               } catch (error) {
                 console.error('Error refreshing data:', error);
-                initialMessage.textContent = 'Failed to refresh data. Please try again.';
-                alert('Failed to refresh data. Please try again.');
+                console.error('Error details:', {
+                  message: error.message,
+                  stack: error.stack,
+                  name: error.name
+                });
+                
+                let errorMessage = 'Failed to refresh data. Check console for details.';
+                if (error instanceof Error) {
+                  errorMessage = \`Failed to refresh data: \${error.message}\`;
+                }
+                
+                initialMessage.textContent = errorMessage;
+                alert(errorMessage);
               } finally {
                 // Update button state
                 const refreshHtml = '<span>Refresh Data</span><span class="est-time">est. time ≈ 3 min.</span>';
@@ -1351,6 +1489,8 @@ app.get('', async (req, res) => {
               const showAllYears = document.getElementById('showAllYears').checked;
               
               try {
+                console.log('Loading aggregate data. ShowAllYears:', showAllYears, 'ForceRefresh:', forceRefresh);
+                
                 // Show loading indicator and hide chart
                 if (chartLoading) chartLoading.style.display = 'flex';
                 if (chartCanvas) chartCanvas.style.display = 'none';
@@ -1362,9 +1502,27 @@ app.get('', async (req, res) => {
                 const queryString = params.toString();
                 const url = '/api/aggregate-attendance' + (queryString ? '?' + queryString : '');
                 
-                const response = await fetch(url);
-                if (!response.ok) throw new Error('Failed to fetch aggregate data');
+                console.log('Fetching aggregate data from:', url);
+                
+                // Add timeout for aggregate data request
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => {
+                  console.error('Aggregate data request timed out after 2 minutes');
+                  controller.abort();
+                }, 120000); // 2 minute timeout
+                
+                const response = await fetch(url, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                
+                console.log('Aggregate response status:', response.status, response.statusText);
+                if (!response.ok) {
+                  const errorText = await response.text();
+                  console.error('Aggregate data response error:', errorText);
+                  throw new Error('Failed to fetch aggregate data: ' + response.status + ' ' + errorText);
+                }
+                
                 const aggregateData = await response.json();
+                console.log('Aggregate data received. Records:', aggregateData.length);
                 
                 const ctx = document.getElementById('aggregateChart').getContext('2d');
                 
@@ -1469,8 +1627,20 @@ app.get('', async (req, res) => {
                     }
                   }
                 });
+                
+                console.log('Chart created successfully');
               } catch (error) {
                 console.error('Error loading aggregate data:', error);
+                console.error('Error details:', {
+                  message: error.message,
+                  stack: error.stack,
+                  name: error.name
+                });
+                
+                // Show error in the chart area
+                if (chartLoading) {
+                  chartLoading.innerHTML = '<div style="color: red; text-align: center;"><strong>Error loading chart:</strong><br>' + error.message + '</div>';
+                }
               } finally {
                 // Hide loading indicator and show chart
                 if (chartLoading) chartLoading.style.display = 'none';
