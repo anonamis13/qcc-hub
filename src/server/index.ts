@@ -83,6 +83,7 @@ app.get('/api/cache-info', async (req, res) => {
 app.get('/api/aggregate-attendance', async (req, res) => {
   try {
     const forceRefresh = req.query.forceRefresh === 'true';
+    const showAllEvents = req.query.showAll === 'true';
     const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
     const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
 
@@ -93,7 +94,7 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     // For aggregate calculations, we need some historical data to find fallback membership counts
     // Use current year + previous year to capture November 2024 data for early 2025 weeks
     const attendancePromises = groups.data.map(group => 
-      getGroupAttendance(group.id, false, forceRefresh)
+      getGroupAttendance(group.id, showAllEvents, forceRefresh)
     );
     
     const allGroupsAttendance = await Promise.all(attendancePromises);
@@ -104,19 +105,22 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     const needsHistoricalData = new Set(['2291027', '2385028']); // Groups we know need November 2024 data
     
     // Fetch historical data only for groups that need it, but keep it separate
-    for (const groupId of needsHistoricalData) {
-      try {
-        const historicalData = await getGroupAttendance(groupId, true, forceRefresh);
-        // Only keep events from previous years for fallback purposes
-        const currentYear = new Date().getFullYear();
-        const historicalEvents = historicalData.events.filter(event => {
-          const eventYear = new Date(event.event.date).getFullYear();
-          return eventYear < currentYear; // Only previous year events
-        });
-        historicalFallbackData.set(groupId, historicalEvents);
+    // Only fetch additional historical data if we're not already showing all events
+    if (!showAllEvents) {
+      for (const groupId of needsHistoricalData) {
+        try {
+          const historicalData = await getGroupAttendance(groupId, true, forceRefresh);
+          // Only keep events from previous years for fallback purposes
+          const currentYear = new Date().getFullYear();
+          const historicalEvents = historicalData.events.filter(event => {
+            const eventYear = new Date(event.event.date).getFullYear();
+            return eventYear < currentYear; // Only previous year events
+          });
+          historicalFallbackData.set(groupId, historicalEvents);
 
-      } catch (error) {
-        console.error(`Failed to fetch historical data for group ${groupId}:`, error);
+        } catch (error) {
+          console.error(`Failed to fetch historical data for group ${groupId}:`, error);
+        }
       }
     }
     
@@ -167,13 +171,11 @@ app.get('/api/aggregate-attendance', async (req, res) => {
               (event.attendance_summary.present_count > 0 || 
                (event.attendance_summary.present_count === 0 && eventDate <= yesterday))) {
             
-            // Only add weeks that have valid events
-            weeksWithEvents.add(weekKey);
-            
             const existing = weekMap.get(weekKey) || { 
               totalPresent: 0,
               totalVisitors: 0,
               groupsProcessed: new Set(),
+              groupsWithAttendance: new Set(),
               daysWithAttendance: new Set()
             };
             
@@ -185,6 +187,7 @@ app.get('/api/aggregate-attendance', async (req, res) => {
               
               existing.groupsProcessed.add(groupKey);
               existing.groupsProcessed.add(event.event.id);
+              existing.groupsWithAttendance.add(groupData.group_id);
               existing.daysWithAttendance.add(dayOfWeek);
             }
             
@@ -194,12 +197,28 @@ app.get('/api/aggregate-attendance', async (req, res) => {
       });
     });
     
+    // Filter out weeks with fewer than 5 groups having attendance
+    const validWeeks = new Set();
+    weekMap.forEach((weekData, weekKey) => {
+      if (weekData.groupsWithAttendance.size >= 5) {
+        validWeeks.add(weekKey);
+      }
+    });
+    
+    // Remove weeks with insufficient group participation
+    weekMap.forEach((weekData, weekKey) => {
+      if (!validWeeks.has(weekKey)) {
+        weekMap.delete(weekKey);
+      }
+    });
+    
     // Second pass: calculate total membership for each week (including ALL groups)
-    weeksWithEvents.forEach(weekKey => {
+    validWeeks.forEach(weekKey => {
       const existing = weekMap.get(weekKey) || { 
         totalPresent: 0,
         totalVisitors: 0,
         groupsProcessed: new Set(),
+        groupsWithAttendance: new Set(),
         daysWithAttendance: new Set()
       };
       
@@ -787,6 +806,63 @@ app.get('', async (req, res) => {
               border: 4px solid #f3f3f3;
               border-top: 4px solid #007bff;
             }
+            .toggle-container {
+              margin: 20px 0;
+              padding: 15px;
+              background-color: #f8f9fa;
+              border-radius: 8px;
+              display: flex;
+              align-items: center;
+              gap: 10px;
+            }
+            .toggle-switch {
+              position: relative;
+              display: inline-block;
+              width: 60px;
+              height: 34px;
+            }
+            .toggle-switch input {
+              opacity: 0;
+              width: 0;
+              height: 0;
+            }
+            .toggle-slider {
+              position: absolute;
+              cursor: pointer;
+              top: 0;
+              left: 0;
+              right: 0;
+              bottom: 0;
+              background-color: #ccc;
+              transition: .4s;
+              border-radius: 34px;
+            }
+            .toggle-slider:before {
+              position: absolute;
+              content: "";
+              height: 26px;
+              width: 26px;
+              left: 4px;
+              bottom: 4px;
+              background-color: white;
+              transition: .4s;
+              border-radius: 50%;
+            }
+            input:checked + .toggle-slider {
+              background-color: #2196F3;
+            }
+            input:checked + .toggle-slider:before {
+              transform: translateX(26px);
+            }
+            .toggle-label {
+              font-size: 16px;
+              color: #666;
+            }
+            .date-range {
+              font-size: 14px;
+              color: #666;
+              margin-left: auto;
+            }
           </style>
         </head>
         <body>
@@ -798,6 +874,21 @@ app.get('', async (req, res) => {
             </button>
             <p id="lastUpdate"></p>
             <p id="groupCount"></p>
+            
+            <div class="toggle-container">
+              <label class="toggle-switch">
+                <input type="checkbox" id="showAllYears">
+                <span class="toggle-slider"></span>
+              </label>
+              <span class="toggle-label">Show all years</span>
+              <span id="chartToggleLoadingMessage" style="color: #666; display: none; align-items: center;">
+                <div class="loading" style="width: 16px; height: 16px; margin: 0 8px;"></div>
+                Loading chart data...
+              </span>
+              <span class="date-range" id="chartDateRange">
+                Showing events from: Current year
+              </span>
+            </div>
             
             <div class="chart-container">
               <div id="chartLoading" class="chart-loading">
@@ -1257,14 +1348,21 @@ app.get('', async (req, res) => {
             async function loadAggregateData(forceRefresh = false) {
               const chartLoading = document.getElementById('chartLoading');
               const chartCanvas = document.getElementById('aggregateChart');
+              const showAllYears = document.getElementById('showAllYears').checked;
               
               try {
                 // Show loading indicator and hide chart
                 if (chartLoading) chartLoading.style.display = 'flex';
                 if (chartCanvas) chartCanvas.style.display = 'none';
                 
-                const refreshParam = forceRefresh ? '?forceRefresh=true' : '';
-                const response = await fetch('/api/aggregate-attendance' + refreshParam);
+                // Build query parameters
+                const params = new URLSearchParams();
+                if (forceRefresh) params.set('forceRefresh', 'true');
+                if (showAllYears) params.set('showAll', 'true');
+                const queryString = params.toString();
+                const url = '/api/aggregate-attendance' + (queryString ? '?' + queryString : '');
+                
+                const response = await fetch(url);
                 if (!response.ok) throw new Error('Failed to fetch aggregate data');
                 const aggregateData = await response.json();
                 
@@ -1324,11 +1422,11 @@ app.get('', async (req, res) => {
                     plugins: {
                       title: {
                         display: true,
-                        text: 'Weekly Life Groups Attendance Trends (Wed-Thu Combined)'
+                        text: 'Weekly Life Groups Attendance Trends (Wed-Thu Combined)' + (showAllYears ? ' - All Years' : ' - Current Year')
                       },
                       subtitle: {
                         display: true,
-                        text: 'Click a dataset color to exclude it from the chart. Hover over a data point to see more info. Data shows current year, past events only.',
+                        text: 'Click a dataset color to exclude it from the chart. Hover over a data point to see more info. Data shows ' + (showAllYears ? 'all years' : 'current year') + ', past events only.',
                         font: {
                           size: 12
                         },
@@ -1377,8 +1475,28 @@ app.get('', async (req, res) => {
                 // Hide loading indicator and show chart
                 if (chartLoading) chartLoading.style.display = 'none';
                 if (chartCanvas) chartCanvas.style.display = 'block';
+                
+                // Update date range indicator
+                const dateRangeElement = document.getElementById('chartDateRange');
+                if (dateRangeElement) {
+                  dateRangeElement.textContent = 'Showing events from: ' + (showAllYears ? 'All years' : 'Current year');
+                }
               }
             }
+
+            // Add event listener for the show all years toggle
+            document.getElementById('showAllYears').addEventListener('change', async function() {
+              const loadingMessage = document.getElementById('chartToggleLoadingMessage');
+              if (loadingMessage) loadingMessage.style.display = 'flex';
+              
+              try {
+                await loadAggregateData(false);
+              } catch (error) {
+                console.error('Error loading chart data:', error);
+              } finally {
+                if (loadingMessage) loadingMessage.style.display = 'none';
+              }
+            });
 
             // Check cache and load data when page loads
             checkCacheAndLoad();
