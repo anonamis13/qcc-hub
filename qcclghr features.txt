@@ -3,14 +3,8 @@ eventually coaches will use
 
 Features:
 
-fix first week of february data
-show number of groups on tooltip
 
-fix show historical data on individual group page
-home page all historical data
 home page sort function (group type, attendance rate, group size)
-did the group report attendance this week?
-nightly auto-refresh
 missing persons report (data point on graph show names of missing members?)
 last 30 days, number of people who have left/joined a group
 multi-select groups to show data on home page
@@ -18,5 +12,14 @@ compare graphs function?
 month-over-month and year-over-year percentage
 YA groups functionality
 
-!differentiate family groups
-!display average membership next to avg. attendance
+
+Completed:
+
+differentiate family groups
+display average membership next to avg. attendance
+fix first week of february data
+show number of groups on tooltip
+fix show historical data on individual group page
+home page all historical data
+did the group report attendance this week?
+nightly auto-refresh

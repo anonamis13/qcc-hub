@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import cron from 'node-cron';
 import { getPeopleGroups, getGroupAttendance, getGroup } from './config/pco.js';
 import { cache } from './config/cache.js';
 
@@ -2422,6 +2423,77 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch attendance' });
   }
 });
+
+// Automatic data refresh function
+async function performAutomaticRefresh() {
+  const startTime = Date.now();
+  console.log(`[${new Date().toISOString()}] Starting automatic overnight data refresh...`);
+  
+  try {
+    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
+    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
+    
+    // First, get all groups with force refresh
+    console.log('Fetching fresh group data...');
+    const groupsResult = await getPeopleGroups(groupTypeId, true);
+    console.log(`Found ${groupsResult.data.length} groups to refresh`);
+    
+    // Process groups with current year data only (not historical)
+    let successCount = 0;
+    let errorCount = 0;
+    
+    for (let i = 0; i < groupsResult.data.length; i++) {
+      const group = groupsResult.data[i];
+      
+      try {
+        console.log(`Processing group ${i + 1}/${groupsResult.data.length}: ${group.attributes.name}`);
+        
+        // Refresh current year attendance data (showAll=false, forceRefresh=true)
+        await getGroupAttendance(group.id, false, true);
+        successCount++;
+        
+        // Add delay between groups to be respectful to PCO API
+        if (i < groupsResult.data.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+        }
+      } catch (error) {
+        console.error(`Failed to refresh group ${group.id} (${group.attributes.name}):`, error);
+        errorCount++;
+      }
+    }
+    
+    // Also refresh aggregate data
+    console.log('Refreshing aggregate attendance data...');
+    try {
+      // This will use the freshly cached individual group data
+      const response = await fetch(`http://localhost:${port}/api/aggregate-attendance?forceRefresh=false&showAll=false`);
+      if (!response.ok) {
+        throw new Error(`Aggregate refresh failed: ${response.status}`);
+      }
+      console.log('Aggregate data refreshed successfully');
+    } catch (error) {
+      console.error('Failed to refresh aggregate data:', error);
+      errorCount++;
+    }
+    
+    const duration = Math.round((Date.now() - startTime) / 1000);
+    console.log(`[${new Date().toISOString()}] Automatic refresh completed in ${duration}s. Success: ${successCount}, Errors: ${errorCount}`);
+    
+  } catch (error) {
+    const duration = Math.round((Date.now() - startTime) / 1000);
+    console.error(`[${new Date().toISOString()}] Automatic refresh failed after ${duration}s:`, error);
+  }
+}
+
+// Schedule automatic refresh at 12:30 AM EST every day
+// Cron format: minute hour day month dayOfWeek
+// Using timezone option to ensure it runs at EST regardless of server timezone
+cron.schedule('30 0 * * *', performAutomaticRefresh, {
+  scheduled: true,
+  timezone: "America/New_York" // EST/EDT timezone
+});
+
+console.log('Automatic overnight refresh scheduled for 12:30 AM EST daily');
 
 // Start server
 app.listen(port, () => {
