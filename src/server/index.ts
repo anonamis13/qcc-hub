@@ -31,12 +31,54 @@ app.get('/api/group-stats/:groupId', async (req, res) => {
     const forceRefresh = req.query.forceRefresh === 'true';
     const showAll = req.query.showAll === 'true';
     const stats = await getGroupAttendance(groupId, showAll, forceRefresh);
-    res.json(stats.overall_statistics);
+    
+    // Check if this group needs attention for recent events without attendance
+    const needsAttention = checkForMissingAttendance(stats.events);
+    
+    res.json({
+      ...stats.overall_statistics,
+      needsAttention: needsAttention
+    });
   } catch (error) {
     console.error(`Error fetching stats for group ${req.params.groupId}:`, error);
     res.status(500).json({ error: 'Failed to fetch group statistics' });
   }
 });
+
+// Helper function to check if a group needs attention for missing attendance
+function checkForMissingAttendance(events: any[]): boolean {
+  const now = new Date();
+  const threeDaysAgo = new Date(now.getTime() - (3 * 24 * 60 * 60 * 1000));
+  
+  // Look for recent events (within last 3 days) that don't have attendance data
+  const recentEventsNeedingAttention = events.filter((event: any) => {
+    const eventDate = new Date(event.event.date);
+    
+    // Only check events from the last 3 days
+    if (eventDate < threeDaysAgo || eventDate > now) {
+      return false;
+    }
+    
+    // Check if event is cancelled
+    if (event.event.canceled) {
+      return false;
+    }
+    
+    // Check if attendance has been submitted (present_count > 0 means attendance was taken)
+    // Also consider it "submitted" if it's explicitly marked as 0 attendance
+    const hasAttendanceData = event.attendance_summary.present_count > 0 || 
+                             (event.attendance_summary.present_count === 0 && event.attendance_summary.total_count > 0);
+    
+    // Add a buffer time - only flag events that ended at least 4 hours ago
+    // This accounts for timezone issues and gives time for attendance submission
+    const fourHoursAgo = new Date(now.getTime() - (4 * 60 * 60 * 1000));
+    const eventEndTime = new Date(eventDate.getTime() + (2 * 60 * 60 * 1000)); // Assume 2-hour event duration
+    
+    return eventEndTime < fourHoursAgo && !hasAttendanceData;
+  });
+  
+  return recentEventsNeedingAttention.length > 0;
+}
 
 // Add new endpoint for loading group data
 app.get('/api/load-groups', async (req, res) => {
@@ -948,6 +990,55 @@ app.get('', async (req, res) => {
               color: #666;
               margin-left: auto;
             }
+            .group-item.needs-attention {
+              border-left: 12px solid #ff6b47;
+              position: relative;
+            }
+            .group-item.needs-attention::before {
+              content: "!";
+              position: absolute;
+              left: -10px;
+              top: 50%;
+              transform: translateY(-50%);
+              background-color: #ff6b47;
+              color: white;
+              width: 18px;
+              height: 18px;
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 13px;
+              font-weight: bold;
+              font-family: Arial, sans-serif;
+              border: 2px solid white;
+            }
+            .attention-tooltip {
+              position: absolute;
+              background-color: #333;
+              color: white;
+              padding: 8px 12px;
+              border-radius: 4px;
+              font-size: 12px;
+              white-space: nowrap;
+              z-index: 1000;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+              pointer-events: none;
+              opacity: 0;
+              transition: opacity 0.2s;
+            }
+            .attention-tooltip.show {
+              opacity: 1;
+            }
+            .attention-tooltip::after {
+              content: "";
+              position: absolute;
+              top: 50%;
+              right: 100%;
+              margin-top: -5px;
+              border: 5px solid transparent;
+              border-right-color: #333;
+            }
           </style>
         </head>
         <body>
@@ -1459,6 +1550,14 @@ app.get('', async (req, res) => {
 
                 if (container) {
                   const isFamilyGroup = document.querySelector(\`#group-\${groupId}\`).classList.contains('family-group');
+                  const groupElement = document.querySelector(\`#group-\${groupId}\`);
+                  
+                  // Update attention styling
+                  if (stats.needsAttention) {
+                    groupElement.classList.add('needs-attention');
+                  } else {
+                    groupElement.classList.remove('needs-attention');
+                  }
                   
                   if (isFamilyGroup && stats.familyGroup) {
                     // Family Group specific stats - calculate separate color classes for each rate
@@ -1800,6 +1899,44 @@ app.get('', async (req, res) => {
                 if (loadingMessage) loadingMessage.style.display = 'none';
               }
             });
+
+            // Add tooltip functionality for attention indicators
+            function setupAttentionTooltips() {
+              document.addEventListener('mouseover', function(e) {
+                const groupItem = e.target.closest('.group-item.needs-attention');
+                if (groupItem) {
+                  // Create tooltip
+                  const tooltip = document.createElement('div');
+                  tooltip.className = 'attention-tooltip';
+                  tooltip.textContent = 'Recent event missing attendance data';
+                  
+                  // Position tooltip
+                  const rect = groupItem.getBoundingClientRect();
+                  tooltip.style.position = 'fixed';
+                  tooltip.style.left = (rect.left + 20) + 'px';
+                  tooltip.style.top = (rect.top + rect.height / 2 - 15) + 'px';
+                  
+                  document.body.appendChild(tooltip);
+                  
+                  // Show tooltip after a brief delay
+                  setTimeout(() => tooltip.classList.add('show'), 100);
+                  
+                  // Store reference for cleanup
+                  groupItem._tooltip = tooltip;
+                }
+              });
+              
+              document.addEventListener('mouseout', function(e) {
+                const groupItem = e.target.closest('.group-item.needs-attention');
+                if (groupItem && groupItem._tooltip) {
+                  groupItem._tooltip.remove();
+                  delete groupItem._tooltip;
+                }
+              });
+            }
+            
+            // Initialize tooltips
+            setupAttentionTooltips();
 
             // Check cache and load data when page loads
             checkCacheAndLoad();
