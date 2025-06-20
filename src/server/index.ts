@@ -183,9 +183,13 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     // Get attendance data for each group
     // For aggregate calculations, we need some historical data to find fallback membership counts
     // Use current year + previous year to capture November 2024 data for early 2025 weeks
-    const attendancePromises = groups.data.map(group => 
-      getGroupAttendance(group.id, showAllEvents, forceRefresh)
-    );
+    const attendancePromises = groups.data.map(async (group) => {
+      const attendance = await getGroupAttendance(group.id, showAllEvents, forceRefresh);
+      return {
+        ...attendance,
+        group_name: group.attributes.name
+      };
+    });
     
     const allGroupsAttendance = await Promise.all(attendancePromises);
     
@@ -256,18 +260,30 @@ app.get('/api/aggregate-attendance', async (req, res) => {
           yesterday.setDate(yesterday.getDate() - 1);
           yesterday.setHours(23, 59, 59, 999); // End of yesterday
           
+          // Track all groups that had events scheduled (cancelled or not)
+          const existing = weekMap.get(weekKey) || { 
+            totalPresent: 0,
+            totalVisitors: 0,
+            groupsProcessed: new Set(),
+            groupsWithAttendance: new Set(),
+            groupsWithActualAttendance: new Set(),
+            groupsWithActualAttendanceNames: new Set(),
+            groupsWithCancelledEvents: new Set(),
+            groupsWithScheduledEvents: new Set(),
+            daysWithAttendance: new Set()
+          };
+          
+          // Track that this group had an event scheduled this week
+          existing.groupsWithScheduledEvents.add(groupData.group_name);
+          
+          // Handle cancelled events separately
+          if (event.event.canceled) {
+            existing.groupsWithCancelledEvents.add(groupData.group_name);
+            weekMap.set(weekKey, existing);
+          }
           // Only count attendance for non-cancelled events with attendance or events from yesterday/earlier
-          if (!event.event.canceled && 
-              (event.attendance_summary.present_count > 0 || 
-               (event.attendance_summary.present_count === 0 && eventDate <= yesterday))) {
-            
-            const existing = weekMap.get(weekKey) || { 
-              totalPresent: 0,
-              totalVisitors: 0,
-              groupsProcessed: new Set(),
-              groupsWithAttendance: new Set(),
-              daysWithAttendance: new Set()
-            };
+          else if (event.attendance_summary.present_count > 0 || 
+                   (event.attendance_summary.present_count === 0 && eventDate <= yesterday)) {
             
             // Add this group's data if we haven't processed it for this week
             const groupKey = `${event.event.id}-${dayOfWeek}`;
@@ -278,6 +294,13 @@ app.get('/api/aggregate-attendance', async (req, res) => {
               existing.groupsProcessed.add(groupKey);
               existing.groupsProcessed.add(event.event.id);
               existing.groupsWithAttendance.add(groupData.group_id);
+              
+              // Only count groups with actual attendance (> 0 people present)
+              if (event.attendance_summary.present_count > 0) {
+                existing.groupsWithActualAttendance.add(groupData.group_id);
+                existing.groupsWithActualAttendanceNames.add(groupData.group_name);
+              }
+              
               existing.daysWithAttendance.add(dayOfWeek);
             }
             
@@ -401,16 +424,30 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     
     // Convert map to array and sort by date
     const aggregatedData = Array.from(weekMap.entries())
-      .map(([weekKey, data]) => ({
-        date: weekKey,
-        totalPresent: data.totalPresent,
-        totalVisitors: data.totalVisitors,
-        totalWithVisitors: data.totalPresent + data.totalVisitors,
-        totalMembers: data.totalMembers,
-        attendanceRate: data.totalMembers > 0 ? Math.round((data.totalPresent / data.totalMembers) * 100) : 0,
-        daysIncluded: Array.from(data.daysWithAttendance).length,
-        groupsWithData: data.groupsWithAttendance.size
-      }))
+      .map(([weekKey, data]) => {
+        // Find groups that had events scheduled but didn't submit attendance (excluding cancelled)
+        const groupsWithDataNames = Array.from(data.groupsWithActualAttendanceNames);
+        const groupsWithCancelledEvents = Array.from(data.groupsWithCancelledEvents);
+        const groupsWithScheduledEvents = Array.from(data.groupsWithScheduledEvents);
+        
+        const groupsMissingData = groupsWithScheduledEvents.filter(name => 
+          !groupsWithDataNames.includes(name) && !groupsWithCancelledEvents.includes(name)
+        );
+        
+        return {
+          date: weekKey,
+          totalPresent: data.totalPresent,
+          totalVisitors: data.totalVisitors,
+          totalWithVisitors: data.totalPresent + data.totalVisitors,
+          totalMembers: data.totalMembers,
+          attendanceRate: data.totalMembers > 0 ? Math.round((data.totalPresent / data.totalMembers) * 100) : 0,
+          daysIncluded: Array.from(data.daysWithAttendance).length,
+          groupsWithData: data.groupsWithActualAttendance.size,
+          totalGroupsWithEvents: groupsWithScheduledEvents.length,
+          groupsMissingData: groupsMissingData.sort(),
+          groupsWithCancelledEvents: groupsWithCancelledEvents.sort()
+        };
+      })
       .filter(week => week.totalMembers > 0 || week.totalPresent > 0) // Only include weeks with actual data
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     
@@ -1799,14 +1836,35 @@ app.get('', async (req, res) => {
                           afterBody: function(context) {
                             const dataIndex = context[0].dataIndex;
                             const data = aggregateData[dataIndex];
-                            return [
+                            
+                            const tooltipLines = [
                               'Weekly Attendance Rate: ' + data.attendanceRate + '%',
                               'Members Present: ' + data.totalPresent,
                               'Visitors: +' + data.totalVisitors,
                               'Total with Visitors: ' + data.totalWithVisitors,
-                              'Groups with Data: ' + data.groupsWithData,
+                              'Groups with Data: ' + data.groupsWithData + '/' + data.totalGroupsWithEvents,
                               'Days with Data: ' + data.daysIncluded + ' (Wed/Thu)'
                             ];
+                            
+                            // Add groups missing data
+                            if (data.groupsMissingData && data.groupsMissingData.length > 0) {
+                              tooltipLines.push('');
+                              tooltipLines.push('Groups missing data:');
+                              data.groupsMissingData.forEach(name => {
+                                tooltipLines.push('  • ' + name);
+                              });
+                            }
+                            
+                            // Add groups with cancelled events
+                            if (data.groupsWithCancelledEvents && data.groupsWithCancelledEvents.length > 0) {
+                              tooltipLines.push('');
+                              tooltipLines.push('Groups with cancelled events:');
+                              data.groupsWithCancelledEvents.forEach(name => {
+                                tooltipLines.push('  • ' + name);
+                              });
+                            }
+                            
+                            return tooltipLines;
                           }
                         }
                       }

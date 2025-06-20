@@ -1,8 +1,7 @@
 Users: lauren, hannah, caleb
 eventually coaches will use
 
-Features:
-
+Upcoming Features:
 
 home page sort function (group type, attendance rate, group size)
 missing persons report (data point on graph show names of missing members?)
@@ -13,7 +12,7 @@ month-over-month and year-over-year percentage
 YA groups functionality
 
 
-Completed:
+Completed Features:
 
 differentiate family groups
 display average membership next to avg. attendance
