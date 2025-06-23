@@ -434,6 +434,9 @@ app.get('/api/aggregate-attendance', async (req, res) => {
           !groupsWithDataNames.includes(name) && !groupsWithCancelledEvents.includes(name)
         );
         
+        // Count groups with actual attendance + groups with cancelled events as "groups with data"
+        const totalGroupsWithCompleteData = data.groupsWithActualAttendance.size + groupsWithCancelledEvents.length;
+        
         return {
           date: weekKey,
           totalPresent: data.totalPresent,
@@ -442,10 +445,11 @@ app.get('/api/aggregate-attendance', async (req, res) => {
           totalMembers: data.totalMembers,
           attendanceRate: data.totalMembers > 0 ? Math.round((data.totalPresent / data.totalMembers) * 100) : 0,
           daysIncluded: Array.from(data.daysWithAttendance).length,
-          groupsWithData: data.groupsWithActualAttendance.size,
+          groupsWithData: totalGroupsWithCompleteData,
           totalGroupsWithEvents: groupsWithScheduledEvents.length,
           groupsMissingData: groupsMissingData.sort(),
-          groupsWithCancelledEvents: groupsWithCancelledEvents.sort()
+          groupsWithCancelledEvents: groupsWithCancelledEvents.sort(),
+          isPerfectWeek: groupsMissingData.length === 0 && groupsWithScheduledEvents.length > 0
         };
       })
       .filter(week => week.totalMembers > 0 || week.totalPresent > 0) // Only include weeks with actual data
@@ -1793,28 +1797,66 @@ app.get('', async (req, res) => {
                       }
                     ]
                   },
-                  plugins: showAllYears && yearBoundaries.length > 0 ? [{
-                    id: 'yearSeparators',
-                    afterDraw: function(chart) {
-                      const ctx = chart.ctx;
-                      const chartArea = chart.chartArea;
-                      
-                      ctx.save();
-                      ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
-                      ctx.lineWidth = 1;
-                      ctx.setLineDash([5, 5]);
-                      
-                      yearBoundaries.forEach(boundaryIndex => {
-                        const x = chart.scales.x.getPixelForValue(boundaryIndex);
-                        ctx.beginPath();
-                        ctx.moveTo(x, chartArea.top);
-                        ctx.lineTo(x, chartArea.bottom);
-                        ctx.stroke();
-                      });
-                      
-                      ctx.restore();
-                    }
-                  }] : [],
+                  plugins: [
+                    // Perfect week indicators - green checkmarks
+                    {
+                      id: 'perfectWeekIndicators',
+                      beforeDraw: function(chart) {
+                        const ctx = chart.ctx;
+                        const chartArea = chart.chartArea;
+                        
+                        ctx.save();
+                        
+                        // Set up text styling for checkmarks
+                        ctx.fillStyle = '#28a745';
+                        ctx.font = 'bold 14px Arial';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        
+                        // Draw green checkmarks above "Total Members" data points
+                        aggregateData.forEach((item, index) => {
+                          if (item.isPerfectWeek) {
+                            const totalMembersDatasetIndex = 2; // "Total Members" is the 3rd dataset (index 2)
+                            const meta = chart.getDatasetMeta(totalMembersDatasetIndex);
+                            if (meta.data[index] && meta.data[index].x >= chartArea.left && meta.data[index].x <= chartArea.right) {
+                              const point = meta.data[index];
+                              
+                              // Draw checkmark slightly above the data point
+                              const checkX = point.x;
+                              const checkY = Math.max(point.y - 15, chartArea.top + 10); // Keep within chart area
+                              
+                              ctx.fillText('✓', checkX, checkY);
+                            }
+                          }
+                        });
+                        
+                        ctx.restore();
+                      }
+                    },
+                    // Year separators (if showing all years)
+                    ...(showAllYears && yearBoundaries.length > 0 ? [{
+                      id: 'yearSeparators',
+                      afterDraw: function(chart) {
+                        const ctx = chart.ctx;
+                        const chartArea = chart.chartArea;
+                        
+                        ctx.save();
+                        ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+                        ctx.lineWidth = 1;
+                        ctx.setLineDash([5, 5]);
+                        
+                        yearBoundaries.forEach(boundaryIndex => {
+                          const x = chart.scales.x.getPixelForValue(boundaryIndex);
+                          ctx.beginPath();
+                          ctx.moveTo(x, chartArea.top);
+                          ctx.lineTo(x, chartArea.bottom);
+                          ctx.stroke();
+                        });
+                        
+                        ctx.restore();
+                      }
+                    }] : [])
+                  ],
                   options: {
                     responsive: true,
                     maintainAspectRatio: false,
@@ -1837,12 +1879,16 @@ app.get('', async (req, res) => {
                             const dataIndex = context[0].dataIndex;
                             const data = aggregateData[dataIndex];
                             
+                            const groupsDataText = data.isPerfectWeek 
+                              ? 'Groups with Data: ' + data.groupsWithData + '/' + data.totalGroupsWithEvents + ' ✅'
+                              : 'Groups with Data: ' + data.groupsWithData + '/' + data.totalGroupsWithEvents;
+                            
                             const tooltipLines = [
                               'Weekly Attendance Rate: ' + data.attendanceRate + '%',
                               'Members Present: ' + data.totalPresent,
                               'Visitors: +' + data.totalVisitors,
                               'Total with Visitors: ' + data.totalWithVisitors,
-                              'Groups with Data: ' + data.groupsWithData + '/' + data.totalGroupsWithEvents,
+                              groupsDataText,
                               'Days with Data: ' + data.daysIncluded + ' (Wed/Thu)'
                             ];
                             
