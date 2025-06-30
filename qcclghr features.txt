@@ -4,14 +4,16 @@ eventually coaches will use
 
 Upcoming Features:
 
-extend missed attendance alert to 5 days
 home page sort function (group type, attendance rate, group size)
-missing persons report (data point on graph show names of missing members?)
 last 30 days, number of people who have left/joined a group
 multi-select groups to show data on home page
 compare graphs function?
 month-over-month and year-over-year percentage
 YA groups functionality
+differentiate dads/moms/family weeks on individual group page
+attendance reminder sent button (or auto-notify)
+when clicking Attendance, open into new tab
+missing persons report (data point on graph show names of missing members?)
 
 
 Completed Features:
@@ -25,3 +27,4 @@ home page all historical data
 did the group report attendance this week?
 nightly auto-refresh
 enhanced chart tooltip reporting
+extend missed attendance alert to 5 days

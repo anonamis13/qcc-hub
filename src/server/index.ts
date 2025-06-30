@@ -2391,7 +2391,7 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
                            (event.event.canceled ? '<span class="canceled-label"> (CANCELED)</span>' : '') +
                            '</td>' +
                            '<td>' +
-                           '<a href="' + eventUrl + '" rel="noopener noreferrer" class="' + rowClass + '">Attendance</a>' +
+                           '<a target="_blank" rel="noopener noreferrer" href="' + eventUrl + '" rel="noopener noreferrer" class="' + rowClass + '">Attendance</a>' +
                            '</td>' +
                            '<td>' + event.attendance_summary.present_members + '</td>' +
                            '<td>' + (event.attendance_summary.present_visitors > 0 ? 
