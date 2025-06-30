@@ -142,6 +142,46 @@ interface PCOAttendanceResponse {
   };
 }
 
+// Add interface for group membership data
+interface PCOMembership {
+  type: string;
+  id: string;
+  attributes: {
+    role: string;
+    joined_at?: string;
+    [key: string]: any;
+  };
+  relationships: {
+    person: {
+      data: {
+        type: string;
+        id: string;
+      };
+    };
+    group: {
+      data: {
+        type: string;
+        id: string;
+      };
+    };
+  };
+}
+
+interface PCOMembershipResponse {
+  data: PCOMembership[];
+  included?: Array<any>;
+  meta: {
+    total_count: number;
+    count: number;
+    next?: {
+      offset: number;
+    };
+  };
+  links?: {
+    next?: string;
+  };
+}
+
 // Create an axios instance with PCO API configuration
 const pcoClient = axios.create({
   baseURL: PCO_BASE_URL,
@@ -703,6 +743,77 @@ const calculateFamilyGroupMetrics = (events: Array<{
       familyNightsCount: familyNightsCount
     }
   };
+};
+
+// Function to get group memberships (current members)
+export const getGroupMemberships = async (groupId: string, forceRefresh: boolean = false) => {
+  const cacheKey = `memberships_${groupId}`;
+  const cachedMemberships = cache.get<any[]>(cacheKey);
+  
+  // Always use cache if available, unless force refresh is requested
+  if (cachedMemberships && !forceRefresh) {
+    return cachedMemberships;
+  }
+
+  return retryWithBackoff(async () => {
+    try {
+      // Get group memberships with included person data
+      const response = await pcoClient.get<PCOMembershipResponse>(`/groups/v2/groups/${groupId}/memberships`, {
+        params: {
+          include: 'person',
+          per_page: '100'
+        }
+      });
+      
+      let memberships = response.data.data;
+      let included = response.data.included || [];
+      
+      // Handle pagination if there are more pages
+      let nextPage = response.data.links?.next;
+      while (nextPage) {
+        await delay(100);
+        
+        const nextResponse = await pcoClient.get<PCOMembershipResponse>(nextPage);
+        memberships = [...memberships, ...nextResponse.data.data];
+        if (nextResponse.data.included) {
+          included = [...included, ...nextResponse.data.included];
+        }
+        nextPage = nextResponse.data.links?.next;
+      }
+      
+      // Create a map of person ID to person data for quick lookup
+      const personMap = new Map();
+      included.filter(item => item.type === 'Person').forEach(person => {
+        personMap.set(person.id, person);
+      });
+      
+      // Combine membership and person data
+      const membershipData = memberships.map(membership => {
+        const personId = membership.relationships.person.data.id;
+        const person = personMap.get(personId);
+        
+        return {
+          membershipId: membership.id,
+          personId: personId,
+          role: membership.attributes.role,
+          joinedAt: membership.attributes.joined_at,
+          person: person ? {
+            firstName: person.attributes.first_name,
+            lastName: person.attributes.last_name,
+            emailAddresses: person.attributes.email_addresses || [],
+            phoneNumbers: person.attributes.phone_numbers || []
+          } : null
+        };
+      });
+      
+      // Cache the results
+      cache.set(cacheKey, membershipData);
+      return membershipData;
+    } catch (error) {
+      console.error(`Error fetching memberships for group ${groupId}:`, error);
+      throw error;
+    }
+  });
 };
 
 export default pcoClient; 

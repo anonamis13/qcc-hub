@@ -2,8 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import cron from 'node-cron';
-import { getPeopleGroups, getGroupAttendance, getGroup } from './config/pco.js';
+import { getPeopleGroups, getGroupAttendance, getGroup, getGroupMemberships } from './config/pco.js';
 import { cache } from './config/cache.js';
+import { membershipSnapshots } from '../data/database.js';
 
 dotenv.config();
 
@@ -829,6 +830,96 @@ app.get('/api/debug-family-metrics/:groupId', async (req, res) => {
   }
 });
 
+// Add new endpoint for membership changes
+app.get('/api/membership-changes', async (req, res) => {
+  try {
+    const daysBack = parseInt(req.query.days as string) || 30;
+    const changes = membershipSnapshots.getMembershipChanges(daysBack);
+    
+    res.json({
+      daysBack: daysBack,
+      latestSnapshotDate: membershipSnapshots.getLatestSnapshotDate(),
+      ...changes
+    });
+  } catch (error) {
+    console.error('Error fetching membership changes:', error);
+    res.status(500).json({ error: 'Failed to fetch membership changes' });
+  }
+});
+
+// Add new endpoint to trigger membership snapshot creation
+app.post('/api/create-membership-snapshot', async (req, res) => {
+  try {
+    const forceRefresh = req.query.forceRefresh === 'true';
+    const date = new Date().toISOString().split('T')[0]; // Today's date in YYYY-MM-DD format
+    
+    // Check if we already have a snapshot for today (unless force refresh)
+    if (!forceRefresh && membershipSnapshots.hasSnapshotForDate(date)) {
+      return res.json({ 
+        message: 'Snapshot already exists for today',
+        date: date,
+        created: false
+      });
+    }
+    
+    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
+    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
+    
+    // Get all groups
+    const groups = await getPeopleGroups(groupTypeId, false);
+    
+    let successCount = 0;
+    let errorCount = 0;
+    
+    // Create snapshots for each group
+    for (const group of groups.data) {
+      try {
+        const memberships = await getGroupMemberships(group.id, forceRefresh);
+        membershipSnapshots.storeDailySnapshot(date, group.id, group.attributes.name, memberships);
+        successCount++;
+        
+        // Add small delay to be respectful to the API
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        console.error(`Failed to create snapshot for group ${group.id} (${group.attributes.name}):`, error);
+        errorCount++;
+      }
+    }
+    
+    res.json({
+      message: 'Membership snapshot creation completed',
+      date: date,
+      created: true,
+      totalGroups: groups.data.length,
+      successCount: successCount,
+      errorCount: errorCount
+    });
+  } catch (error) {
+    console.error('Error creating membership snapshot:', error);
+    res.status(500).json({ error: 'Failed to create membership snapshot' });
+  }
+});
+
+// Add new endpoint to get membership snapshot status
+app.get('/api/membership-snapshot-status', async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const latestSnapshotDate = membershipSnapshots.getLatestSnapshotDate();
+    
+    res.json({
+      today: today,
+      latestSnapshotDate: latestSnapshotDate,
+      hasSnapshotForToday: membershipSnapshots.hasSnapshotForDate(today),
+      daysSinceLastSnapshot: latestSnapshotDate ? 
+        Math.floor((new Date().getTime() - new Date(latestSnapshotDate).getTime()) / (1000 * 60 * 60 * 24)) : 
+        null
+    });
+  } catch (error) {
+    console.error('Error checking membership snapshot status:', error);
+    res.status(500).json({ error: 'Failed to check membership snapshot status' });
+  }
+});
+
 //Home Page
 app.get('', async (req, res) => {
   try {
@@ -1163,6 +1254,34 @@ app.get('', async (req, res) => {
               <span class="date-range" id="chartDateRange">
                 Showing data from: Current year
               </span>
+            </div>
+            
+            <div class="membership-changes-container" id="membershipChangesContainer" style="display: none;">
+              <button id="membershipMainToggleBtn" style="width: 100%; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px 20px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.3s ease;" onmouseover="this.style.borderColor='#007bff'; this.style.backgroundColor='#f8f9fa';" onmouseout="this.style.borderColor='#ddd'; this.style.backgroundColor='white';">
+                <div style="display: flex; align-items: center; gap: 15px;">
+                  <h3 style="margin: 0; color: #333; font-weight: 500;">Recent Membership Changes</h3>
+                  <div id="membershipQuickSummary" style="display: flex; gap: 15px; font-size: 14px; color: #666;">
+                    <div class="loading" style="width: 16px; height: 16px;"></div>
+                    <span>Loading...</span>
+                  </div>
+                </div>
+                <span id="membershipMainToggleIcon" style="color: #666; font-size: 16px;">▼</span>
+              </button>
+              
+              <div id="membershipExpandedContent" style="display: none; background-color: white; padding: 20px; border-radius: 8px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-top: none; margin-top: -20px; border-top-left-radius: 0; border-top-right-radius: 0;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px;">
+                  <h3 style="margin: 0; color: #333; font-weight: 500;">Detailed View</h3>
+                  <button id="membershipDetailsToggleBtn" style="background: none; border: 1px solid #ddd; border-radius: 4px; padding: 6px 10px; cursor: pointer; display: flex; align-items: center; gap: 5px; color: #666; font-size: 12px; transition: all 0.3s ease;" onmouseover="this.style.backgroundColor='#f8f9fa'; this.style.borderColor='#007bff';" onmouseout="this.style.backgroundColor='transparent'; this.style.borderColor='#ddd';">
+                    <span id="membershipDetailsToggleText">Show Member Names</span>
+                    <span id="membershipDetailsToggleIcon">▼</span>
+                  </button>
+                </div>
+                <div class="membership-summary" id="membershipSummary" style="display: flex; gap: 30px; margin: 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 8px; align-items: center;">
+                  <div class="loading"></div>
+                  <span>Loading membership changes...</span>
+                </div>
+                <div class="membership-details" id="membershipDetails" style="display: none; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;"></div>
+              </div>
             </div>
             
             <div class="chart-container">
@@ -1581,6 +1700,9 @@ app.get('', async (req, res) => {
                 // Load aggregate data separately after groups are displayed
                 await loadAggregateData();
                 await updateLastUpdateTime();
+                
+                // Load membership changes
+                await loadMembershipChanges();
               } catch (error) {
                 console.error('Error:', error);
                 loadDataBtn.disabled = false;
@@ -2099,6 +2221,154 @@ app.get('', async (req, res) => {
             // Initialize tooltips
             setupAttentionTooltips();
 
+            // Function to setup membership toggle functionality
+            function setupMembershipToggle() {
+              // Main toggle for entire section
+              const mainToggleBtn = document.getElementById('membershipMainToggleBtn');
+              const mainToggleIcon = document.getElementById('membershipMainToggleIcon');
+              const expandedContent = document.getElementById('membershipExpandedContent');
+              
+              // Details toggle for member names
+              const detailsToggleBtn = document.getElementById('membershipDetailsToggleBtn');
+              const detailsToggleText = document.getElementById('membershipDetailsToggleText');
+              const detailsToggleIcon = document.getElementById('membershipDetailsToggleIcon');
+              const membershipDetails = document.getElementById('membershipDetails');
+              
+              // Main section toggle
+              if (mainToggleBtn && mainToggleIcon && expandedContent) {
+                mainToggleBtn.addEventListener('click', function() {
+                  const isVisible = expandedContent.style.display === 'block';
+                  
+                  if (isVisible) {
+                    expandedContent.style.display = 'none';
+                    mainToggleIcon.textContent = '▼';
+                    mainToggleBtn.style.borderBottomLeftRadius = '8px';
+                    mainToggleBtn.style.borderBottomRightRadius = '8px';
+                  } else {
+                    expandedContent.style.display = 'block';
+                    mainToggleIcon.textContent = '▲';
+                    mainToggleBtn.style.borderBottomLeftRadius = '0';
+                    mainToggleBtn.style.borderBottomRightRadius = '0';
+                  }
+                });
+              }
+              
+              // Details toggle for member names
+              if (detailsToggleBtn && detailsToggleText && detailsToggleIcon && membershipDetails) {
+                detailsToggleBtn.addEventListener('click', function() {
+                  const isVisible = membershipDetails.style.display === 'grid';
+                  
+                  if (isVisible) {
+                    membershipDetails.style.display = 'none';
+                    detailsToggleText.textContent = 'Show Member Names';
+                    detailsToggleIcon.textContent = '▼';
+                  } else {
+                    membershipDetails.style.display = 'grid';
+                    detailsToggleText.textContent = 'Hide Member Names';
+                    detailsToggleIcon.textContent = '▲';
+                  }
+                });
+              }
+            }
+
+            // Function to load membership changes
+            async function loadMembershipChanges() {
+              const membershipChangesContainer = document.getElementById('membershipChangesContainer');
+              const membershipQuickSummary = document.getElementById('membershipQuickSummary');
+              const membershipSummary = document.getElementById('membershipSummary');
+              const membershipDetails = document.getElementById('membershipDetails');
+              
+              try {
+                const response = await fetch('/api/membership-changes?days=30');
+                if (!response.ok) throw new Error('Failed to fetch membership changes');
+                
+                const data = await response.json();
+                
+                // Show the container and setup toggle functionality
+                if (membershipChangesContainer) {
+                  membershipChangesContainer.style.display = 'block';
+                  setupMembershipToggle();
+                }
+                
+                // Update quick summary in collapsed button
+                if (membershipQuickSummary) {
+                  const netChange = data.totalJoins - data.totalLeaves;
+                  const netChangeText = netChange > 0 ? '+' + netChange : netChange.toString();
+                  const netChangeColor = netChange > 0 ? '#28a745' : netChange < 0 ? '#dc3545' : '#666';
+                  
+                  membershipQuickSummary.innerHTML = 
+                    '<span style="color: #28a745;">+' + data.totalJoins + ' joined</span>' +
+                    '<span style="color: #dc3545;">-' + data.totalLeaves + ' left</span>' +
+                    '<span style="color: ' + netChangeColor + '; font-weight: bold;">(' + netChangeText + ' net)</span>';
+                }
+                
+                // Update summary
+                if (membershipSummary) {
+                  membershipSummary.innerHTML = \`
+                    <div style="text-align: center; padding: 15px; background-color: white; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                      <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px; color: #28a745;">\${data.totalJoins}</div>
+                      <div style="color: #666; font-size: 14px;">New Members (30 days)</div>
+                    </div>
+                    <div style="text-align: center; padding: 15px; background-color: white; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                      <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px; color: #dc3545;">\${data.totalLeaves}</div>
+                      <div style="color: #666; font-size: 14px;">Members Left (30 days)</div>
+                    </div>
+                    <div style="text-align: center; padding: 15px; background-color: white; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                      <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px; color: #007bff;">\${data.totalJoins - data.totalLeaves}</div>
+                      <div style="color: #666; font-size: 14px;">Net Change</div>
+                    </div>
+                    <div style="margin-left: auto; color: #666; font-size: 14px; display: flex; align-items: center;">
+                      \${data.latestSnapshotDate ? 'Data as of: ' + new Date(data.latestSnapshotDate).toLocaleDateString() : 'No snapshot data available'}
+                    </div>
+                  \`;
+                }
+                
+                // Update details
+                if (membershipDetails) {
+                  if (data.totalJoins === 0 && data.totalLeaves === 0) {
+                    membershipDetails.innerHTML = '<div style="text-align: center; color: #666; font-style: italic; padding: 20px; grid-column: 1 / -1;">No membership changes in the last 30 days</div>';
+                  } else {
+                    const joinsHtml = data.joins.length > 0 ? 
+                      \`<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745;">
+                        <h3 style="margin: 0 0 15px 0; color: #28a745; font-weight: 500;">New Members (\${data.joins.length})</h3>
+                        \${data.joins.map(member => 
+                          \`<div style="padding: 15px; margin: 10px 0; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-left: 4px solid #28a745;">
+                            <div style="font-weight: 500; color: #333; font-size: 16px;">\${member.firstName} \${member.lastName}</div>
+                            <div style="color: #666; font-size: 14px; margin-top: 5px;">\${member.groupName}</div>
+                          </div>\`
+                        ).join('')}
+                      </div>\` : 
+                      \`<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745;">
+                        <h3 style="margin: 0 0 15px 0; color: #28a745; font-weight: 500;">New Members (0)</h3>
+                        <div style="text-align: center; color: #666; font-style: italic; padding: 20px;">No new members in the last 30 days</div>
+                      </div>\`;
+                    
+                    const leavesHtml = data.leaves.length > 0 ? 
+                      \`<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #dc3545;">
+                        <h3 style="margin: 0 0 15px 0; color: #dc3545; font-weight: 500;">Members Left (\${data.leaves.length})</h3>
+                        \${data.leaves.map(member => 
+                          \`<div style="padding: 15px; margin: 10px 0; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-left: 4px solid #dc3545;">
+                            <div style="font-weight: 500; color: #333; font-size: 16px;">\${member.firstName} \${member.lastName}</div>
+                            <div style="color: #666; font-size: 14px; margin-top: 5px;">\${member.groupName}</div>
+                          </div>\`
+                        ).join('')}
+                      </div>\` : 
+                      \`<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #dc3545;">
+                        <h3 style="margin: 0 0 15px 0; color: #dc3545; font-weight: 500;">Members Left (0)</h3>
+                        <div style="text-align: center; color: #666; font-style: italic; padding: 20px;">No members left in the last 30 days</div>
+                      </div>\`;
+                    
+                    membershipDetails.innerHTML = joinsHtml + leavesHtml;
+                  }
+                }
+              } catch (error) {
+                console.error('Error loading membership changes:', error);
+                if (membershipSummary) {
+                  membershipSummary.innerHTML = '<div style="color: red;">Failed to load membership changes</div>';
+                }
+              }
+            }
+
             // Check cache and load data when page loads
             checkCacheAndLoad();
           </script>
@@ -2443,7 +2713,7 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
               </div>
               <canvas id="attendanceChart"></canvas>
             </div>
-
+ 
             <h2>Attendance History</h2>
             <table>
               <thead>
@@ -2741,6 +3011,39 @@ async function performAutomaticRefresh() {
       console.log('Aggregate data refreshed successfully');
     } catch (error) {
       console.error('Failed to refresh aggregate data:', error);
+      errorCount++;
+    }
+    
+    // Create daily membership snapshot
+    console.log('Creating daily membership snapshot...');
+    try {
+      const date = new Date().toISOString().split('T')[0];
+      
+      // Only create snapshot if we don't already have one for today
+      if (!membershipSnapshots.hasSnapshotForDate(date)) {
+        let snapshotSuccessCount = 0;
+        let snapshotErrorCount = 0;
+        
+        for (const group of groupsResult.data) {
+          try {
+            const memberships = await getGroupMemberships(group.id, false); // Use cached data
+            membershipSnapshots.storeDailySnapshot(date, group.id, group.attributes.name, memberships);
+            snapshotSuccessCount++;
+            
+            // Small delay between groups
+            await new Promise(resolve => setTimeout(resolve, 200));
+          } catch (error) {
+            console.error(`Failed to create membership snapshot for group ${group.id}:`, error);
+            snapshotErrorCount++;
+          }
+        }
+        
+        console.log(`Membership snapshot completed. Success: ${snapshotSuccessCount}, Errors: ${snapshotErrorCount}`);
+      } else {
+        console.log('Membership snapshot already exists for today, skipping');
+      }
+    } catch (error) {
+      console.error('Failed to create membership snapshot:', error);
       errorCount++;
     }
     

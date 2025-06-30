@@ -68,13 +68,34 @@ function initializeDb() {
         )
       `);
       
+      // Create membership snapshots table
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS membership_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          date TEXT NOT NULL,
+          group_id TEXT NOT NULL,
+          group_name TEXT NOT NULL,
+          person_id TEXT NOT NULL,
+          person_first_name TEXT,
+          person_last_name TEXT,
+          role TEXT,
+          timestamp INTEGER NOT NULL,
+          UNIQUE(date, group_id, person_id)
+        )
+      `);
+      
+      // Create index for faster queries
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_membership_snapshots_date_group 
+        ON membership_snapshots(date, group_id)
+      `);
+      
       // Run initial cleanup
       cleanupOldData();
       
       // Schedule regular cleanup
       setInterval(cleanupOldData, CLEANUP_INTERVAL);
       
-
     } catch (error) {
       console.error('Error initializing database:', error);
       throw error;
@@ -171,6 +192,178 @@ export const dbCache = {
     } catch (error) {
       console.error(`Failed to check refresh status for key ${key}:`, error);
       return true;
+    }
+  }
+};
+
+// Add membership snapshot functions
+export const membershipSnapshots = {
+  // Store a daily snapshot of group memberships
+  storeDailySnapshot: (date: string, groupId: string, groupName: string, memberships: any[]): void => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      
+      // First, delete any existing snapshot for this date/group combination
+      const deleteStmt = db.prepare('DELETE FROM membership_snapshots WHERE date = ? AND group_id = ?');
+      deleteStmt.run(date, groupId);
+      
+      // Insert new membership data
+      const insertStmt = db.prepare(`
+        INSERT INTO membership_snapshots 
+        (date, group_id, group_name, person_id, person_first_name, person_last_name, role, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      
+      const insertMany = db.transaction((memberships: any[]) => {
+        for (const membership of memberships) {
+          if (membership.person) {
+            insertStmt.run(
+              date,
+              groupId,
+              groupName,
+              membership.personId,
+              membership.person.firstName || '',
+              membership.person.lastName || '',
+              membership.role || '',
+              timestamp
+            );
+          }
+        }
+      });
+      
+      insertMany(memberships);
+    } catch (error) {
+      console.error(`Failed to store membership snapshot for group ${groupId} on ${date}:`, error);
+      throw error;
+    }
+  },
+
+  // Get membership changes over a time period
+  getMembershipChanges: (daysBack: number = 30): any => {
+    try {
+      const db = initializeDb();
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - daysBack);
+      const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
+      
+      // Get the most recent snapshot date for each group
+      const latestSnapshotsStmt = db.prepare(`
+        SELECT group_id, MAX(date) as latest_date
+        FROM membership_snapshots 
+        GROUP BY group_id
+      `);
+      const latestSnapshots = latestSnapshotsStmt.all() as Array<{group_id: string, latest_date: string}>;
+      
+      const changes = {
+        joins: [] as any[],
+        leaves: [] as any[],
+        totalJoins: 0,
+        totalLeaves: 0
+      };
+      
+      for (const snapshot of latestSnapshots) {
+        const groupId = snapshot.group_id;
+        const latestDate = snapshot.latest_date;
+        
+        // Get current members (latest snapshot)
+        const currentMembersStmt = db.prepare(`
+          SELECT person_id, person_first_name, person_last_name, group_name
+          FROM membership_snapshots 
+          WHERE group_id = ? AND date = ?
+        `);
+        const currentMembers = currentMembersStmt.all(groupId, latestDate) as Array<{
+          person_id: string,
+          person_first_name: string,
+          person_last_name: string,
+          group_name: string
+        }>;
+        
+        // Get members from the cutoff date (or closest date after cutoff)
+        const pastMembersStmt = db.prepare(`
+          SELECT person_id, person_first_name, person_last_name, group_name, date
+          FROM membership_snapshots 
+          WHERE group_id = ? AND date >= ?
+          ORDER BY date ASC
+          LIMIT 1
+        `);
+        const pastMembersResult = pastMembersStmt.all(groupId, cutoffDateStr);
+        
+        if (pastMembersResult.length === 0) continue; // No historical data for this group
+        
+        const comparisonDate = (pastMembersResult[0] as {date: string}).date;
+        const pastMembersStmt2 = db.prepare(`
+          SELECT person_id, person_first_name, person_last_name, group_name
+          FROM membership_snapshots 
+          WHERE group_id = ? AND date = ?
+        `);
+        const pastMembers = pastMembersStmt2.all(groupId, comparisonDate) as Array<{
+          person_id: string,
+          person_first_name: string,
+          person_last_name: string,
+          group_name: string
+        }>;
+        
+        // Find joins (in current but not in past)
+        const currentMemberIds = new Set(currentMembers.map(m => m.person_id));
+        const pastMemberIds = new Set(pastMembers.map(m => m.person_id));
+        
+        const joins = currentMembers.filter(member => !pastMemberIds.has(member.person_id));
+        const leaves = pastMembers.filter(member => !currentMemberIds.has(member.person_id));
+        
+        // Add to results
+        changes.joins.push(...joins.map(member => ({
+          personId: member.person_id,
+          firstName: member.person_first_name,
+          lastName: member.person_last_name,
+          groupName: member.group_name,
+          groupId: groupId,
+          type: 'join'
+        })));
+        
+        changes.leaves.push(...leaves.map(member => ({
+          personId: member.person_id,
+          firstName: member.person_first_name,
+          lastName: member.person_last_name,
+          groupName: member.group_name,
+          groupId: groupId,
+          type: 'leave'
+        })));
+      }
+      
+      changes.totalJoins = changes.joins.length;
+      changes.totalLeaves = changes.leaves.length;
+      
+      return changes;
+    } catch (error) {
+      console.error('Failed to get membership changes:', error);
+      return { joins: [], leaves: [], totalJoins: 0, totalLeaves: 0 };
+    }
+  },
+
+  // Get the latest snapshot date
+  getLatestSnapshotDate: (): string | null => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare('SELECT MAX(date) as latest_date FROM membership_snapshots');
+      const result = stmt.get() as { latest_date: string | null } | undefined;
+      return result?.latest_date || null;
+    } catch (error) {
+      console.error('Failed to get latest snapshot date:', error);
+      return null;
+    }
+  },
+
+  // Check if we have a snapshot for today
+  hasSnapshotForDate: (date: string): boolean => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare('SELECT COUNT(*) as count FROM membership_snapshots WHERE date = ?');
+      const result = stmt.get(date) as { count: number } | undefined;
+      return (result?.count || 0) > 0;
+    } catch (error) {
+      console.error(`Failed to check snapshot for date ${date}:`, error);
+      return false;
     }
   }
 }; 
