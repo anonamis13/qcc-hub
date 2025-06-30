@@ -264,6 +264,10 @@ app.get('/api/aggregate-attendance', async (req, res) => {
           const existing = weekMap.get(weekKey) || { 
             totalPresent: 0,
             totalVisitors: 0,
+            familyPresent: 0,
+            nonFamilyPresent: 0,
+            familyVisitors: 0,
+            nonFamilyVisitors: 0,
             groupsProcessed: new Set(),
             groupsWithAttendance: new Set(),
             groupsWithActualAttendance: new Set(),
@@ -290,6 +294,17 @@ app.get('/api/aggregate-attendance', async (req, res) => {
             if (!existing.groupsProcessed.has(groupKey)) {
               existing.totalPresent += event.attendance_summary.present_members;
               existing.totalVisitors += event.attendance_summary.present_visitors;
+              
+              // Track family vs non-family attendance
+              // Find the corresponding group data to check if it's a family group
+              const correspondingGroup = groups.data.find(g => g.id === groupData.group_id);
+              if (correspondingGroup && correspondingGroup.isFamilyGroup) {
+                existing.familyPresent += event.attendance_summary.present_members;
+                existing.familyVisitors += event.attendance_summary.present_visitors;
+              } else {
+                existing.nonFamilyPresent += event.attendance_summary.present_members;
+                existing.nonFamilyVisitors += event.attendance_summary.present_visitors;
+              }
               
               existing.groupsProcessed.add(groupKey);
               existing.groupsProcessed.add(event.event.id);
@@ -330,6 +345,10 @@ app.get('/api/aggregate-attendance', async (req, res) => {
       const existing = weekMap.get(weekKey) || { 
         totalPresent: 0,
         totalVisitors: 0,
+        familyPresent: 0,
+        nonFamilyPresent: 0,
+        familyVisitors: 0,
+        nonFamilyVisitors: 0,
         groupsProcessed: new Set(),
         groupsWithAttendance: new Set(),
         daysWithAttendance: new Set()
@@ -442,6 +461,10 @@ app.get('/api/aggregate-attendance', async (req, res) => {
           totalPresent: data.totalPresent,
           totalVisitors: data.totalVisitors,
           totalWithVisitors: data.totalPresent + data.totalVisitors,
+          familyPresent: data.familyPresent,
+          nonFamilyPresent: data.nonFamilyPresent,
+          familyVisitors: data.familyVisitors,
+          nonFamilyVisitors: data.nonFamilyVisitors,
           totalMembers: data.totalMembers,
           attendanceRate: data.totalMembers > 0 ? Math.round((data.totalPresent / data.totalMembers) * 100) : 0,
           daysIncluded: Array.from(data.daysWithAttendance).length,
@@ -1885,11 +1908,10 @@ app.get('', async (req, res) => {
                             
                             const tooltipLines = [
                               'Weekly Attendance Rate: ' + data.attendanceRate + '%',
-                              'Members Present: ' + data.totalPresent,
-                              'Visitors: +' + data.totalVisitors,
-                              'Total with Visitors: ' + data.totalWithVisitors,
-                              groupsDataText,
-                              'Days with Data: ' + data.daysIncluded + ' (Wed/Thu)'
+                              'Members: ' + data.familyPresent + ' Family, ' + data.nonFamilyPresent + ' Regular (' + data.totalPresent + ' total)',
+                              'Visitors: +' + data.familyVisitors + ' Family, +' + data.nonFamilyVisitors + ' Regular (+' + data.totalVisitors + ' total)',
+                              'Total Attendance: ' + data.totalWithVisitors,
+                              groupsDataText + ' | ' + data.daysIncluded + ' days (Wed/Thu)'
                             ];
                             
                             // Add groups missing data

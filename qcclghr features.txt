@@ -12,7 +12,6 @@ month-over-month and year-over-year percentage
 YA groups functionality
 differentiate dads/moms/family weeks on individual group page
 attendance reminder sent button (or auto-notify)
-when clicking Attendance, open into new tab
 missing persons report (data point on graph show names of missing members?)
 
 
@@ -28,3 +27,4 @@ did the group report attendance this week?
 nightly auto-refresh
 enhanced chart tooltip reporting
 extend missed attendance alert to 5 days
+when clicking Attendance, open into new tab
