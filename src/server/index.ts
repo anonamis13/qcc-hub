@@ -2541,6 +2541,8 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
             document.getElementById('attendanceChart').style.display = 'block';
             
             // Prepare data for the chart
+            const isFamilyGroup = ${('familyGroup' in attendanceData.overall_statistics)};
+            
             const chartData = ${JSON.stringify(attendanceData.events
               .filter(event => !event.event.canceled && event.attendance_summary.present_count > 0)
               .sort((a, b) => new Date(a.event.date).getTime() - new Date(b.event.date).getTime())
@@ -2552,6 +2554,39 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
                 rawDate: event.event.date
               }))
             )};
+            
+            // For family groups, calculate point colors based on meeting type
+            let pointColors = null;
+            if (isFamilyGroup) {
+              // Group events by month to determine position
+              const eventsByMonth = new Map();
+              const allEvents = ${JSON.stringify(attendanceData.events
+                .filter(event => new Date(event.event.date) <= new Date())
+                .sort((a, b) => new Date(a.event.date).getTime() - new Date(b.event.date).getTime())
+              )};
+              
+              allEvents.forEach(event => {
+                const eventDate = new Date(event.event.date);
+                const monthKey = \`\${eventDate.getFullYear()}-\${String(eventDate.getMonth() + 1).padStart(2, '0')}\`;
+                if (!eventsByMonth.has(monthKey)) {
+                  eventsByMonth.set(monthKey, []);
+                }
+                eventsByMonth.get(monthKey).push(event);
+              });
+              
+              // Calculate colors for chart data points
+              pointColors = chartData.map(item => {
+                const eventDate = new Date(item.rawDate);
+                const monthKey = \`\${eventDate.getFullYear()}-\${String(eventDate.getMonth() + 1).padStart(2, '0')}\`;
+                const monthEvents = eventsByMonth.get(monthKey) || [];
+                const position = monthEvents.findIndex(e => new Date(e.event.date).getTime() === eventDate.getTime());
+                
+                if (position === 0) return '#c2185b'; // Moms - pink
+                else if (position === 1) return '#1976d2'; // Dads - blue  
+                else if (position === 2) return '#388e3c'; // Family - green
+                else return '#007bff'; // Default blue
+              });
+            }
 
             // Calculate year boundaries for vertical lines
             const yearBoundaries = [];
@@ -2599,6 +2634,9 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
                     data: chartData.map(item => item.attendance),
                     borderColor: '#007bff',
                     backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                    pointBackgroundColor: pointColors || '#007bff',
+                    pointBorderColor: pointColors || '#007bff',
+                    pointRadius: 3.5,
                     fill: true,
                     tension: 0.4
                   },

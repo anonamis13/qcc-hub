@@ -10,7 +10,6 @@ multi-select groups to show data on home page
 compare graphs function?
 month-over-month and year-over-year percentage
 YA groups functionality
-differentiate dads/moms/family weeks on individual group page
 attendance reminder sent button (or auto-notify)
 missing persons report (data point on graph show names of missing members?)
 
@@ -28,3 +27,4 @@ nightly auto-refresh
 enhanced chart tooltip reporting
 extend missed attendance alert to 5 days
 when clicking Attendance, open into new tab
+differentiate dads/moms/family weeks on individual group page
