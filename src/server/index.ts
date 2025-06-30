@@ -1104,6 +1104,40 @@ app.get('', async (req, res) => {
               border: 5px solid transparent;
               border-right-color: #333;
             }
+            .date-range {
+              font-size: 14px;
+              color: #666;
+              margin-left: auto;
+            }
+            .meeting-type {
+              display: inline-block;
+              padding: 4px 8px;
+              border-radius: 4px;
+              font-size: 12px;
+              font-weight: bold;
+              text-align: center;
+              min-width: 50px;
+            }
+            .meeting-type.moms {
+              background-color: #ffebee;
+              color: #c2185b;
+              border: 1px solid #f8bbd9;
+            }
+            .meeting-type.dads {
+              background-color: #e3f2fd;
+              color: #1976d2;
+              border: 1px solid #90caf9;
+            }
+            .meeting-type.family {
+              background-color: #e8f5e8;
+              color: #388e3c;
+              border: 1px solid #a5d6a7;
+            }
+            .meeting-type.other {
+              background-color: #f5f5f5;
+              color: #666;
+              border: 1px solid #ddd;
+            }
           </style>
         </head>
         <body>
@@ -2288,6 +2322,35 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
               color: #666;
               margin-left: auto;
             }
+            .meeting-type {
+              display: inline-block;
+              padding: 4px 8px;
+              border-radius: 4px;
+              font-size: 12px;
+              font-weight: bold;
+              text-align: center;
+              min-width: 50px;
+            }
+            .meeting-type.moms {
+              background-color: #ffebee;
+              color: #c2185b;
+              border: 1px solid #f8bbd9;
+            }
+            .meeting-type.dads {
+              background-color: #e3f2fd;
+              color: #1976d2;
+              border: 1px solid #90caf9;
+            }
+            .meeting-type.family {
+              background-color: #e8f5e8;
+              color: #388e3c;
+              border: 1px solid #a5d6a7;
+            }
+            .meeting-type.other {
+              background-color: #f5f5f5;
+              color: #666;
+              border: 1px solid #ddd;
+            }
           </style>
         </head>
         <body>
@@ -2386,6 +2449,7 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
               <thead>
                 <tr>
                   <th>Date</th>
+                  ${('familyGroup' in attendanceData.overall_statistics) ? '<th>Meeting Type</th>' : ''}
                   <th>PCO Link</th>
                   <th>Members</th>
                   <th>Visitors</th>
@@ -2395,35 +2459,75 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
                 </tr>
               </thead>
               <tbody>
-                ${attendanceData.events
-                  .filter(event => new Date(event.event.date) <= new Date()) // Only show past/today events
-                  .sort((a, b) => new Date(b.event.date).getTime() - new Date(a.event.date).getTime())
-                  .map(event => {
-                    const rate = event.attendance_summary.attendance_rate;
-                    let rateClass = 'attendance-poor';
-                    if (rate >= 70) rateClass = 'attendance-good';
-                    else if (rate >= 50) rateClass = 'attendance-warning';
+                ${(() => {
+                  const isFamilyGroup = 'familyGroup' in attendanceData.overall_statistics;
+                  
+                  // For family groups, we need to calculate meeting types based on position within month
+                  let eventsByMonth = new Map();
+                  if (isFamilyGroup) {
+                    // Group all past events by month to determine position
+                    const allPastEvents = attendanceData.events
+                      .filter(event => new Date(event.event.date) <= new Date())
+                      .sort((a, b) => new Date(a.event.date).getTime() - new Date(b.event.date).getTime());
                     
-                    const rowClass = event.event.canceled ? 'canceled-event' : '';
-                    const eventUrl = 'https://groups.planningcenteronline.com/groups/' + groupId + '/events/' + event.event.id;
+                    allPastEvents.forEach(event => {
+                      const eventDate = new Date(event.event.date);
+                      const monthKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}`;
+                      
+                      if (!eventsByMonth.has(monthKey)) {
+                        eventsByMonth.set(monthKey, []);
+                      }
+                      eventsByMonth.get(monthKey).push(event);
+                    });
+                  }
+                  
+                  // Function to get meeting type for family groups
+                  const getMeetingType = (event: any) => {
+                    if (!isFamilyGroup) return { text: '', cssClass: '' };
                     
-                    return '<tr class="' + rowClass + '">' +
-                           '<td>' +
-                           formatDate(event.event.date) +
-                           (event.event.canceled ? '<span class="canceled-label"> (CANCELED)</span>' : '') +
-                           '</td>' +
-                           '<td>' +
-                           '<a target="_blank" rel="noopener noreferrer" href="' + eventUrl + '" rel="noopener noreferrer" class="' + rowClass + '">Attendance</a>' +
-                           '</td>' +
-                           '<td>' + event.attendance_summary.present_members + '</td>' +
-                           '<td>' + (event.attendance_summary.present_visitors > 0 ? 
-                                   '<span class="visitor-count">+' + event.attendance_summary.present_visitors + '</span>' : 
-                                   '0') + '</td>' +
-                           '<td>' + event.attendance_summary.present_count + '</td>' +
-                           '<td>' + event.attendance_summary.total_count + '</td>' +
-                           '<td class="' + rateClass + '">' + rate + '%</td>' +
-                           '</tr>';
-                  }).join('')}
+                    const eventDate = new Date(event.event.date);
+                    const monthKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}`;
+                    const monthEvents = eventsByMonth.get(monthKey) || [];
+                    const position = monthEvents.findIndex((e: any) => e.event.id === event.event.id);
+                    
+                    if (position === 0) return { text: 'Moms', cssClass: 'moms' };
+                    else if (position === 1) return { text: 'Dads', cssClass: 'dads' };
+                    else if (position === 2) return { text: 'Family', cssClass: 'family' };
+                    else return { text: `${position + 1}th`, cssClass: 'other' };
+                  };
+                  
+                  return attendanceData.events
+                    .filter(event => new Date(event.event.date) <= new Date()) // Only show past/today events
+                    .sort((a, b) => new Date(b.event.date).getTime() - new Date(a.event.date).getTime())
+                    .map(event => {
+                      const rate = event.attendance_summary.attendance_rate;
+                      let rateClass = 'attendance-poor';
+                      if (rate >= 70) rateClass = 'attendance-good';
+                      else if (rate >= 50) rateClass = 'attendance-warning';
+                      
+                      const rowClass = event.event.canceled ? 'canceled-event' : '';
+                      const eventUrl = 'https://groups.planningcenteronline.com/groups/' + groupId + '/events/' + event.event.id;
+                      const meetingType = getMeetingType(event);
+                      
+                      return '<tr class="' + rowClass + '">' +
+                             '<td>' +
+                             formatDate(event.event.date) +
+                             (event.event.canceled ? '<span class="canceled-label"> (CANCELED)</span>' : '') +
+                             '</td>' +
+                             (isFamilyGroup ? '<td><span class="meeting-type ' + meetingType.cssClass + '">' + meetingType.text + '</span></td>' : '') +
+                             '<td>' +
+                             '<a target="_blank" rel="noopener noreferrer" href="' + eventUrl + '" rel="noopener noreferrer" class="' + rowClass + '">Attendance</a>' +
+                             '</td>' +
+                             '<td>' + event.attendance_summary.present_members + '</td>' +
+                             '<td>' + (event.attendance_summary.present_visitors > 0 ? 
+                                     '<span class="visitor-count">+' + event.attendance_summary.present_visitors + '</span>' : 
+                                     '0') + '</td>' +
+                             '<td>' + event.attendance_summary.present_count + '</td>' +
+                             '<td>' + event.attendance_summary.total_count + '</td>' +
+                             '<td class="' + rateClass + '">' + rate + '%</td>' +
+                             '</tr>';
+                    }).join('');
+                })()}
               </tbody>
             </table>
           </div>
