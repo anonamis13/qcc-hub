@@ -50,14 +50,14 @@ app.get('/api/group-stats/:groupId', async (req, res) => {
 // Helper function to check if a group needs attention for missing attendance
 function checkForMissingAttendance(events: any[]): boolean {
   const now = new Date();
-  const fiveDaysAgo = new Date(now.getTime() - (5 * 24 * 60 * 60 * 1000));
+  const sixDaysAgo = new Date(now.getTime() - (6 * 24 * 60 * 60 * 1000));
   
-  // Look for recent events (within last 5 days) that don't have attendance data
+  // Look for recent events (within last 6 days) that don't have attendance data
   const recentEventsNeedingAttention = events.filter((event: any) => {
     const eventDate = new Date(event.event.date);
     
-    // Only check events from the last 5 days
-    if (eventDate < fiveDaysAgo || eventDate > now) {
+    // Only check events from the last 6 days
+    if (eventDate < sixDaysAgo || eventDate > now) {
       return false;
     }
     

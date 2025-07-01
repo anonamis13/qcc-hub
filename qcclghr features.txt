@@ -5,7 +5,6 @@ eventually coaches will use
 Upcoming Features:
 
 home page sort function (group type, attendance rate, group size)
-last 30 days, number of people who have left/joined a group
 multi-select groups to show data on home page
 compare graphs function?
 month-over-month and year-over-year percentage
@@ -28,3 +27,4 @@ enhanced chart tooltip reporting
 extend missed attendance alert to 5 days
 when clicking Attendance, open into new tab
 differentiate dads/moms/family weeks on individual group page
+last 30 days, number of people who have left/joined a group
