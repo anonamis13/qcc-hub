@@ -1394,6 +1394,12 @@ app.get('', async (req, res) => {
                 toggleContainer.style.display = 'none';
               }
               
+              // Hide membership changes container while refreshing
+              const membershipChangesContainer = document.getElementById('membershipChangesContainer');
+              if (membershipChangesContainer) {
+                membershipChangesContainer.style.display = 'none';
+              }
+              
               // Hide chart container while loading
               const chartContainer = document.querySelector('.chart-container');
               if (chartContainer) {
@@ -1620,6 +1626,12 @@ app.get('', async (req, res) => {
                   toggleContainer.style.display = 'flex';
                 }
                 
+                // Show membership changes container now that data is loaded
+                const membershipChangesContainer = document.getElementById('membershipChangesContainer');
+                if (membershipChangesContainer) {
+                  membershipChangesContainer.style.display = 'block';
+                }
+                
                 // Show chart container now that data is loaded
                 if (chartContainer) {
                   chartContainer.style.display = 'block';
@@ -1725,6 +1737,12 @@ app.get('', async (req, res) => {
               const toggleContainer = document.getElementById('toggleContainer');
               if (toggleContainer) {
                 toggleContainer.style.display = 'flex';
+              }
+              
+              // Show membership changes container now that we have data
+              const membershipChangesContainer = document.getElementById('membershipChangesContainer');
+              if (membershipChangesContainer) {
+                membershipChangesContainer.style.display = 'block';
               }
               
               groupList.innerHTML = result.data
