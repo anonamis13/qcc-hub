@@ -274,22 +274,61 @@ const isFamilyGroup = async (groupId: string): Promise<boolean> => {
   }
 };
 
+// Helper function to extract metadata from group tags
+const extractGroupMetadata = (tags: PCOTag[]) => {
+  const metadata = {
+    groupType: 'Unknown',
+    meetingDay: 'Unknown',
+    allTags: tags.map(tag => ({ id: tag.id, name: tag.attributes.name }))
+  };
+  
+  // Extract group type from tags
+  const groupTypeTag = tags.find(tag => 
+    tag.attributes.name === 'Family' || 
+    tag.attributes.name === 'Stage of Life' || 
+    tag.attributes.name === 'Location Based'
+  );
+  if (groupTypeTag) {
+    metadata.groupType = groupTypeTag.attributes.name;
+  }
+  
+  // Extract meeting day from tags
+  const meetingDayTag = tags.find(tag => 
+    tag.attributes.name === 'Wednesday' || 
+    tag.attributes.name === 'Thursday'
+  );
+  if (meetingDayTag) {
+    metadata.meetingDay = meetingDayTag.attributes.name;
+  }
+  
+  return metadata;
+};
+
 export const getPeopleGroups = async (groupTypeId?: number, forceRefresh: boolean = false) => {
   try {
     // Get all groups with pagination
     const allGroups = await getAllGroups(forceRefresh);
     
     if (!groupTypeId) {
-      // Check each group for Family Group status
-      const groupsWithFamilyStatus = await Promise.all(
-        allGroups.map(async (group) => ({
-          ...group,
-          isFamilyGroup: await isFamilyGroup(group.id)
-        }))
+      // Check each group for Family Group status and get tags
+      const groupsWithMetadata = await Promise.all(
+        allGroups.map(async (group) => {
+          const [isFamilyGroupResult, tags] = await Promise.all([
+            isFamilyGroup(group.id),
+            getGroupTags(group.id, forceRefresh)
+          ]);
+          
+          return {
+            ...group,
+            isFamilyGroup: isFamilyGroupResult,
+            tags: tags,
+            metadata: extractGroupMetadata(tags)
+          };
+        })
       );
       
       return { 
-        data: groupsWithFamilyStatus
+        data: groupsWithMetadata
       };
     }
 
@@ -298,16 +337,25 @@ export const getPeopleGroups = async (groupTypeId?: number, forceRefresh: boolea
       group.relationships.group_type.data.id === groupTypeId.toString()
     );
     
-    // Check each filtered group for Family Group status
-    const groupsWithFamilyStatus = await Promise.all(
-      filteredGroups.map(async (group) => ({
-        ...group,
-        isFamilyGroup: await isFamilyGroup(group.id)
-      }))
+    // Check each filtered group for Family Group status and get tags
+    const groupsWithMetadata = await Promise.all(
+      filteredGroups.map(async (group) => {
+        const [isFamilyGroupResult, tags] = await Promise.all([
+          isFamilyGroup(group.id),
+          getGroupTags(group.id, forceRefresh)
+        ]);
+        
+        return {
+          ...group,
+          isFamilyGroup: isFamilyGroupResult,
+          tags: tags,
+          metadata: extractGroupMetadata(tags)
+        };
+      })
     );
     
     return {
-      data: groupsWithFamilyStatus,
+      data: groupsWithMetadata,
       filtered_count: filteredGroups.length,
       total_count: allGroups.length
     };

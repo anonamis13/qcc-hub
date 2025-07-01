@@ -1256,6 +1256,8 @@ app.get('', async (req, res) => {
               </span>
             </div>
             
+
+            
             <div class="membership-changes-container" id="membershipChangesContainer" style="display: none;">
               <button id="membershipMainToggleBtn" style="width: 100%; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px 20px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.3s ease;" onmouseover="this.style.borderColor='#007bff'; this.style.backgroundColor='#f8f9fa';" onmouseout="this.style.borderColor='#ddd'; this.style.backgroundColor='white';">
                 <div style="display: flex; align-items: center; gap: 15px;">
@@ -1292,6 +1294,89 @@ app.get('', async (req, res) => {
               <canvas id="aggregateChart"></canvas>
             </div>
             
+            <div class="sort-filter-container" id="sortFilterContainer" style="display: none;">
+              <button id="sortFilterToggleBtn" style="width: 100%; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px 20px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.3s ease;" onmouseover="this.style.borderColor='#007bff'; this.style.backgroundColor='#f8f9fa';" onmouseout="this.style.borderColor='#ddd'; this.style.backgroundColor='white';">
+                <div style="display: flex; align-items: center; gap: 15px;">
+                  <h3 style="margin: 0; color: #333; font-weight: 500;">Sort & Filter Groups</h3>
+                  <div id="sortFilterSummary" style="display: flex; gap: 15px; font-size: 14px; color: #666;">
+                    <span>Click to customize view</span>
+                  </div>
+                </div>
+                <span id="sortFilterToggleIcon" style="color: #666; font-size: 16px;">▼</span>
+              </button>
+              
+              <div id="sortFilterExpandedContent" style="display: none; background-color: white; padding: 20px; border-radius: 8px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-top: none; margin-top: -20px; border-top-left-radius: 0; border-top-right-radius: 0;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px;">
+                  <!-- Sort Section -->
+                  <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #007bff;">
+                    <h4 style="margin: 0 0 15px 0; color: #007bff; font-weight: 500;">Sort Groups</h4>
+                    <select id="sortSelect" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; background: white; font-size: 14px;">
+                      <option value="name">Group Name (A-Z)</option>
+                      <option value="attendance">Average Attendance</option>
+                      <option value="members">Average Membership</option>
+                      <option value="rate">Attendance Rate</option>
+                      <option value="events">Number of Events</option>
+                      <option value="parents-rate">Parents Nights Rate (Family Groups)</option>
+                      <option value="family-rate">Family Nights Rate (Family Groups)</option>
+                    </select>
+                    <div style="margin-top: 10px;">
+                      <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; color: #666;">
+                        <input type="checkbox" id="sortDescending" style="margin: 0;">
+                        Descending order (highest first)
+                      </label>
+                    </div>
+                  </div>
+                  
+                  <!-- Filter Section -->
+                  <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px;">
+                      <h4 style="margin: 0; color: #28a745; font-weight: 500;">Filter Groups</h4>
+                      <button id="clearFiltersBtn" title="Clear All Filters" style="background: #dc3545; color: white; border: none; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; font-size: 14px; font-weight: bold; display: flex; align-items: center; justify-content: center; transition: background-color 0.3s ease;" onmouseover="this.style.backgroundColor='#c82333';" onmouseout="this.style.backgroundColor='#dc3545';">
+                        X
+                      </button>
+                    </div>
+                    
+                    <!-- Filters in two columns -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                      <!-- Group Type Filter -->
+                      <div>
+                        <label style="display: block; margin-bottom: 5px; font-weight: 500; color: #333;">Group Type:</label>
+                        <div style="display: flex; flex-direction: column; gap: 5px;">
+                          <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                            <input type="checkbox" id="filterFamily" checked style="margin: 0;">
+                            Family Groups
+                          </label>
+                          <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                            <input type="checkbox" id="filterStageOfLife" checked style="margin: 0;">
+                            Stage of Life Groups
+                          </label>
+                          <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                            <input type="checkbox" id="filterLocationBased" checked style="margin: 0;">
+                            Location Based Groups
+                          </label>
+                        </div>
+                      </div>
+                      
+                      <!-- Meeting Day Filter -->
+                      <div>
+                        <label style="display: block; margin-bottom: 5px; font-weight: 500; color: #333;">Meeting Day:</label>
+                        <div style="display: flex; flex-direction: column; gap: 5px;">
+                          <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                            <input type="checkbox" id="filterWednesday" checked style="margin: 0;">
+                            Wednesday
+                          </label>
+                          <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                            <input type="checkbox" id="filterThursday" checked style="margin: 0;">
+                            Thursday
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
             <div id="initialMessage" class="initial-message">
               Loading...
             </div>
@@ -1307,6 +1392,307 @@ app.get('', async (req, res) => {
 
             // Add a global variable to track force refresh state
             let forceRefreshParam = '';
+            
+            // Global variables for sorting and filtering
+            let allGroupsData = [];
+            let currentFilters = {
+              groupTypes: ['Family', 'Stage of Life', 'Location Based'],
+              meetingDays: ['Wednesday', 'Thursday']
+            };
+            let currentSort = {
+              field: 'name',
+              descending: false
+            };
+
+            // Sort and Filter Functions
+            function setupSortFilterToggle() {
+              console.log('Setting up sort/filter toggle...');
+              const sortFilterToggleBtn = document.getElementById('sortFilterToggleBtn');
+              const sortFilterToggleIcon = document.getElementById('sortFilterToggleIcon');
+              const sortFilterExpandedContent = document.getElementById('sortFilterExpandedContent');
+              
+              console.log('Elements found:', {
+                sortFilterToggleBtn: !!sortFilterToggleBtn,
+                sortFilterToggleIcon: !!sortFilterToggleIcon,
+                sortFilterExpandedContent: !!sortFilterExpandedContent
+              });
+              
+              if (sortFilterToggleBtn && sortFilterToggleIcon && sortFilterExpandedContent) {
+                console.log('Adding click event listener to sort/filter toggle');
+                sortFilterToggleBtn.addEventListener('click', function() {
+                  console.log('Sort/filter toggle clicked');
+                  const isVisible = sortFilterExpandedContent.style.display === 'block';
+                  
+                  if (isVisible) {
+                    sortFilterExpandedContent.style.display = 'none';
+                    sortFilterToggleIcon.textContent = '▼';
+                    sortFilterToggleBtn.style.borderBottomLeftRadius = '8px';
+                    sortFilterToggleBtn.style.borderBottomRightRadius = '8px';
+                  } else {
+                    sortFilterExpandedContent.style.display = 'block';
+                    sortFilterToggleIcon.textContent = '▲';
+                    sortFilterToggleBtn.style.borderBottomLeftRadius = '0';
+                    sortFilterToggleBtn.style.borderBottomRightRadius = '0';
+                  }
+                });
+              } else {
+                console.error('Sort/filter toggle elements not found!');
+              }
+            }
+            
+            function setupSortFilterControls() {
+              // Sort controls
+              const sortSelect = document.getElementById('sortSelect');
+              const sortDescending = document.getElementById('sortDescending');
+              
+              if (sortSelect) {
+                sortSelect.addEventListener('change', function() {
+                  currentSort.field = this.value;
+                  applyCurrentSortAndFilter();
+                });
+              }
+              
+              if (sortDescending) {
+                sortDescending.addEventListener('change', function() {
+                  currentSort.descending = this.checked;
+                  applyCurrentSortAndFilter();
+                });
+              }
+              
+              // Filter controls
+              const filterCheckboxes = [
+                'filterFamily', 'filterStageOfLife', 'filterLocationBased',
+                'filterWednesday', 'filterThursday'
+              ];
+              
+              filterCheckboxes.forEach(id => {
+                const checkbox = document.getElementById(id);
+                if (checkbox) {
+                  checkbox.addEventListener('change', function() {
+                    updateCurrentFilters();
+                    applyCurrentSortAndFilter();
+                  });
+                }
+              });
+              
+              // Clear filters button
+              const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+              if (clearFiltersBtn) {
+                clearFiltersBtn.addEventListener('click', function() {
+                  // Reset all filters
+                  document.getElementById('filterFamily').checked = true;
+                  document.getElementById('filterStageOfLife').checked = true;
+                  document.getElementById('filterLocationBased').checked = true;
+                  document.getElementById('filterWednesday').checked = true;
+                  document.getElementById('filterThursday').checked = true;
+                  
+                  updateCurrentFilters();
+                  applyCurrentSortAndFilter();
+                });
+              }
+            }
+            
+            function updateCurrentFilters() {
+              currentFilters.groupTypes = [];
+              currentFilters.meetingDays = [];
+              
+              if (document.getElementById('filterFamily').checked) currentFilters.groupTypes.push('Family');
+              if (document.getElementById('filterStageOfLife').checked) currentFilters.groupTypes.push('Stage of Life');
+              if (document.getElementById('filterLocationBased').checked) currentFilters.groupTypes.push('Location Based');
+              
+              if (document.getElementById('filterWednesday').checked) currentFilters.meetingDays.push('Wednesday');
+              if (document.getElementById('filterThursday').checked) currentFilters.meetingDays.push('Thursday');
+            }
+            
+            function applyCurrentSortAndFilter() {
+              if (allGroupsData.length === 0) return;
+              
+              // Apply filters first
+              let filteredGroups = allGroupsData.filter(group => {
+                const groupType = group.metadata?.groupType || 'Unknown';
+                const meetingDay = group.metadata?.meetingDay || 'Unknown';
+                
+                // For group types: include if type is selected, or if type is Unknown (always include unknown)
+                const matchesGroupType = currentFilters.groupTypes.includes(groupType) || groupType === 'Unknown';
+                
+                // For meeting days: include if day is selected, or if day is Unknown (always include unknown)
+                const matchesMeetingDay = currentFilters.meetingDays.includes(meetingDay) || meetingDay === 'Unknown';
+                
+                return matchesGroupType && matchesMeetingDay;
+              });
+              
+              // Apply sorting
+              filteredGroups.sort((a, b) => {
+                let aValue, bValue;
+                
+                switch (currentSort.field) {
+                  case 'name':
+                    aValue = a.attributes.name.toLowerCase();
+                    bValue = b.attributes.name.toLowerCase();
+                    return currentSort.descending ? bValue.localeCompare(aValue) : aValue.localeCompare(bValue);
+                  
+                  case 'attendance':
+                    aValue = a.stats?.average_attendance || 0;
+                    bValue = b.stats?.average_attendance || 0;
+                    break;
+                  
+                  case 'members':
+                    aValue = a.stats?.average_members || 0;
+                    bValue = b.stats?.average_members || 0;
+                    break;
+                  
+                  case 'rate':
+                    aValue = a.stats?.overall_attendance_rate || 0;
+                    bValue = b.stats?.overall_attendance_rate || 0;
+                    break;
+                  
+                  case 'events':
+                    aValue = a.stats?.events_with_attendance || 0;
+                    bValue = b.stats?.events_with_attendance || 0;
+                    break;
+                  
+                  case 'parents-rate':
+                    aValue = (a.stats?.familyGroup?.parentsNightsRate) || 0;
+                    bValue = (b.stats?.familyGroup?.parentsNightsRate) || 0;
+                    break;
+                  
+                  case 'family-rate':
+                    aValue = (a.stats?.familyGroup?.familyNightsRate) || 0;
+                    bValue = (b.stats?.familyGroup?.familyNightsRate) || 0;
+                    break;
+                  
+                  default:
+                    return 0;
+                }
+                
+                if (currentSort.descending) {
+                  return bValue - aValue;
+                } else {
+                  return aValue - bValue;
+                }
+              });
+              
+              // Update the display
+              displayFilteredGroups(filteredGroups);
+              updateSortFilterSummary(filteredGroups.length);
+              
+              // Update the chart with filtered data
+              updateChartWithFilteredGroups(filteredGroups);
+            }
+            
+            function displayFilteredGroups(groups) {
+              const groupList = document.getElementById('groupList');
+              const groupCount = document.getElementById('groupCount');
+              
+              if (groupList) {
+                const groupsHtml = groups.map(group => {
+                  let statsHtml = '';
+                  
+                  if (group.stats) {
+                    const stats = group.stats;
+                    let rateClass = '';
+                    if (stats.overall_attendance_rate >= 70) rateClass = 'attendance-good';
+                    else if (stats.overall_attendance_rate >= 50) rateClass = 'attendance-warning';
+                    else if (stats.overall_attendance_rate > 0) rateClass = 'attendance-poor';
+
+                    if (group.isFamilyGroup && stats.familyGroup) {
+                      // Family Group specific stats
+                      const getColorClass = (rate) => {
+                        if (rate >= 70) return 'attendance-good';
+                        else if (rate >= 50) return 'attendance-warning';
+                        else if (rate > 0) return 'attendance-poor';
+                        return '';
+                      };
+                      
+                      const parentsRateClass = getColorClass(stats.familyGroup.parentsNightsRate || 0);
+                      const familyRateClass = getColorClass(stats.familyGroup.familyNightsRate || 0);
+                      
+                      statsHtml = 
+                        '<div class="stat">' +
+                          '<div class="stat-value">' + (stats.familyGroup.parentsNightsAttendance || 0) + '</div>' +
+                          '<div class="stat-label">Parents Nights Avg.</div>' +
+                        '</div>' +
+                        '<div class="stat">' +
+                          '<div class="stat-value">' + (stats.familyGroup.familyNightsAttendance || 0) + '</div>' +
+                          '<div class="stat-label">Family Nights Avg.</div>' +
+                        '</div>' +
+                        '<div class="stat">' +
+                          '<div class="stat-value">' + (stats.average_members || 0) + '</div>' +
+                          '<div class="stat-label">Avg. Membership</div>' +
+                        '</div>' +
+                        '<div class="stat">' +
+                          '<div class="stat-value ' + parentsRateClass + '">' + (stats.familyGroup.parentsNightsRate || 0) + '%</div>' +
+                          '<div class="stat-label">Parents Nights %</div>' +
+                        '</div>' +
+                        '<div class="stat">' +
+                          '<div class="stat-value ' + familyRateClass + '">' + (stats.familyGroup.familyNightsRate || 0) + '%</div>' +
+                          '<div class="stat-label">Family Nights %</div>' +
+                        '</div>' +
+                        '<div class="stat">' +
+                          '<div class="stat-value">' + (stats.events_with_attendance || 0) + '</div>' +
+                          '<div class="stat-label">Events</div>' +
+                        '</div>';
+                    } else {
+                      // Regular group stats
+                      statsHtml = 
+                        '<div class="stat">' +
+                          '<div class="stat-value">' + (stats.average_attendance || 0) + '</div>' +
+                          '<div class="stat-label">Avg. Attendance</div>' +
+                        '</div>' +
+                        '<div class="stat">' +
+                          '<div class="stat-value">' + (stats.average_members || 0) + '</div>' +
+                          '<div class="stat-label">Avg. Membership</div>' +
+                        '</div>' +
+                        '<div class="stat">' +
+                          '<div class="stat-value ' + rateClass + '">' + (stats.overall_attendance_rate || 0) + '%</div>' +
+                          '<div class="stat-label">Attendance Rate</div>' +
+                        '</div>' +
+                        '<div class="stat">' +
+                          '<div class="stat-value">' + (stats.events_with_attendance || 0) + '</div>' +
+                          '<div class="stat-label">Events</div>' +
+                        '</div>';
+                    }
+                  } else {
+                    statsHtml = '<div class="loading"></div>';
+                  }
+
+                                      return '<li class="group-item' + (group.isFamilyGroup ? ' family-group' : '') + 
+                         (group.stats?.needsAttention ? ' needs-attention' : '') + '" id="group-' + group.id + '"' +
+                         (group.stats?.needsAttention ? ' title="Recent event missing attendance data"' : '') + '>' +
+                    '<a href="/groups/' + group.id + '/attendance">' +
+                      group.attributes.name +
+                    '</a>' +
+                    '<div class="stats-container" id="stats-' + group.id + '">' +
+                      statsHtml +
+                    '</div>' +
+                  '</li>';
+                }).join('');
+                
+                groupList.innerHTML = groupsHtml;
+              }
+              
+              if (groupCount) {
+                groupCount.textContent = \`\${groups.length} groups shown (of \${allGroupsData.length} total).\`;
+              }
+            }
+            
+            function updateSortFilterSummary(filteredCount) {
+              const sortFilterSummary = document.getElementById('sortFilterSummary');
+              if (sortFilterSummary) {
+                const totalCount = allGroupsData.length;
+                if (filteredCount === totalCount) {
+                  sortFilterSummary.innerHTML = '<span>Showing all groups</span>';
+                } else {
+                  sortFilterSummary.innerHTML = \`<span>Showing \${filteredCount} of \${totalCount} groups</span>\`;
+                }
+              }
+            }
+            
+            function updateChartWithFilteredGroups(filteredGroups) {
+              // For now, we'll keep the existing chart behavior
+              // In the future, we can modify the aggregate endpoint to accept group filters
+              console.log('Chart filtering with', filteredGroups.length, 'groups - feature coming soon');
+            }
 
             function formatLastUpdateTime(timestamp) {
               if (!timestamp) return '';
@@ -1392,6 +1778,12 @@ app.get('', async (req, res) => {
               const toggleContainer = document.getElementById('toggleContainer');
               if (toggleContainer) {
                 toggleContainer.style.display = 'none';
+              }
+              
+              // Hide sort/filter container while refreshing
+              const sortFilterContainer = document.getElementById('sortFilterContainer');
+              if (sortFilterContainer) {
+                sortFilterContainer.style.display = 'none';
               }
               
               // Hide membership changes container while refreshing
@@ -1626,6 +2018,12 @@ app.get('', async (req, res) => {
                   toggleContainer.style.display = 'flex';
                 }
                 
+                // Show sort/filter container now that data is loaded
+                const sortFilterContainer = document.getElementById('sortFilterContainer');
+                if (sortFilterContainer) {
+                  sortFilterContainer.style.display = 'block';
+                }
+                
                 // Show membership changes container now that data is loaded
                 const membershipChangesContainer = document.getElementById('membershipChangesContainer');
                 if (membershipChangesContainer) {
@@ -1636,6 +2034,12 @@ app.get('', async (req, res) => {
                 if (chartContainer) {
                   chartContainer.style.display = 'block';
                 }
+                
+                // Setup sort/filter functionality after containers are shown
+                setTimeout(() => {
+                  setupSortFilterToggle();
+                  setupSortFilterControls();
+                }, 100);
                 
                 await updateLastUpdateTime();
                 clearInterval(timerInterval); // Stop the timer
@@ -1728,6 +2132,12 @@ app.get('', async (req, res) => {
             }
 
             function displayGroups(result) {
+              // Store the groups data globally for sorting/filtering
+              allGroupsData = result.data.map(group => ({
+                ...group,
+                stats: null // Will be populated as stats load
+              }));
+              
               groupCount.textContent = \`\${result.filtered_count} total groups.\`;
               groupCount.style.display = 'block';
               initialMessage.style.display = 'none';
@@ -1739,24 +2149,26 @@ app.get('', async (req, res) => {
                 toggleContainer.style.display = 'flex';
               }
               
+              // Show sort/filter container now that we have data
+              const sortFilterContainer = document.getElementById('sortFilterContainer');
+              if (sortFilterContainer) {
+                sortFilterContainer.style.display = 'block';
+              }
+              
               // Show membership changes container now that we have data
               const membershipChangesContainer = document.getElementById('membershipChangesContainer');
               if (membershipChangesContainer) {
                 membershipChangesContainer.style.display = 'block';
               }
               
-              groupList.innerHTML = result.data
-                .sort((a, b) => a.attributes.name.localeCompare(b.attributes.name))
-                .map(group => \`
-                  <li class="group-item\${group.isFamilyGroup ? ' family-group' : ''}" id="group-\${group.id}">
-                    <a href="/groups/\${group.id}/attendance">
-                      \${group.attributes.name}
-                    </a>
-                    <div class="stats-container">
-                      <div class="loading"></div>
-                    </div>
-                  </li>
-                \`).join('');
+              // Initial display with default sort (by name)
+              applyCurrentSortAndFilter();
+              
+              // Setup sort/filter functionality after elements are in DOM
+              setTimeout(() => {
+                setupSortFilterToggle();
+                setupSortFilterControls();
+              }, 100);
 
               loadDataBtn.innerHTML = '<span>Refresh Data</span><span class="est-time">est. time ≈ 3 min.</span>';
               
@@ -1782,6 +2194,12 @@ app.get('', async (req, res) => {
                 if (!response.ok) throw new Error('Failed to fetch stats');
                 const stats = await response.json();
                 
+                // Update the stored group data with stats
+                const groupIndex = allGroupsData.findIndex(g => g.id === groupId);
+                if (groupIndex !== -1) {
+                  allGroupsData[groupIndex].stats = stats;
+                }
+                
                 let rateClass = '';
                 if (stats.overall_attendance_rate >= 70) rateClass = 'attendance-good';
                 else if (stats.overall_attendance_rate >= 50) rateClass = 'attendance-warning';
@@ -1794,8 +2212,10 @@ app.get('', async (req, res) => {
                   // Update attention styling
                   if (stats.needsAttention) {
                     groupElement.classList.add('needs-attention');
+                    groupElement.setAttribute('title', 'Recent event missing attendance data');
                   } else {
                     groupElement.classList.remove('needs-attention');
+                    groupElement.removeAttribute('title');
                   }
                   
                   if (isFamilyGroup && stats.familyGroup) {
@@ -2201,43 +2621,7 @@ app.get('', async (req, res) => {
               }
             });
 
-            // Add tooltip functionality for attention indicators
-            function setupAttentionTooltips() {
-              document.addEventListener('mouseover', function(e) {
-                const groupItem = e.target.closest('.group-item.needs-attention');
-                if (groupItem) {
-                  // Create tooltip
-                  const tooltip = document.createElement('div');
-                  tooltip.className = 'attention-tooltip';
-                  tooltip.textContent = 'Recent event missing attendance data';
-                  
-                  // Position tooltip
-                  const rect = groupItem.getBoundingClientRect();
-                  tooltip.style.position = 'fixed';
-                  tooltip.style.left = (rect.left + 20) + 'px';
-                  tooltip.style.top = (rect.top + rect.height / 2 - 15) + 'px';
-                  
-                  document.body.appendChild(tooltip);
-                  
-                  // Show tooltip after a brief delay
-                  setTimeout(() => tooltip.classList.add('show'), 100);
-                  
-                  // Store reference for cleanup
-                  groupItem._tooltip = tooltip;
-                }
-              });
-              
-              document.addEventListener('mouseout', function(e) {
-                const groupItem = e.target.closest('.group-item.needs-attention');
-                if (groupItem && groupItem._tooltip) {
-                  groupItem._tooltip.remove();
-                  delete groupItem._tooltip;
-                }
-              });
-            }
-            
-            // Initialize tooltips
-            setupAttentionTooltips();
+
 
             // Function to setup membership toggle functionality
             function setupMembershipToggle() {
