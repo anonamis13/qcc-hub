@@ -178,13 +178,63 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
     const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
     
+    // Parse filter parameters
+    // If no filters are provided, use defaults. If empty string is provided, use empty array (no groups)
+    const groupTypesFilter = req.query.groupTypes === '' ? [] : 
+                           req.query.groupTypes ? (req.query.groupTypes as string).split(',') : 
+                           ['Family', 'Stage of Life', 'Location Based'];
+    const meetingDaysFilter = req.query.meetingDays === '' ? [] : 
+                            req.query.meetingDays ? (req.query.meetingDays as string).split(',') : 
+                            ['Wednesday', 'Thursday'];
+    
+    console.log('Filter parameters received:', {
+      groupTypesQuery: req.query.groupTypes,
+      meetingDaysQuery: req.query.meetingDays,
+      groupTypesFilter,
+      meetingDaysFilter
+    });
+    
     // Get all groups first
     const groups = await getPeopleGroups(groupTypeId, forceRefresh);
     
-    // Get attendance data for each group
+    // Apply filters to groups
+    const filteredGroups = {
+      ...groups,
+      data: groups.data.filter(group => {
+        const groupType = group.metadata?.groupType || 'Unknown';
+        const meetingDay = group.metadata?.meetingDay || 'Unknown';
+        
+        // If no group types are selected, show no groups
+        if (groupTypesFilter.length === 0) {
+          return false;
+        }
+        
+        // If no meeting days are selected, show no groups
+        if (meetingDaysFilter.length === 0) {
+          return false;
+        }
+        
+        // For group types: include if type is selected, or if type is Unknown and at least one type is selected
+        const matchesGroupType = groupTypesFilter.includes(groupType) || 
+                               (groupType === 'Unknown' && groupTypesFilter.length > 0);
+        
+        // For meeting days: include if day is selected, or if day is Unknown and at least one day is selected
+        const matchesMeetingDay = meetingDaysFilter.includes(meetingDay) || 
+                                (meetingDay === 'Unknown' && meetingDaysFilter.length > 0);
+        
+        return matchesGroupType && matchesMeetingDay;
+      })
+    };
+    
+    // If no groups match the filters, return empty data immediately
+    if (filteredGroups.data.length === 0) {
+      return res.json([]);
+    }
+    
+    // Get attendance data for each filtered group
     // For aggregate calculations, we need some historical data to find fallback membership counts
     // Use current year + previous year to capture November 2024 data for early 2025 weeks
-    const attendancePromises = groups.data.map(async (group) => {
+    const attendancePromises = filteredGroups.data.map(async (group) => {
       const attendance = await getGroupAttendance(group.id, showAllEvents, forceRefresh);
       return {
         ...attendance,
@@ -298,7 +348,8 @@ app.get('/api/aggregate-attendance', async (req, res) => {
               
               // Track family vs non-family attendance
               // Find the corresponding group data to check if it's a family group
-              const correspondingGroup = groups.data.find(g => g.id === groupData.group_id);
+              // Since allGroupsAttendance was built from filteredGroups.data, we can find the group there
+              const correspondingGroup = filteredGroups.data.find(g => g.id === groupData.group_id);
               if (correspondingGroup && correspondingGroup.isFamilyGroup) {
                 existing.familyPresent += event.attendance_summary.present_members;
                 existing.familyVisitors += event.attendance_summary.present_visitors;
@@ -326,13 +377,26 @@ app.get('/api/aggregate-attendance', async (req, res) => {
       });
     });
     
-    // Filter out weeks with fewer than 5 groups having attendance
+    // Filter out weeks with insufficient group participation
+    // Check if we're using filters - if so, show all data regardless of group count
+    const isFiltered = groupTypesFilter.length < 3 || meetingDaysFilter.length < 2;
+    
     const validWeeks = new Set();
-    weekMap.forEach((weekData, weekKey) => {
-      if (weekData.groupsWithAttendance.size >= 5) {
-        validWeeks.add(weekKey);
-      }
-    });
+    if (isFiltered) {
+      // When filtered, include all weeks that have any attendance data
+      weekMap.forEach((weekData, weekKey) => {
+        if (weekData.groupsWithAttendance.size >= 1) {
+          validWeeks.add(weekKey);
+        }
+      });
+    } else {
+      // When showing all groups, maintain the 5-group minimum for statistical relevance
+      weekMap.forEach((weekData, weekKey) => {
+        if (weekData.groupsWithAttendance.size >= 5) {
+          validWeeks.add(weekKey);
+        }
+      });
+    }
     
     // Remove weeks with insufficient group participation
     weekMap.forEach((weekData, weekKey) => {
@@ -1512,11 +1576,23 @@ app.get('', async (req, res) => {
                 const groupType = group.metadata?.groupType || 'Unknown';
                 const meetingDay = group.metadata?.meetingDay || 'Unknown';
                 
-                // For group types: include if type is selected, or if type is Unknown (always include unknown)
-                const matchesGroupType = currentFilters.groupTypes.includes(groupType) || groupType === 'Unknown';
+                // If no group types are selected, show no groups
+                if (currentFilters.groupTypes.length === 0) {
+                  return false;
+                }
                 
-                // For meeting days: include if day is selected, or if day is Unknown (always include unknown)
-                const matchesMeetingDay = currentFilters.meetingDays.includes(meetingDay) || meetingDay === 'Unknown';
+                // If no meeting days are selected, show no groups
+                if (currentFilters.meetingDays.length === 0) {
+                  return false;
+                }
+                
+                // For group types: include if type is selected, or if type is Unknown and at least one type is selected
+                const matchesGroupType = currentFilters.groupTypes.includes(groupType) || 
+                                       (groupType === 'Unknown' && currentFilters.groupTypes.length > 0);
+                
+                // For meeting days: include if day is selected, or if day is Unknown and at least one day is selected
+                const matchesMeetingDay = currentFilters.meetingDays.includes(meetingDay) || 
+                                        (meetingDay === 'Unknown' && currentFilters.meetingDays.length > 0);
                 
                 return matchesGroupType && matchesMeetingDay;
               });
@@ -1689,9 +1765,31 @@ app.get('', async (req, res) => {
             }
             
             function updateChartWithFilteredGroups(filteredGroups) {
-              // For now, we'll keep the existing chart behavior
-              // In the future, we can modify the aggregate endpoint to accept group filters
-              console.log('Chart filtering with', filteredGroups.length, 'groups - feature coming soon');
+              // Update chart with filtered data
+              console.log('Updating chart with', filteredGroups.length, 'filtered groups');
+              
+              // Show loading indicator on chart
+              const chartLoading = document.getElementById('chartLoading');
+              const chartCanvas = document.getElementById('aggregateChart');
+              if (chartLoading && chartCanvas) {
+                chartLoading.style.display = 'flex';
+                chartLoading.innerHTML = '<div class="loading"></div><span>Updating chart with filters...</span>';
+                chartCanvas.style.display = 'none';
+              }
+              
+              // Build filter parameters from current filters
+              // Only pass parameters if filters are actually selected
+              const groupTypesParam = currentFilters.groupTypes.length > 0 ? currentFilters.groupTypes.join(',') : 'EMPTY';
+              const meetingDaysParam = currentFilters.meetingDays.length > 0 ? currentFilters.meetingDays.join(',') : 'EMPTY';
+              
+              console.log('Updating chart with filters:', {
+                groupTypesParam,
+                meetingDaysParam,
+                currentFilters
+              });
+              
+              // Reload aggregate data with filters
+              loadAggregateData(false, groupTypesParam, meetingDaysParam);
             }
 
             function formatLastUpdateTime(timestamp) {
@@ -2291,7 +2389,7 @@ app.get('', async (req, res) => {
             }
 
             // Add function to load and display aggregate data
-            async function loadAggregateData(forceRefresh = false) {
+            async function loadAggregateData(forceRefresh = false, groupTypesFilter = null, meetingDaysFilter = null) {
               const chartLoading = document.getElementById('chartLoading');
               const chartCanvas = document.getElementById('aggregateChart');
               const showAllYears = document.getElementById('showAllYears').checked;
@@ -2312,6 +2410,12 @@ app.get('', async (req, res) => {
                 const params = new URLSearchParams();
                 if (forceRefresh) params.set('forceRefresh', 'true');
                 if (showAllYears) params.set('showAll', 'true');
+                if (groupTypesFilter && groupTypesFilter !== 'EMPTY') params.set('groupTypes', groupTypesFilter);
+                if (meetingDaysFilter && meetingDaysFilter !== 'EMPTY') params.set('meetingDays', meetingDaysFilter);
+                
+                // Handle special case where we explicitly want empty results
+                if (groupTypesFilter === 'EMPTY') params.set('groupTypes', '');
+                if (meetingDaysFilter === 'EMPTY') params.set('meetingDays', '');
                 const queryString = params.toString();
                 const url = '/api/aggregate-attendance' + (queryString ? '?' + queryString : '');
                 
@@ -2350,6 +2454,89 @@ app.get('', async (req, res) => {
                 }
                 
                 const aggregateData = await response.json();
+                
+                console.log('Received aggregate data:', aggregateData);
+                
+                // Handle empty data case
+                if (!aggregateData || aggregateData.length === 0) {
+                  console.log('No aggregate data - showing empty chart');
+                  
+                  // Clear any existing chart
+                  if (window.aggregateChartInstance) {
+                    window.aggregateChartInstance.destroy();
+                  }
+                  
+                  // Show empty chart
+                  const ctx = document.getElementById('aggregateChart').getContext('2d');
+                  window.aggregateChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                      labels: [],
+                      datasets: [
+                        {
+                          label: 'Visitors + Members',
+                          data: [],
+                          borderColor: '#28a745',
+                          backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                          fill: true,
+                          tension: 0.4
+                        },
+                        {
+                          label: 'Members Present',
+                          data: [],
+                          borderColor: '#007bff',
+                          backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                          fill: true,
+                          tension: 0.4
+                        },
+                        {
+                          label: 'Total Members',
+                          data: [],
+                          borderColor: '#6c757d',
+                          backgroundColor: 'rgba(108, 117, 125, 0.1)',
+                          fill: true,
+                          tension: 0.4
+                        }
+                      ]
+                    },
+                    options: {
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      plugins: {
+                        title: {
+                          display: true,
+                          text: 'Weekly Life Groups Attendance Trends (Wed-Thu Combined)' + (showAllYears ? ' - All Years' : ' - Current Year') + 
+                                (groupTypesFilter || meetingDaysFilter ? ' - Filtered' : '')
+                        },
+                        subtitle: {
+                          display: true,
+                          text: 'No data available for the selected filters.',
+                          font: {
+                            size: 12
+                          },
+                          color: '#666'
+                        }
+                      },
+                      scales: {
+                        y: {
+                          beginAtZero: true,
+                          title: {
+                            display: true,
+                            text: 'Number of People'
+                          }
+                        },
+                        x: {
+                          title: {
+                            display: true,
+                            text: 'Week'
+                          }
+                        }
+                      }
+                    }
+                  });
+                  
+                  return; // Exit early for empty data
+                }
                 
                 const ctx = document.getElementById('aggregateChart').getContext('2d');
                 
@@ -2422,6 +2609,15 @@ app.get('', async (req, res) => {
                         const ctx = chart.ctx;
                         const chartArea = chart.chartArea;
                         
+                        // Check if the "Total Members" dataset is visible
+                        const totalMembersDatasetIndex = 2; // "Total Members" is the 3rd dataset (index 2)
+                        const totalMembersMeta = chart.getDatasetMeta(totalMembersDatasetIndex);
+                        
+                        // Only draw checkmarks if the Total Members dataset is visible
+                        if (!totalMembersMeta.visible) {
+                          return;
+                        }
+                        
                         ctx.save();
                         
                         // Set up text styling for checkmarks
@@ -2433,14 +2629,12 @@ app.get('', async (req, res) => {
                         // Draw green checkmarks above "Total Members" data points
                         aggregateData.forEach((item, index) => {
                           if (item.isPerfectWeek) {
-                            const totalMembersDatasetIndex = 2; // "Total Members" is the 3rd dataset (index 2)
-                            const meta = chart.getDatasetMeta(totalMembersDatasetIndex);
-                            if (meta.data[index] && meta.data[index].x >= chartArea.left && meta.data[index].x <= chartArea.right) {
-                              const point = meta.data[index];
+                            if (totalMembersMeta.data[index] && totalMembersMeta.data[index].x >= chartArea.left && totalMembersMeta.data[index].x <= chartArea.right) {
+                              const point = totalMembersMeta.data[index];
                               
-                              // Draw checkmark slightly above the data point
+                              // Draw checkmark above the data point
                               const checkX = point.x;
-                              const checkY = Math.max(point.y - 15, chartArea.top + 10); // Keep within chart area
+                              const checkY = point.y - 15;
                               
                               ctx.fillText('✓', checkX, checkY);
                             }
@@ -2477,14 +2671,16 @@ app.get('', async (req, res) => {
                   options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: {
-                      title: {
-                        display: true,
-                        text: 'Weekly Life Groups Attendance Trends (Wed-Thu Combined)' + (showAllYears ? ' - All Years' : ' - Current Year')
-                      },
+                                      plugins: {
+                    title: {
+                      display: true,
+                      text: 'Weekly Life Groups Attendance Trends (Wed-Thu Combined)' + (showAllYears ? ' - All Years' : ' - Current Year') + 
+                            (groupTypesFilter || meetingDaysFilter ? ' - Filtered' : '')
+                    },
                       subtitle: {
                         display: true,
-                        text: 'Click a dataset color to exclude it from the chart. Hover over a data point to see more info. Data shows ' + (showAllYears ? 'all years' : 'current year') + ', past events only.',
+                        text: 'Click a dataset color to exclude it from the chart. Hover over a data point to see more info. Data shows ' + (showAllYears ? 'all years' : 'current year') + ', past events only.' +
+                              (groupTypesFilter || meetingDaysFilter ? ' (Filtered data)' : ''),
                         font: {
                           size: 12
                         },
@@ -2537,6 +2733,13 @@ app.get('', async (req, res) => {
                         title: {
                           display: true,
                           text: 'Number of People'
+                        },
+                        // Add extra headroom at the top for checkmarks
+                        afterDataLimits: function(scale) {
+                          // Add 10% extra space at the top, with a minimum of 20 units
+                          const range = scale.max - scale.min;
+                          const padding = Math.max(range * 0.1, 20);
+                          scale.max = scale.max + padding;
                         }
                       },
                       x: {
@@ -2592,8 +2795,10 @@ app.get('', async (req, res) => {
               const showAllYears = this.checked;
               
               try {
-                // Update chart data
-                await loadAggregateData(false);
+                // Update chart data with current filters
+                const groupTypesParam = currentFilters.groupTypes.join(',');
+                const meetingDaysParam = currentFilters.meetingDays.join(',');
+                await loadAggregateData(false, groupTypesParam, meetingDaysParam);
                 
                 // Update all group stats to reflect the new time period
                 const groupItems = document.querySelectorAll('[id^="group-"]');
