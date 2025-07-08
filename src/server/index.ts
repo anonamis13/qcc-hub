@@ -2878,7 +2878,7 @@ app.get('', async (req, res) => {
                   membershipQuickSummary.innerHTML = 
                     '<span><span style="color: #28a745; font-weight: 500;">+' + data.totalJoins + '</span> <span style="color: #666;">members joined</span></span>' +
                     '<span><span style="color: #dc3545; font-weight: 500;">-' + data.totalLeaves + '</span> <span style="color: #666;">members left</span></span>' +
-                    '<span>(<span style="color: ' + netChangeColor + '; font-weight: bold;">' + netChangeText + '</span> <span style="color: #666;">net</span>)</span>';
+                    '<span><span style="color: ' + netChangeColor + '; font-weight: bold;">' + netChangeText + '</span> <span style="color: #666;">net change</span></span>';
                 }
                 
                 // Update details with comprehensive view including summary stats and member details
@@ -2909,15 +2909,15 @@ app.get('', async (req, res) => {
                       '<div style="display: flex; gap: 20px; margin-bottom: 25px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">' +
                         '<div style="display: flex; align-items: center; gap: 8px;">' +
                           '<span style="color: #28a745; font-weight: bold; font-size: 18px;">+' + data.totalJoins + '</span>' +
-                          '<span style="color: #666; font-weight: 500;">members joined</span>' +
+                          '<span style="color: #666; font-weight: 500;">joined</span>' +
                         '</div>' +
                         '<div style="display: flex; align-items: center; gap: 8px;">' +
                           '<span style="color: #dc3545; font-weight: bold; font-size: 18px;">-' + data.totalLeaves + '</span>' +
-                          '<span style="color: #666; font-weight: 500;">members left</span>' +
+                          '<span style="color: #666; font-weight: 500;">left</span>' +
                         '</div>' +
                         '<div style="display: flex; align-items: center; gap: 8px;">' +
                           '<span style="color: ' + netChangeColor + '; font-weight: bold; font-size: 20px;">' + netChangeText + '</span>' +
-                          '<span style="color: #666; font-weight: 500;">net change</span>' +
+                          '<span style="color: #666; font-weight: 500;">net</span>' +
                         '</div>' +
                       '</div>';
                     
