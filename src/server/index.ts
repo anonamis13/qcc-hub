@@ -1339,18 +1339,10 @@ app.get('', async (req, res) => {
               </button>
               
               <div id="membershipExpandedContent" style="display: none; background-color: white; padding: 20px; border-radius: 8px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-top: none; margin-top: -20px; border-top-left-radius: 0; border-top-right-radius: 0;">
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px;">
-                  <h3 style="margin: 0; color: #333; font-weight: 500;">Detailed View</h3>
-                  <button id="membershipDetailsToggleBtn" style="background: none; border: 1px solid #ddd; border-radius: 4px; padding: 6px 10px; cursor: pointer; display: flex; align-items: center; gap: 5px; color: #666; font-size: 12px; transition: all 0.3s ease;" onmouseover="this.style.backgroundColor='#f8f9fa'; this.style.borderColor='#007bff';" onmouseout="this.style.backgroundColor='transparent'; this.style.borderColor='#ddd';">
-                    <span id="membershipDetailsToggleText">Show Member Names</span>
-                    <span id="membershipDetailsToggleIcon">▼</span>
-                  </button>
-                </div>
-                <div class="membership-summary" id="membershipSummary" style="display: flex; gap: 30px; margin: 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 8px; align-items: center;">
+                <div class="membership-details" id="membershipDetails" style="grid-template-columns: 1fr; gap: 20px;">
                   <div class="loading"></div>
                   <span>Loading membership changes...</span>
                 </div>
-                <div class="membership-details" id="membershipDetails" style="display: none; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;"></div>
               </div>
             </div>
             
@@ -2839,12 +2831,6 @@ app.get('', async (req, res) => {
               const mainToggleIcon = document.getElementById('membershipMainToggleIcon');
               const expandedContent = document.getElementById('membershipExpandedContent');
               
-              // Details toggle for member names
-              const detailsToggleBtn = document.getElementById('membershipDetailsToggleBtn');
-              const detailsToggleText = document.getElementById('membershipDetailsToggleText');
-              const detailsToggleIcon = document.getElementById('membershipDetailsToggleIcon');
-              const membershipDetails = document.getElementById('membershipDetails');
-              
               // Main section toggle
               if (mainToggleBtn && mainToggleIcon && expandedContent) {
                 mainToggleBtn.addEventListener('click', function() {
@@ -2863,30 +2849,12 @@ app.get('', async (req, res) => {
                   }
                 });
               }
-              
-              // Details toggle for member names
-              if (detailsToggleBtn && detailsToggleText && detailsToggleIcon && membershipDetails) {
-                detailsToggleBtn.addEventListener('click', function() {
-                  const isVisible = membershipDetails.style.display === 'grid';
-                  
-                  if (isVisible) {
-                    membershipDetails.style.display = 'none';
-                    detailsToggleText.textContent = 'Show Member Names';
-                    detailsToggleIcon.textContent = '▼';
-                  } else {
-                    membershipDetails.style.display = 'grid';
-                    detailsToggleText.textContent = 'Hide Member Names';
-                    detailsToggleIcon.textContent = '▲';
-                  }
-                });
-              }
             }
 
             // Function to load membership changes
             async function loadMembershipChanges() {
               const membershipChangesContainer = document.getElementById('membershipChangesContainer');
               const membershipQuickSummary = document.getElementById('membershipQuickSummary');
-              const membershipSummary = document.getElementById('membershipSummary');
               const membershipDetails = document.getElementById('membershipDetails');
               
               try {
@@ -2913,31 +2881,28 @@ app.get('', async (req, res) => {
                     '<span style="color: ' + netChangeColor + '; font-weight: bold;">(' + netChangeText + ' net)</span>';
                 }
                 
-                // Update summary
-                if (membershipSummary) {
-                  const dataText = data.latestSnapshotDate ? 
-                    'Data as of: ' + new Date(data.latestSnapshotDate).toLocaleDateString() : 
-                    'No snapshot data available';
-                  
-                  membershipSummary.innerHTML = 
-                    '<div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">' +
-                      '<div style="color: #666; font-size: 16px;">' + dataText + '</div>' +
-                      '<div style="margin-left: auto; color: #666; font-size: 14px;">Tracking membership changes over the last 30 days</div>' +
-                    '</div>';
-                }
-                
-                // Update details with timeline view
+                // Update details with comprehensive view including summary stats and member details
                 if (membershipDetails) {
                   if (data.totalJoins === 0 && data.totalLeaves === 0) {
-                    membershipDetails.innerHTML = '<div style="text-align: center; color: #666; font-style: italic; padding: 20px; grid-column: 1 / -1;">No membership changes in the last 30 days</div>';
+                    membershipDetails.innerHTML = '<div style="text-align: center; color: #666; font-style: italic; padding: 20px;">No membership changes in the last 30 days</div>';
                   } else {
-                    // Generate simplified timeline HTML
-                    let timelineHtml = '<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; grid-column: 1 / -1;">';
-                    timelineHtml += '<h3 style="margin: 0 0 20px 0; color: #333; font-weight: 500;">Membership Changes (Last 30 Days)</h3>';
+                    // Generate comprehensive HTML with summary stats and member details
+                    let timelineHtml = '<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px;">';
+                    
+                    // Data source info at the top
+                    const dataText = data.latestSnapshotDate ? 
+                      'Data as of: ' + new Date(data.latestSnapshotDate).toLocaleDateString() : 
+                      'No snapshot data available';
+                    
+                    timelineHtml += 
+                      '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #dee2e6;">' +
+                        '<h3 style="margin: 0; color: #333; font-weight: 500;">Membership Changes (Last 30 Days)</h3>' +
+                        '<div style="color: #666; font-size: 14px;">' + dataText + '</div>' +
+                      '</div>';
                     
                     // Show summary stats
                     timelineHtml += 
-                      '<div style="display: flex; gap: 20px; margin-bottom: 20px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">' +
+                      '<div style="display: flex; gap: 20px; margin-bottom: 25px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">' +
                         '<div style="display: flex; align-items: center; gap: 8px;">' +
                           '<span style="color: #28a745; font-weight: bold; font-size: 18px;">+' + data.totalJoins + '</span>' +
                           '<span style="color: #666;">new members</span>' +
@@ -2955,7 +2920,7 @@ app.get('', async (req, res) => {
                     // Show joins section
                     if (data.joins.length > 0) {
                       timelineHtml += 
-                        '<div style="margin-bottom: 20px;">' +
+                        '<div style="margin-bottom: 25px;">' +
                           '<h4 style="margin: 0 0 15px 0; color: #28a745; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
                             '<span style="background-color: #28a745; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">+</span>' +
                             'New Members (' + data.joins.length + ')' +
@@ -3000,8 +2965,8 @@ app.get('', async (req, res) => {
                 }
               } catch (error) {
                 console.error('Error loading membership changes:', error);
-                if (membershipSummary) {
-                  membershipSummary.innerHTML = '<div style="color: red;">Failed to load membership changes</div>';
+                if (membershipDetails) {
+                  membershipDetails.innerHTML = '<div style="color: red;">Failed to load membership changes</div>';
                 }
               }
             }
