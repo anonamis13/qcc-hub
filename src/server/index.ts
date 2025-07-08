@@ -2915,61 +2915,87 @@ app.get('', async (req, res) => {
                 
                 // Update summary
                 if (membershipSummary) {
-                  membershipSummary.innerHTML = \`
-                    <div style="text-align: center; padding: 15px; background-color: white; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                      <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px; color: #28a745;">\${data.totalJoins}</div>
-                      <div style="color: #666; font-size: 14px;">New Members (30 days)</div>
-                    </div>
-                    <div style="text-align: center; padding: 15px; background-color: white; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                      <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px; color: #dc3545;">\${data.totalLeaves}</div>
-                      <div style="color: #666; font-size: 14px;">Members Left (30 days)</div>
-                    </div>
-                    <div style="text-align: center; padding: 15px; background-color: white; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                      <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px; color: #007bff;">\${data.totalJoins - data.totalLeaves}</div>
-                      <div style="color: #666; font-size: 14px;">Net Change</div>
-                    </div>
-                    <div style="margin-left: auto; color: #666; font-size: 14px; display: flex; align-items: center;">
-                      \${data.latestSnapshotDate ? 'Data as of: ' + new Date(data.latestSnapshotDate).toLocaleDateString() : 'No snapshot data available'}
-                    </div>
-                  \`;
+                  const dataText = data.latestSnapshotDate ? 
+                    'Data as of: ' + new Date(data.latestSnapshotDate).toLocaleDateString() : 
+                    'No snapshot data available';
+                  
+                  membershipSummary.innerHTML = 
+                    '<div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">' +
+                      '<div style="color: #666; font-size: 16px;">' + dataText + '</div>' +
+                      '<div style="margin-left: auto; color: #666; font-size: 14px;">Tracking membership changes over the last 30 days</div>' +
+                    '</div>';
                 }
                 
-                // Update details
+                // Update details with timeline view
                 if (membershipDetails) {
                   if (data.totalJoins === 0 && data.totalLeaves === 0) {
                     membershipDetails.innerHTML = '<div style="text-align: center; color: #666; font-style: italic; padding: 20px; grid-column: 1 / -1;">No membership changes in the last 30 days</div>';
                   } else {
-                    const joinsHtml = data.joins.length > 0 ? 
-                      \`<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745;">
-                        <h3 style="margin: 0 0 15px 0; color: #28a745; font-weight: 500;">New Members (\${data.joins.length})</h3>
-                        \${data.joins.map(member => 
-                          \`<div style="padding: 15px; margin: 10px 0; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-left: 4px solid #28a745;">
-                            <div style="font-weight: 500; color: #333; font-size: 16px;">\${member.firstName} \${member.lastName}</div>
-                            <div style="color: #666; font-size: 14px; margin-top: 5px;">\${member.groupName}</div>
-                          </div>\`
-                        ).join('')}
-                      </div>\` : 
-                      \`<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745;">
-                        <h3 style="margin: 0 0 15px 0; color: #28a745; font-weight: 500;">New Members (0)</h3>
-                        <div style="text-align: center; color: #666; font-style: italic; padding: 20px;">No new members in the last 30 days</div>
-                      </div>\`;
+                    // Generate simplified timeline HTML
+                    let timelineHtml = '<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; grid-column: 1 / -1;">';
+                    timelineHtml += '<h3 style="margin: 0 0 20px 0; color: #333; font-weight: 500;">Membership Changes (Last 30 Days)</h3>';
                     
-                    const leavesHtml = data.leaves.length > 0 ? 
-                      \`<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #dc3545;">
-                        <h3 style="margin: 0 0 15px 0; color: #dc3545; font-weight: 500;">Members Left (\${data.leaves.length})</h3>
-                        \${data.leaves.map(member => 
-                          \`<div style="padding: 15px; margin: 10px 0; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-left: 4px solid #dc3545;">
-                            <div style="font-weight: 500; color: #333; font-size: 16px;">\${member.firstName} \${member.lastName}</div>
-                            <div style="color: #666; font-size: 14px; margin-top: 5px;">\${member.groupName}</div>
-                          </div>\`
-                        ).join('')}
-                      </div>\` : 
-                      \`<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #dc3545;">
-                        <h3 style="margin: 0 0 15px 0; color: #dc3545; font-weight: 500;">Members Left (0)</h3>
-                        <div style="text-align: center; color: #666; font-style: italic; padding: 20px;">No members left in the last 30 days</div>
-                      </div>\`;
+                    // Show summary stats
+                    timelineHtml += 
+                      '<div style="display: flex; gap: 20px; margin-bottom: 20px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">' +
+                        '<div style="display: flex; align-items: center; gap: 8px;">' +
+                          '<span style="color: #28a745; font-weight: bold; font-size: 18px;">+' + data.totalJoins + '</span>' +
+                          '<span style="color: #666;">new members</span>' +
+                        '</div>' +
+                        '<div style="display: flex; align-items: center; gap: 8px;">' +
+                          '<span style="color: #dc3545; font-weight: bold; font-size: 18px;">-' + data.totalLeaves + '</span>' +
+                          '<span style="color: #666;">members left</span>' +
+                        '</div>' +
+                        '<div style="display: flex; align-items: center; gap: 8px;">' +
+                          '<span style="color: #007bff; font-weight: bold; font-size: 18px;">' + (data.totalJoins - data.totalLeaves > 0 ? '+' : '') + (data.totalJoins - data.totalLeaves) + '</span>' +
+                          '<span style="color: #666;">net change</span>' +
+                        '</div>' +
+                      '</div>';
                     
-                    membershipDetails.innerHTML = joinsHtml + leavesHtml;
+                    // Show joins section
+                    if (data.joins.length > 0) {
+                      timelineHtml += 
+                        '<div style="margin-bottom: 20px;">' +
+                          '<h4 style="margin: 0 0 15px 0; color: #28a745; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
+                            '<span style="background-color: #28a745; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">+</span>' +
+                            'New Members (' + data.joins.length + ')' +
+                          '</h4>' +
+                          '<div style="display: grid; gap: 8px;">';
+                      
+                      data.joins.forEach(member => {
+                        timelineHtml += 
+                          '<div style="padding: 12px 15px; background-color: rgba(40, 167, 69, 0.1); border-radius: 6px; border-left: 4px solid #28a745; display: flex; justify-content: space-between; align-items: center;">' +
+                            '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
+                            '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
+                          '</div>';
+                      });
+                      
+                      timelineHtml += '</div></div>';
+                    }
+                    
+                    // Show leaves section
+                    if (data.leaves.length > 0) {
+                      timelineHtml += 
+                        '<div style="margin-bottom: 20px;">' +
+                          '<h4 style="margin: 0 0 15px 0; color: #dc3545; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
+                            '<span style="background-color: #dc3545; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">-</span>' +
+                            'Members Left (' + data.leaves.length + ')' +
+                          '</h4>' +
+                          '<div style="display: grid; gap: 8px;">';
+                      
+                      data.leaves.forEach(member => {
+                        timelineHtml += 
+                          '<div style="padding: 12px 15px; background-color: rgba(220, 53, 69, 0.1); border-radius: 6px; border-left: 4px solid #dc3545; display: flex; justify-content: space-between; align-items: center;">' +
+                            '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
+                            '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
+                          '</div>';
+                      });
+                      
+                      timelineHtml += '</div></div>';
+                    }
+                    
+                    timelineHtml += '</div>';
+                    membershipDetails.innerHTML = timelineHtml;
                   }
                 }
               } catch (error) {
