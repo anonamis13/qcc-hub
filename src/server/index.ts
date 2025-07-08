@@ -2932,14 +2932,9 @@ app.get('', async (req, res) => {
                           '<div style="display: grid; gap: 8px;">';
                       
                       data.joins.forEach(member => {
-                        // Calculate approximate date - use latest snapshot date as join date
-                        const joinDate = data.latestSnapshotDate ? 
-                          new Date(data.latestSnapshotDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 
-                          'recent';
-                        
-                        // Format date as MM/DD/YYYY
-                        const formattedJoinDate = data.latestSnapshotDate ? 
-                          new Date(data.latestSnapshotDate).toLocaleDateString('en-US') : 
+                        // Use exact date from the membership change data
+                        const formattedJoinDate = member.date ? 
+                          new Date(member.date).toLocaleDateString('en-US') : 
                           'recent';
                         
                         timelineHtml += 
@@ -2966,22 +2961,9 @@ app.get('', async (req, res) => {
                           '<div style="display: grid; gap: 8px;">';
                       
                       data.leaves.forEach(member => {
-                        // Calculate approximate date - use 30 days ago as leave date
-                        const leaveDate = data.latestSnapshotDate ? 
-                          (() => {
-                            const thirtyDaysAgo = new Date(data.latestSnapshotDate);
-                            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-                            return thirtyDaysAgo.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                          })() : 
-                          'recent';
-                        
-                        // Format date as MM/DD/YYYY
-                        const formattedLeaveDate = data.latestSnapshotDate ? 
-                          (() => {
-                            const thirtyDaysAgo = new Date(data.latestSnapshotDate);
-                            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-                            return thirtyDaysAgo.toLocaleDateString('en-US');
-                          })() : 
+                        // Use exact date from the membership change data
+                        const formattedLeaveDate = member.date ? 
+                          new Date(member.date).toLocaleDateString('en-US') : 
                           'recent';
                         
                         timelineHtml += 

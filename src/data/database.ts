@@ -238,7 +238,7 @@ export const membershipSnapshots = {
     }
   },
 
-  // Get membership changes over a time period
+  // Get membership changes over a time period with exact dates
   getMembershipChanges: (daysBack: number = 30): any => {
     try {
       const db = initializeDb();
@@ -246,13 +246,14 @@ export const membershipSnapshots = {
       cutoffDate.setDate(cutoffDate.getDate() - daysBack);
       const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
       
-      // Get the most recent snapshot date for each group
-      const latestSnapshotsStmt = db.prepare(`
-        SELECT group_id, MAX(date) as latest_date
+      // Get all unique group IDs that have snapshots
+      const groupsStmt = db.prepare(`
+        SELECT DISTINCT group_id, group_name
         FROM membership_snapshots 
-        GROUP BY group_id
+        WHERE date >= ?
+        ORDER BY group_id
       `);
-      const latestSnapshots = latestSnapshotsStmt.all() as Array<{group_id: string, latest_date: string}>;
+      const groups = groupsStmt.all(cutoffDateStr) as Array<{group_id: string, group_name: string}>;
       
       const changes = {
         joins: [] as any[],
@@ -261,73 +262,92 @@ export const membershipSnapshots = {
         totalLeaves: 0
       };
       
-      for (const snapshot of latestSnapshots) {
-        const groupId = snapshot.group_id;
-        const latestDate = snapshot.latest_date;
+      for (const group of groups) {
+        const groupId = group.group_id;
+        const groupName = group.group_name;
         
-        // Get current members (latest snapshot)
-        const currentMembersStmt = db.prepare(`
-          SELECT person_id, person_first_name, person_last_name, group_name
-          FROM membership_snapshots 
-          WHERE group_id = ? AND date = ?
-        `);
-        const currentMembers = currentMembersStmt.all(groupId, latestDate) as Array<{
-          person_id: string,
-          person_first_name: string,
-          person_last_name: string,
-          group_name: string
-        }>;
-        
-        // Get members from the cutoff date (or closest date after cutoff)
-        const pastMembersStmt = db.prepare(`
-          SELECT person_id, person_first_name, person_last_name, group_name, date
+        // Get all snapshots for this group within the time period, ordered by date
+        const snapshotsStmt = db.prepare(`
+          SELECT date, person_id, person_first_name, person_last_name
           FROM membership_snapshots 
           WHERE group_id = ? AND date >= ?
           ORDER BY date ASC
-          LIMIT 1
         `);
-        const pastMembersResult = pastMembersStmt.all(groupId, cutoffDateStr);
-        
-        if (pastMembersResult.length === 0) continue; // No historical data for this group
-        
-        const comparisonDate = (pastMembersResult[0] as {date: string}).date;
-        const pastMembersStmt2 = db.prepare(`
-          SELECT person_id, person_first_name, person_last_name, group_name
-          FROM membership_snapshots 
-          WHERE group_id = ? AND date = ?
-        `);
-        const pastMembers = pastMembersStmt2.all(groupId, comparisonDate) as Array<{
+        const snapshots = snapshotsStmt.all(groupId, cutoffDateStr) as Array<{
+          date: string,
           person_id: string,
           person_first_name: string,
-          person_last_name: string,
-          group_name: string
+          person_last_name: string
         }>;
         
-        // Find joins (in current but not in past)
-        const currentMemberIds = new Set(currentMembers.map(m => m.person_id));
-        const pastMemberIds = new Set(pastMembers.map(m => m.person_id));
+        if (snapshots.length === 0) continue;
         
-        const joins = currentMembers.filter(member => !pastMemberIds.has(member.person_id));
-        const leaves = pastMembers.filter(member => !currentMemberIds.has(member.person_id));
+        // Group snapshots by date
+        const snapshotsByDate = new Map<string, Set<string>>();
+        const memberDetails = new Map<string, {firstName: string, lastName: string}>();
         
-        // Add to results
-        changes.joins.push(...joins.map(member => ({
-          personId: member.person_id,
-          firstName: member.person_first_name,
-          lastName: member.person_last_name,
-          groupName: member.group_name,
-          groupId: groupId,
-          type: 'join'
-        })));
+        snapshots.forEach(snapshot => {
+          if (!snapshotsByDate.has(snapshot.date)) {
+            snapshotsByDate.set(snapshot.date, new Set());
+          }
+          snapshotsByDate.get(snapshot.date)!.add(snapshot.person_id);
+          memberDetails.set(snapshot.person_id, {
+            firstName: snapshot.person_first_name,
+            lastName: snapshot.person_last_name
+          });
+        });
         
-        changes.leaves.push(...leaves.map(member => ({
-          personId: member.person_id,
-          firstName: member.person_first_name,
-          lastName: member.person_last_name,
-          groupName: member.group_name,
-          groupId: groupId,
-          type: 'leave'
-        })));
+        // Sort dates to process chronologically
+        const sortedDates = Array.from(snapshotsByDate.keys()).sort();
+        
+        // Track membership changes day by day
+        let previousMembers: Set<string> | null = null;
+        
+        for (const date of sortedDates) {
+          const currentMembers = snapshotsByDate.get(date)!;
+          
+          if (previousMembers !== null) {
+            // Find joins (in current but not in previous)
+            const joins = Array.from(currentMembers).filter(personId => !previousMembers!.has(personId));
+            
+            // Find leaves (in previous but not in current)
+            const leaves = Array.from(previousMembers).filter(personId => !currentMembers.has(personId));
+            
+            // Add joins for this date
+            joins.forEach(personId => {
+              const details = memberDetails.get(personId);
+              if (details) {
+                changes.joins.push({
+                  personId: personId,
+                  firstName: details.firstName,
+                  lastName: details.lastName,
+                  groupName: groupName,
+                  groupId: groupId,
+                  type: 'join',
+                  date: date
+                });
+              }
+            });
+            
+            // Add leaves for this date
+            leaves.forEach(personId => {
+              const details = memberDetails.get(personId);
+              if (details) {
+                changes.leaves.push({
+                  personId: personId,
+                  firstName: details.firstName,
+                  lastName: details.lastName,
+                  groupName: groupName,
+                  groupId: groupId,
+                  type: 'leave',
+                  date: date
+                });
+              }
+            });
+          }
+          
+          previousMembers = new Set(currentMembers);
+        }
       }
       
       changes.totalJoins = changes.joins.length;
