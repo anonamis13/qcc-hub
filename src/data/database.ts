@@ -41,7 +41,6 @@ function cleanupOldData() {
     // Delete records older than cutoff time
     const deleteStmt = db.prepare('DELETE FROM cache WHERE timestamp < ?');
     const result = deleteStmt.run(cutoffTime);
-    
 
   } catch (error) {
     console.error('Error during database cleanup:', error);

@@ -915,9 +915,7 @@ app.get('/api/membership-changes', async (req, res) => {
 app.post('/api/create-membership-snapshot', async (req, res) => {
   try {
     const forceRefresh = req.query.forceRefresh === 'true';
-    const date = new Date().toISOString().split('T')[0]; // Today's date in YYYY-MM-DD format
-    
-    console.log(`Creating membership snapshot for date: ${date}, forceRefresh: ${forceRefresh}`);
+    const date = new Date().toISOString().split('T')[0];
     
     // Check if we already have a snapshot for today (unless force refresh)
     if (!forceRefresh && membershipSnapshots.hasSnapshotForDate(date)) {
@@ -931,50 +929,28 @@ app.post('/api/create-membership-snapshot', async (req, res) => {
     const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
     const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
     
-    console.log(`Getting groups with groupTypeId: ${groupTypeId}`);
-    
     // Get all groups
     const groups = await getPeopleGroups(groupTypeId, false);
-    console.log(`Found ${groups.data.length} groups to process`);
     
     let successCount = 0;
     let errorCount = 0;
-    let detailedResults = [];
     
     // Create snapshots for each group
-            for (const group of groups.data) {
-          try {
-            console.log(`Processing group ${group.id}: ${group.attributes.name}`);
-            const memberships = await getGroupMemberships(group.id, true); // Force refresh for snapshots!
-            console.log(`  Found ${memberships.length} members`);
-            
-            membershipSnapshots.storeDailySnapshot(date, group.id, group.attributes.name, memberships);
-            successCount++;
-        
-        detailedResults.push({
-          groupId: group.id,
-          groupName: group.attributes.name,
-          memberCount: memberships.length,
-          status: 'success'
-        });
+    for (const group of groups.data) {
+      try {
+        const memberships = await getGroupMemberships(group.id, true); // Force refresh for snapshots!
+        membershipSnapshots.storeDailySnapshot(date, group.id, group.attributes.name, memberships);
+        successCount++;
         
         // Add small delay to be respectful to the API
         await new Promise(resolve => setTimeout(resolve, 100));
       } catch (error) {
         console.error(`Failed to create snapshot for group ${group.id} (${group.attributes.name}):`, error);
         errorCount++;
-        
-        detailedResults.push({
-          groupId: group.id,
-          groupName: group.attributes.name,
-          memberCount: 0,
-          status: 'error',
-          error: error instanceof Error ? error.message : 'Unknown error'
-        });
       }
     }
     
-    console.log(`Snapshot creation completed. Success: ${successCount}, Errors: ${errorCount}`);
+    console.log(`Membership snapshot created for ${date}. Success: ${successCount}, Errors: ${errorCount}`);
     
     res.json({
       message: 'Membership snapshot creation completed',
@@ -982,8 +958,7 @@ app.post('/api/create-membership-snapshot', async (req, res) => {
       created: true,
       totalGroups: groups.data.length,
       successCount: successCount,
-      errorCount: errorCount,
-      detailedResults: detailedResults.slice(0, 5) // Show first 5 for brevity
+      errorCount: errorCount
     });
   } catch (error) {
     console.error('Error creating membership snapshot:', error);
@@ -1011,250 +986,7 @@ app.get('/api/membership-snapshot-status', async (req, res) => {
   }
 });
 
-// Add simple debug endpoint to check membership snapshot data
-app.get('/api/debug-membership-snapshots', async (req, res) => {
-  try {
-    // Get basic stats using the existing functions
-    const latestSnapshotDate = membershipSnapshots.getLatestSnapshotDate();
-    const today = new Date().toISOString().split('T')[0];
-    const hasSnapshotForToday = membershipSnapshots.hasSnapshotForDate(today);
-    
-    // Test membership changes calculation
-    const changes7Days = membershipSnapshots.getMembershipChanges(7);
-    const changes30Days = membershipSnapshots.getMembershipChanges(30);
-    
-    // Check for multiple recent dates
-    const recentDates = [];
-    for (let i = 0; i < 10; i++) {
-      const checkDate = new Date();
-      checkDate.setDate(checkDate.getDate() - i);
-      const dateStr = checkDate.toISOString().split('T')[0];
-      const hasSnapshot = membershipSnapshots.hasSnapshotForDate(dateStr);
-      if (hasSnapshot) {
-        recentDates.push(dateStr);
-      }
-    }
-    
-    res.json({
-      latestSnapshotDate,
-      hasSnapshotForToday,
-      recentSnapshotsFound: recentDates,
-      changes7Days: {
-        totalJoins: changes7Days.totalJoins,
-        totalLeaves: changes7Days.totalLeaves,
-        sampleJoins: changes7Days.joins.slice(0, 3),
-        sampleLeaves: changes7Days.leaves.slice(0, 3)
-      },
-      changes30Days: {
-        totalJoins: changes30Days.totalJoins,
-        totalLeaves: changes30Days.totalLeaves,
-        sampleJoins: changes30Days.joins.slice(0, 3),
-        sampleLeaves: changes30Days.leaves.slice(0, 3)
-      },
-      databasePath: process.env.RENDER ? '/data/cache.db' : 'local cache.db'
-    });
-  } catch (error) {
-    console.error('Error debugging membership snapshots:', error);
-    res.status(500).json({ error: 'Failed to debug membership snapshots', details: error instanceof Error ? error.message : 'Unknown error' });
-  }
-});
 
-// Add simple debug endpoint to test membership changes calculation
-app.get('/api/debug-membership-changes/:days', async (req, res) => {
-  try {
-    const days = parseInt(req.params.days) || 30;
-    const changes = membershipSnapshots.getMembershipChanges(days);
-    
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - days);
-    const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
-    
-    // Check what dates we have snapshots for
-    const availableDates = [];
-    for (let i = 0; i <= days; i++) {
-      const checkDate = new Date();
-      checkDate.setDate(checkDate.getDate() - i);
-      const dateStr = checkDate.toISOString().split('T')[0];
-      const hasSnapshot = membershipSnapshots.hasSnapshotForDate(dateStr);
-      if (hasSnapshot) {
-        availableDates.push(dateStr);
-      }
-    }
-    
-    res.json({
-      requestedDays: days,
-      cutoffDate: cutoffDateStr,
-      availableDatesInRange: availableDates,
-      changes: {
-        totalJoins: changes.totalJoins,
-        totalLeaves: changes.totalLeaves,
-        joinsDetails: changes.joins,
-        leavesDetails: changes.leaves
-      }
-    });
-  } catch (error) {
-    console.error('Error debugging membership changes:', error);
-    res.status(500).json({ error: 'Failed to debug membership changes', details: error instanceof Error ? error.message : 'Unknown error' });
-  }
-});
-
-// Add endpoint to inspect actual snapshot data for a specific group
-app.get('/api/debug-group-snapshots/:groupId', async (req, res) => {
-  try {
-    const { groupId } = req.params;
-    const days = parseInt(req.query.days as string) || 7;
-    
-    // Get snapshots for this group over the last N days
-    const snapshots = [];
-    for (let i = 0; i < days; i++) {
-      const checkDate = new Date();
-      checkDate.setDate(checkDate.getDate() - i);
-      const dateStr = checkDate.toISOString().split('T')[0];
-      
-      const hasSnapshot = membershipSnapshots.hasSnapshotForDate(dateStr);
-      if (hasSnapshot) {
-        // Get membership data directly from PCO for comparison
-        try {
-          const memberships = await getGroupMemberships(groupId, false);
-          snapshots.push({
-            date: dateStr,
-            memberCount: memberships.length,
-            sampleMembers: memberships.slice(0, 3).map(m => ({
-              personId: m.personId,
-              firstName: m.person?.firstName,
-              lastName: m.person?.lastName,
-              role: m.role
-            }))
-          });
-        } catch (error) {
-          snapshots.push({
-            date: dateStr,
-            error: 'Failed to get membership data',
-            details: error instanceof Error ? error.message : 'Unknown error'
-          });
-        }
-      }
-    }
-    
-    res.json({
-      groupId,
-      requestedDays: days,
-      snapshots
-    });
-  } catch (error) {
-    console.error('Error debugging group snapshots:', error);
-    res.status(500).json({ error: 'Failed to debug group snapshots', details: error instanceof Error ? error.message : 'Unknown error' });
-  }
-});
-
-// Add endpoint to directly query snapshot data from database
-app.get('/api/debug-raw-snapshots', async (req, res) => {
-  try {
-    const days = parseInt(req.query.days as string) || 7;
-    const groupId = req.query.groupId as string;
-    
-    // Import database modules
-    const Database = (await import('better-sqlite3')).default;
-    const path = await import('path');
-    
-    // Initialize the database by calling a function that uses it
-    membershipSnapshots.hasSnapshotForDate('2025-01-01');
-    
-    // Create database connection
-    const dbPath = process.env.RENDER ? '/data/cache.db' : path.join(process.cwd(), 'src/data/cache.db');
-    const db = new Database(dbPath, { readonly: true });
-    
-    // Get snapshot summary
-    const summaryQuery = `
-      SELECT date, group_id, group_name, COUNT(*) as member_count
-      FROM membership_snapshots 
-      ${groupId ? 'WHERE group_id = ?' : ''}
-      GROUP BY date, group_id, group_name
-      ORDER BY date DESC, group_name
-      LIMIT 50
-    `;
-    
-    const summary = groupId ? 
-      db.prepare(summaryQuery).all(groupId) :
-      db.prepare(summaryQuery).all();
-    
-    // Get sample member data for latest date
-    const latestDate = summary.length > 0 ? (summary[0] as any).date : null;
-    let sampleMembers: any[] = [];
-    
-    if (latestDate) {
-      const membersQuery = `
-        SELECT group_name, person_id, person_first_name, person_last_name, role
-        FROM membership_snapshots 
-        WHERE date = ? ${groupId ? 'AND group_id = ?' : ''}
-        LIMIT 10
-      `;
-      
-      sampleMembers = groupId ?
-        db.prepare(membersQuery).all(latestDate, groupId) :
-        db.prepare(membersQuery).all(latestDate);
-    }
-    
-    db.close();
-    
-    res.json({
-      requestedDays: days,
-      groupId: groupId || 'all',
-      snapshotSummary: summary,
-      latestDate,
-      sampleMembers
-    });
-  } catch (error) {
-    console.error('Error debugging raw snapshots:', error);
-    res.status(500).json({ error: 'Failed to debug raw snapshots', details: error instanceof Error ? error.message : 'Unknown error' });
-  }
-});
-
-// Add endpoint to manually test snapshot creation for a single group
-app.post('/api/test-group-snapshot/:groupId', async (req, res) => {
-  try {
-    const { groupId } = req.params;
-    const testDate = req.query.date as string || new Date().toISOString().split('T')[0];
-    
-    console.log(`Testing snapshot creation for group ${groupId} on date ${testDate}`);
-    
-    // Get current membership data from PCO
-    const memberships = await getGroupMemberships(groupId, true); // Force refresh for testing
-    console.log(`Found ${memberships.length} members for group ${groupId}`);
-    
-    // Get group name
-    const group = await getGroup(groupId);
-    const groupName = group.attributes.name;
-    
-    console.log(`Group name: ${groupName}`);
-    console.log('Sample membership data:', memberships.slice(0, 2));
-    
-    // Store the snapshot
-    membershipSnapshots.storeDailySnapshot(testDate, groupId, groupName, memberships);
-    console.log(`Stored snapshot for ${testDate}`);
-    
-    // Verify it was stored by checking if snapshot exists
-    const hasSnapshot = membershipSnapshots.hasSnapshotForDate(testDate);
-    console.log(`Snapshot exists check: ${hasSnapshot}`);
-    
-    res.json({
-      groupId,
-      groupName,
-      testDate,
-      membershipCount: memberships.length,
-      snapshotStored: hasSnapshot,
-      sampleMembers: memberships.slice(0, 3).map(m => ({
-        personId: m.personId,
-        firstName: m.person?.firstName,
-        lastName: m.person?.lastName,
-        role: m.role
-      }))
-    });
-  } catch (error) {
-    console.error('Error testing group snapshot:', error);
-    res.status(500).json({ error: 'Failed to test group snapshot', details: error instanceof Error ? error.message : 'Unknown error' });
-  }
-});
 
 //Home Page
 app.get('', async (req, res) => {
@@ -3894,7 +3626,6 @@ async function performAutomaticRefresh() {
     }
     
     // Create daily membership snapshot
-    console.log('Creating daily membership snapshot...');
     try {
       const date = new Date().toISOString().split('T')[0];
       
@@ -3917,9 +3648,7 @@ async function performAutomaticRefresh() {
           }
         }
         
-        console.log(`Membership snapshot completed. Success: ${snapshotSuccessCount}, Errors: ${snapshotErrorCount}`);
-      } else {
-        console.log('Membership snapshot already exists for today, skipping');
+        console.log(`Membership snapshot completed for ${date}. Success: ${snapshotSuccessCount}, Errors: ${snapshotErrorCount}`);
       }
     } catch (error) {
       console.error('Failed to create membership snapshot:', error);

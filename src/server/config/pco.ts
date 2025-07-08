@@ -200,7 +200,6 @@ async function getAllGroups(forceRefresh: boolean = false): Promise<PCOGroup[]> 
   
   // Always use cache if available, unless force refresh is requested
   if (cachedGroups && !forceRefresh) {
-
     return cachedGroups;
   }
 
@@ -230,8 +229,6 @@ async function getAllGroups(forceRefresh: boolean = false): Promise<PCOGroup[]> 
     // Optional: Add a small delay to avoid rate limiting
     await delay(100);
   }
-
-
   
   // Cache the results
   cache.set(cacheKey, allGroups);
@@ -371,14 +368,11 @@ export const getGroupEvents = async (groupId: string, showAllEvents: boolean = f
   
   // Always use cache if available, unless force refresh is requested
   if (cachedEvents && !forceRefresh) {
-
     return cachedEvents;
   }
 
-  return retryWithBackoff(async () => {
+      return retryWithBackoff(async () => {
     try {
-    
-      
       // Construct query parameters
       const queryParams: Record<string, string> = {
         order: '-starts_at', // Most recent first
@@ -415,8 +409,6 @@ export const getGroupEvents = async (groupId: string, showAllEvents: boolean = f
         events = [...events, ...nextResponse.data.data];
         nextPage = nextResponse.data.links?.next;
       }
-      
-
       
       // Cache the results
       cache.set(cacheKey, events);
@@ -509,7 +501,6 @@ export const getGroupAttendance = async (groupId: string, showAllEvents: boolean
       });
 
       const attendanceData = await Promise.all(attendancePromises);
-
       
       // Calculate overall statistics (only including events with attendance)
       const currentDate = new Date();
@@ -601,7 +592,6 @@ export const getGroup = async (groupId: string) => {
   const cacheKey = `group_${groupId}`;
   const cachedGroup = cache.get<PCOGroup>(cacheKey);
   if (cachedGroup) {
-
     return cachedGroup;
   }
 
