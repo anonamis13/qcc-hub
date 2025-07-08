@@ -2876,9 +2876,9 @@ app.get('', async (req, res) => {
                   const netChangeColor = netChange > 0 ? '#007bff' : netChange < 0 ? '#fd7e14' : '#666';
                   
                   membershipQuickSummary.innerHTML = 
-                    '<span style="color: #28a745; font-weight: 500;">+' + data.totalJoins + ' members joined</span>' +
-                    '<span style="color: #dc3545; font-weight: 500;">-' + data.totalLeaves + ' members left</span>' +
-                    '<span style="color: ' + netChangeColor + '; font-weight: bold; font-size: 15px;">(' + netChangeText + ' net)</span>';
+                    '<span><span style="color: #28a745; font-weight: 500;">+' + data.totalJoins + '</span> <span style="color: #666;">members joined</span></span>' +
+                    '<span><span style="color: #dc3545; font-weight: 500;">-' + data.totalLeaves + '</span> <span style="color: #666;">members left</span></span>' +
+                    '<span>(<span style="color: ' + netChangeColor + '; font-weight: bold;">' + netChangeText + '</span> <span style="color: #666;">net</span>)</span>';
                 }
                 
                 // Update details with comprehensive view including summary stats and member details
@@ -2908,11 +2908,11 @@ app.get('', async (req, res) => {
                     timelineHtml += 
                       '<div style="display: flex; gap: 20px; margin-bottom: 25px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">' +
                         '<div style="display: flex; align-items: center; gap: 8px;">' +
-                          '<span style="color: #333; font-weight: bold; font-size: 18px;">+' + data.totalJoins + '</span>' +
+                          '<span style="color: #28a745; font-weight: bold; font-size: 18px;">+' + data.totalJoins + '</span>' +
                           '<span style="color: #666; font-weight: 500;">members joined</span>' +
                         '</div>' +
                         '<div style="display: flex; align-items: center; gap: 8px;">' +
-                          '<span style="color: #333; font-weight: bold; font-size: 18px;">-' + data.totalLeaves + '</span>' +
+                          '<span style="color: #dc3545; font-weight: bold; font-size: 18px;">-' + data.totalLeaves + '</span>' +
                           '<span style="color: #666; font-weight: 500;">members left</span>' +
                         '</div>' +
                         '<div style="display: flex; align-items: center; gap: 8px;">' +
@@ -2925,7 +2925,7 @@ app.get('', async (req, res) => {
                     if (data.joins.length > 0) {
                       timelineHtml += 
                         '<div style="margin-bottom: 25px;">' +
-                          '<h4 style="margin: 0 0 15px 0; color: #333; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
+                          '<h4 style="margin: 0 0 15px 0; color: #28a745; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
                             '<span style="background-color: #28a745; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">+</span>' +
                             'Members Joined (' + data.joins.length + ')' +
                           '</h4>' +
@@ -2937,11 +2937,16 @@ app.get('', async (req, res) => {
                           new Date(data.latestSnapshotDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 
                           'recent';
                         
+                        // Format date as MM/DD/YYYY
+                        const formattedJoinDate = data.latestSnapshotDate ? 
+                          new Date(data.latestSnapshotDate).toLocaleDateString('en-US') : 
+                          'recent';
+                        
                         timelineHtml += 
-                          '<div style="padding: 12px 15px; background-color: rgba(40, 167, 69, 0.1); border-radius: 6px; border-left: 4px solid #28a745; display: flex; justify-content: space-between; align-items: center;">' +
-                            '<div style="display: flex; flex-direction: column; gap: 2px;">' +
+                          '<div style="padding: 8px 12px; background-color: rgba(40, 167, 69, 0.1); border-radius: 6px; border-left: 4px solid #28a745; display: flex; justify-content: space-between; align-items: center;">' +
+                            '<div style="display: flex; align-items: center; gap: 8px;">' +
                               '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
-                              '<span style="color: #666; font-size: 12px;">joined ' + joinDate + '</span>' +
+                              '<span style="color: #666; font-size: 12px;">(' + formattedJoinDate + ')</span>' +
                             '</div>' +
                             '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
                           '</div>';
@@ -2954,7 +2959,7 @@ app.get('', async (req, res) => {
                     if (data.leaves.length > 0) {
                       timelineHtml += 
                         '<div style="margin-bottom: 20px;">' +
-                          '<h4 style="margin: 0 0 15px 0; color: #333; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
+                          '<h4 style="margin: 0 0 15px 0; color: #dc3545; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
                             '<span style="background-color: #dc3545; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">-</span>' +
                             'Members Left (' + data.leaves.length + ')' +
                           '</h4>' +
@@ -2970,11 +2975,20 @@ app.get('', async (req, res) => {
                           })() : 
                           'recent';
                         
+                        // Format date as MM/DD/YYYY
+                        const formattedLeaveDate = data.latestSnapshotDate ? 
+                          (() => {
+                            const thirtyDaysAgo = new Date(data.latestSnapshotDate);
+                            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                            return thirtyDaysAgo.toLocaleDateString('en-US');
+                          })() : 
+                          'recent';
+                        
                         timelineHtml += 
-                          '<div style="padding: 12px 15px; background-color: rgba(220, 53, 69, 0.1); border-radius: 6px; border-left: 4px solid #dc3545; display: flex; justify-content: space-between; align-items: center;">' +
-                            '<div style="display: flex; flex-direction: column; gap: 2px;">' +
+                          '<div style="padding: 8px 12px; background-color: rgba(220, 53, 69, 0.1); border-radius: 6px; border-left: 4px solid #dc3545; display: flex; justify-content: space-between; align-items: center;">' +
+                            '<div style="display: flex; align-items: center; gap: 8px;">' +
                               '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
-                              '<span style="color: #666; font-size: 12px;">left ' + leaveDate + '</span>' +
+                              '<span style="color: #666; font-size: 12px;">(' + formattedLeaveDate + ')</span>' +
                             '</div>' +
                             '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
                           '</div>';
