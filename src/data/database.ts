@@ -350,6 +350,33 @@ export const membershipSnapshots = {
         }
       }
       
+      // Sort the results: Group Name, then Date, then First Name alphabetically
+      changes.joins.sort((a, b) => {
+        // First by group name
+        if (a.groupName !== b.groupName) {
+          return a.groupName.localeCompare(b.groupName);
+        }
+        // Then by date (most recent first)
+        if (a.date !== b.date) {
+          return new Date(b.date).getTime() - new Date(a.date).getTime();
+        }
+        // Finally by first name alphabetically
+        return a.firstName.localeCompare(b.firstName);
+      });
+      
+      changes.leaves.sort((a, b) => {
+        // First by group name
+        if (a.groupName !== b.groupName) {
+          return a.groupName.localeCompare(b.groupName);
+        }
+        // Then by date (most recent first)
+        if (a.date !== b.date) {
+          return new Date(b.date).getTime() - new Date(a.date).getTime();
+        }
+        // Finally by first name alphabetically
+        return a.firstName.localeCompare(b.firstName);
+      });
+      
       changes.totalJoins = changes.joins.length;
       changes.totalLeaves = changes.leaves.length;
       
