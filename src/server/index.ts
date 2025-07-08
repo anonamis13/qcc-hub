@@ -917,6 +917,8 @@ app.post('/api/create-membership-snapshot', async (req, res) => {
     const forceRefresh = req.query.forceRefresh === 'true';
     const date = new Date().toISOString().split('T')[0]; // Today's date in YYYY-MM-DD format
     
+    console.log(`Creating membership snapshot for date: ${date}, forceRefresh: ${forceRefresh}`);
+    
     // Check if we already have a snapshot for today (unless force refresh)
     if (!forceRefresh && membershipSnapshots.hasSnapshotForDate(date)) {
       return res.json({ 
@@ -929,26 +931,50 @@ app.post('/api/create-membership-snapshot', async (req, res) => {
     const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
     const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
     
+    console.log(`Getting groups with groupTypeId: ${groupTypeId}`);
+    
     // Get all groups
     const groups = await getPeopleGroups(groupTypeId, false);
+    console.log(`Found ${groups.data.length} groups to process`);
     
     let successCount = 0;
     let errorCount = 0;
+    let detailedResults = [];
     
     // Create snapshots for each group
     for (const group of groups.data) {
       try {
+        console.log(`Processing group ${group.id}: ${group.attributes.name}`);
         const memberships = await getGroupMemberships(group.id, forceRefresh);
+        console.log(`  Found ${memberships.length} members`);
+        
         membershipSnapshots.storeDailySnapshot(date, group.id, group.attributes.name, memberships);
         successCount++;
+        
+        detailedResults.push({
+          groupId: group.id,
+          groupName: group.attributes.name,
+          memberCount: memberships.length,
+          status: 'success'
+        });
         
         // Add small delay to be respectful to the API
         await new Promise(resolve => setTimeout(resolve, 100));
       } catch (error) {
         console.error(`Failed to create snapshot for group ${group.id} (${group.attributes.name}):`, error);
         errorCount++;
+        
+        detailedResults.push({
+          groupId: group.id,
+          groupName: group.attributes.name,
+          memberCount: 0,
+          status: 'error',
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
       }
     }
+    
+    console.log(`Snapshot creation completed. Success: ${successCount}, Errors: ${errorCount}`);
     
     res.json({
       message: 'Membership snapshot creation completed',
@@ -956,11 +982,12 @@ app.post('/api/create-membership-snapshot', async (req, res) => {
       created: true,
       totalGroups: groups.data.length,
       successCount: successCount,
-      errorCount: errorCount
+      errorCount: errorCount,
+      detailedResults: detailedResults.slice(0, 5) // Show first 5 for brevity
     });
   } catch (error) {
     console.error('Error creating membership snapshot:', error);
-    res.status(500).json({ error: 'Failed to create membership snapshot' });
+    res.status(500).json({ error: 'Failed to create membership snapshot', details: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
 
@@ -981,6 +1008,143 @@ app.get('/api/membership-snapshot-status', async (req, res) => {
   } catch (error) {
     console.error('Error checking membership snapshot status:', error);
     res.status(500).json({ error: 'Failed to check membership snapshot status' });
+  }
+});
+
+// Add debug endpoint to check membership snapshot data
+app.get('/api/debug-membership-snapshots', async (req, res) => {
+  try {
+    const { membershipSnapshots } = await import('../data/database.js');
+    
+    // Get basic stats
+    const latestSnapshotDate = membershipSnapshots.getLatestSnapshotDate();
+    
+    // Query the database directly for more detailed info
+    const { dbCache } = await import('../data/database.js');
+    const db = (dbCache as any).initializeDb ? (dbCache as any).initializeDb() : null;
+    
+    if (!db) {
+      return res.status(500).json({ error: 'Could not access database' });
+    }
+    
+    // Get snapshot counts by date
+    const snapshotsByDate = db.prepare(`
+      SELECT date, COUNT(*) as count, COUNT(DISTINCT group_id) as unique_groups
+      FROM membership_snapshots 
+      GROUP BY date 
+      ORDER BY date DESC 
+      LIMIT 10
+    `).all();
+    
+    // Get total snapshots count
+    const totalSnapshots = db.prepare('SELECT COUNT(*) as count FROM membership_snapshots').get();
+    
+    // Get sample data from latest snapshot
+    const sampleData = db.prepare(`
+      SELECT date, group_name, person_first_name, person_last_name, role
+      FROM membership_snapshots 
+      WHERE date = (SELECT MAX(date) FROM membership_snapshots)
+      LIMIT 5
+    `).all();
+    
+    res.json({
+      latestSnapshotDate,
+      totalSnapshots: totalSnapshots.count,
+      snapshotsByDate,
+      sampleData,
+      databasePath: process.env.RENDER ? '/data/cache.db' : 'local cache.db'
+    });
+  } catch (error) {
+    console.error('Error debugging membership snapshots:', error);
+    res.status(500).json({ error: 'Failed to debug membership snapshots', details: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
+// Add debug endpoint to test membership changes calculation
+app.get('/api/debug-membership-changes/:days', async (req, res) => {
+  try {
+    const days = parseInt(req.params.days) || 30;
+    const { membershipSnapshots } = await import('../data/database.js');
+    
+    const changes = membershipSnapshots.getMembershipChanges(days);
+    
+    // Also get raw data for debugging
+    const { dbCache } = await import('../data/database.js');
+    const db = (dbCache as any).initializeDb ? (dbCache as any).initializeDb() : null;
+    
+    if (!db) {
+      return res.status(500).json({ error: 'Could not access database' });
+    }
+    
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - days);
+    const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
+    
+    // Get available snapshot dates for debugging
+    const availableDates = db.prepare(`
+      SELECT DISTINCT date, COUNT(*) as members_count
+      FROM membership_snapshots 
+      WHERE date >= ?
+      GROUP BY date 
+      ORDER BY date DESC
+    `).all(cutoffDateStr);
+    
+    // Get group comparison example for one group
+    const sampleGroupComparison = db.prepare(`
+      SELECT group_id, MAX(date) as latest_date
+      FROM membership_snapshots 
+      GROUP BY group_id 
+      LIMIT 1
+    `).get();
+    
+    let groupComparisonDetail = null;
+    if (sampleGroupComparison) {
+      const currentMembers = db.prepare(`
+        SELECT person_id, person_first_name, person_last_name
+        FROM membership_snapshots 
+        WHERE group_id = ? AND date = ?
+      `).all(sampleGroupComparison.group_id, sampleGroupComparison.latest_date);
+      
+      const pastMembersQuery = db.prepare(`
+        SELECT person_id, person_first_name, person_last_name, date
+        FROM membership_snapshots 
+        WHERE group_id = ? AND date >= ?
+        ORDER BY date ASC
+        LIMIT 1
+      `).get(sampleGroupComparison.group_id, cutoffDateStr);
+      
+      let pastMembers = [];
+      if (pastMembersQuery) {
+        pastMembers = db.prepare(`
+          SELECT person_id, person_first_name, person_last_name
+          FROM membership_snapshots 
+          WHERE group_id = ? AND date = ?
+        `).all(sampleGroupComparison.group_id, pastMembersQuery.date);
+      }
+      
+      groupComparisonDetail = {
+        groupId: sampleGroupComparison.group_id,
+        latestDate: sampleGroupComparison.latest_date,
+        comparisonDate: pastMembersQuery?.date || 'none',
+        currentMembersCount: currentMembers.length,
+        pastMembersCount: pastMembers.length,
+        currentMembers: currentMembers.slice(0, 3), // First 3 for brevity
+        pastMembers: pastMembers.slice(0, 3)
+      };
+    }
+    
+    res.json({
+      requestedDays: days,
+      cutoffDate: cutoffDateStr,
+      changes,
+      debugInfo: {
+        availableDates,
+        groupComparisonDetail
+      }
+    });
+  } catch (error) {
+    console.error('Error debugging membership changes:', error);
+    res.status(500).json({ error: 'Failed to debug membership changes', details: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
 
