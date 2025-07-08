@@ -942,14 +942,14 @@ app.post('/api/create-membership-snapshot', async (req, res) => {
     let detailedResults = [];
     
     // Create snapshots for each group
-    for (const group of groups.data) {
-      try {
-        console.log(`Processing group ${group.id}: ${group.attributes.name}`);
-        const memberships = await getGroupMemberships(group.id, forceRefresh);
-        console.log(`  Found ${memberships.length} members`);
-        
-        membershipSnapshots.storeDailySnapshot(date, group.id, group.attributes.name, memberships);
-        successCount++;
+            for (const group of groups.data) {
+          try {
+            console.log(`Processing group ${group.id}: ${group.attributes.name}`);
+            const memberships = await getGroupMemberships(group.id, true); // Force refresh for snapshots!
+            console.log(`  Found ${memberships.length} members`);
+            
+            membershipSnapshots.storeDailySnapshot(date, group.id, group.attributes.name, memberships);
+            successCount++;
         
         detailedResults.push({
           groupId: group.id,
@@ -1219,7 +1219,7 @@ app.post('/api/test-group-snapshot/:groupId', async (req, res) => {
     console.log(`Testing snapshot creation for group ${groupId} on date ${testDate}`);
     
     // Get current membership data from PCO
-    const memberships = await getGroupMemberships(groupId, true); // Force refresh
+    const memberships = await getGroupMemberships(groupId, true); // Force refresh for testing
     console.log(`Found ${memberships.length} members for group ${groupId}`);
     
     // Get group name
@@ -3905,7 +3905,7 @@ async function performAutomaticRefresh() {
         
         for (const group of groupsResult.data) {
           try {
-            const memberships = await getGroupMemberships(group.id, false); // Use cached data
+            const memberships = await getGroupMemberships(group.id, true); // Force refresh for daily snapshots!
             membershipSnapshots.storeDailySnapshot(date, group.id, group.attributes.name, memberships);
             snapshotSuccessCount++;
             
