@@ -2926,11 +2926,11 @@ app.get('', async (req, res) => {
                       const joinsId = 'membershipJoins_' + Date.now();
                       timelineHtml += 
                         '<div style="margin-bottom: 25px;">' +
-                          '<button onclick="toggleMembershipList(\'' + joinsId + '\', this)" style="background: none; border: none; cursor: pointer; width: 100%; text-align: left; padding: 0; margin: 0 0 15px 0;">' +
-                            '<h4 style="margin: 0; color: #28a745; font-weight: 500; display: flex; align-items: center; gap: 8px; transition: all 0.3s ease;" onmouseover="this.style.color=\'#1e7e34\'" onmouseout="this.style.color=\'#28a745\'">' +
+                          '<button data-target="' + joinsId + '" class="membership-toggle" style="background: none; border: none; cursor: pointer; width: 100%; text-align: left; padding: 0; margin: 0 0 15px 0;">' +
+                            '<h4 style="margin: 0; color: #28a745; font-weight: 500; display: flex; align-items: center; gap: 8px; cursor: pointer;">' +
                               '<span style="background-color: #28a745; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">+</span>' +
                               'Members Joined (' + data.joins.length + ')' +
-                              '<span style="margin-left: auto; font-size: 14px; color: #666;">▼</span>' +
+                              '<span class="toggle-icon" style="margin-left: auto; font-size: 14px; color: #666;">▼</span>' +
                             '</h4>' +
                           '</button>' +
                           '<div id="' + joinsId + '" style="display: none; grid-template-columns: 1fr; gap: 8px;">';
@@ -2959,11 +2959,11 @@ app.get('', async (req, res) => {
                       const leavesId = 'membershipLeaves_' + Date.now();
                       timelineHtml += 
                         '<div style="margin-bottom: 20px;">' +
-                          '<button onclick="toggleMembershipList(\'' + leavesId + '\', this)" style="background: none; border: none; cursor: pointer; width: 100%; text-align: left; padding: 0; margin: 0 0 15px 0;">' +
-                            '<h4 style="margin: 0; color: #dc3545; font-weight: 500; display: flex; align-items: center; gap: 8px; transition: all 0.3s ease;" onmouseover="this.style.color=\'#c82333\'" onmouseout="this.style.color=\'#dc3545\'">' +
+                          '<button data-target="' + leavesId + '" class="membership-toggle" style="background: none; border: none; cursor: pointer; width: 100%; text-align: left; padding: 0; margin: 0 0 15px 0;">' +
+                            '<h4 style="margin: 0; color: #dc3545; font-weight: 500; display: flex; align-items: center; gap: 8px; cursor: pointer;">' +
                               '<span style="background-color: #dc3545; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">-</span>' +
                               'Members Left (' + data.leaves.length + ')' +
-                              '<span style="margin-left: auto; font-size: 14px; color: #666;">▼</span>' +
+                              '<span class="toggle-icon" style="margin-left: auto; font-size: 14px; color: #666;">▼</span>' +
                             '</h4>' +
                           '</button>' +
                           '<div id="' + leavesId + '" style="display: none; grid-template-columns: 1fr; gap: 8px;">';
@@ -2999,26 +2999,29 @@ app.get('', async (req, res) => {
               }
             }
 
-            // Function to toggle membership lists
-            function toggleMembershipList(listId, buttonElement) {
-              const listElement = document.getElementById(listId);
-              const iconElement = buttonElement.querySelector('h4 span:last-child');
-              
-              if (listElement && iconElement) {
-                const isVisible = listElement.style.display === 'grid';
+
+
+            // Setup membership list toggle functionality using event delegation
+            document.addEventListener('click', function(event) {
+              const button = event.target.closest('.membership-toggle');
+              if (button) {
+                const targetId = button.getAttribute('data-target');
+                const listElement = document.getElementById(targetId);
+                const iconElement = button.querySelector('.toggle-icon');
                 
-                if (isVisible) {
-                  listElement.style.display = 'none';
-                  iconElement.textContent = '▼';
-                } else {
-                  listElement.style.display = 'grid';
-                  iconElement.textContent = '▲';
+                if (listElement && iconElement) {
+                  const isVisible = listElement.style.display === 'grid';
+                  
+                  if (isVisible) {
+                    listElement.style.display = 'none';
+                    iconElement.textContent = '▼';
+                  } else {
+                    listElement.style.display = 'grid';
+                    iconElement.textContent = '▲';
+                  }
                 }
               }
-            }
-            
-            // Make the function globally available
-            window.toggleMembershipList = toggleMembershipList;
+            });
 
             // Check cache and load data when page loads
             checkCacheAndLoad();

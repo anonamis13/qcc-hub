@@ -9,7 +9,6 @@ compare graphs function?
 month-over-month and year-over-year percentage
 YA groups functionality
 attendance reminder sent button (or auto-notify)
-missing persons report (data point on graph show names of missing members?)
 
 
 Completed Features:
@@ -28,3 +27,4 @@ when clicking Attendance, open into new tab
 differentiate dads/moms/family weeks on individual group page
 last 30 days, number of people who have left/joined a group
 home page sort function (group type, attendance rate, group size)
+missing persons report
