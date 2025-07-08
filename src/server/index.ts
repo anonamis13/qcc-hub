@@ -1153,15 +1153,14 @@ app.get('/api/debug-raw-snapshots', async (req, res) => {
     const days = parseInt(req.query.days as string) || 7;
     const groupId = req.query.groupId as string;
     
-    // Use the database functions to get raw data
-    const { dbCache } = await import('../data/database.js');
+    // Import database modules
+    const Database = (await import('better-sqlite3')).default;
+    const path = await import('path');
     
     // Initialize the database by calling a function that uses it
     membershipSnapshots.hasSnapshotForDate('2025-01-01');
     
-    // Create a simple database query using the same approach as the membership functions
-    const Database = require('better-sqlite3');
-    const path = require('path');
+    // Create database connection
     const dbPath = process.env.RENDER ? '/data/cache.db' : path.join(process.cwd(), 'src/data/cache.db');
     const db = new Database(dbPath, { readonly: true });
     
@@ -1180,8 +1179,8 @@ app.get('/api/debug-raw-snapshots', async (req, res) => {
       db.prepare(summaryQuery).all();
     
     // Get sample member data for latest date
-    const latestDate = summary.length > 0 ? summary[0].date : null;
-    let sampleMembers = [];
+    const latestDate = summary.length > 0 ? (summary[0] as any).date : null;
+    let sampleMembers: any[] = [];
     
     if (latestDate) {
       const membersQuery = `
