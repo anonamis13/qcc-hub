@@ -1011,47 +1011,46 @@ app.get('/api/membership-snapshot-status', async (req, res) => {
   }
 });
 
-// Add debug endpoint to check membership snapshot data
+// Add simple debug endpoint to check membership snapshot data
 app.get('/api/debug-membership-snapshots', async (req, res) => {
   try {
-    const { membershipSnapshots } = await import('../data/database.js');
-    
-    // Get basic stats
+    // Get basic stats using the existing functions
     const latestSnapshotDate = membershipSnapshots.getLatestSnapshotDate();
+    const today = new Date().toISOString().split('T')[0];
+    const hasSnapshotForToday = membershipSnapshots.hasSnapshotForDate(today);
     
-    // Query the database directly for more detailed info
-    const { dbCache } = await import('../data/database.js');
-    const db = (dbCache as any).initializeDb ? (dbCache as any).initializeDb() : null;
+    // Test membership changes calculation
+    const changes7Days = membershipSnapshots.getMembershipChanges(7);
+    const changes30Days = membershipSnapshots.getMembershipChanges(30);
     
-    if (!db) {
-      return res.status(500).json({ error: 'Could not access database' });
+    // Check for multiple recent dates
+    const recentDates = [];
+    for (let i = 0; i < 10; i++) {
+      const checkDate = new Date();
+      checkDate.setDate(checkDate.getDate() - i);
+      const dateStr = checkDate.toISOString().split('T')[0];
+      const hasSnapshot = membershipSnapshots.hasSnapshotForDate(dateStr);
+      if (hasSnapshot) {
+        recentDates.push(dateStr);
+      }
     }
-    
-    // Get snapshot counts by date
-    const snapshotsByDate = db.prepare(`
-      SELECT date, COUNT(*) as count, COUNT(DISTINCT group_id) as unique_groups
-      FROM membership_snapshots 
-      GROUP BY date 
-      ORDER BY date DESC 
-      LIMIT 10
-    `).all();
-    
-    // Get total snapshots count
-    const totalSnapshots = db.prepare('SELECT COUNT(*) as count FROM membership_snapshots').get();
-    
-    // Get sample data from latest snapshot
-    const sampleData = db.prepare(`
-      SELECT date, group_name, person_first_name, person_last_name, role
-      FROM membership_snapshots 
-      WHERE date = (SELECT MAX(date) FROM membership_snapshots)
-      LIMIT 5
-    `).all();
     
     res.json({
       latestSnapshotDate,
-      totalSnapshots: totalSnapshots.count,
-      snapshotsByDate,
-      sampleData,
+      hasSnapshotForToday,
+      recentSnapshotsFound: recentDates,
+      changes7Days: {
+        totalJoins: changes7Days.totalJoins,
+        totalLeaves: changes7Days.totalLeaves,
+        sampleJoins: changes7Days.joins.slice(0, 3),
+        sampleLeaves: changes7Days.leaves.slice(0, 3)
+      },
+      changes30Days: {
+        totalJoins: changes30Days.totalJoins,
+        totalLeaves: changes30Days.totalLeaves,
+        sampleJoins: changes30Days.joins.slice(0, 3),
+        sampleLeaves: changes30Days.leaves.slice(0, 3)
+      },
       databasePath: process.env.RENDER ? '/data/cache.db' : 'local cache.db'
     });
   } catch (error) {
@@ -1060,86 +1059,37 @@ app.get('/api/debug-membership-snapshots', async (req, res) => {
   }
 });
 
-// Add debug endpoint to test membership changes calculation
+// Add simple debug endpoint to test membership changes calculation
 app.get('/api/debug-membership-changes/:days', async (req, res) => {
   try {
     const days = parseInt(req.params.days) || 30;
-    const { membershipSnapshots } = await import('../data/database.js');
-    
     const changes = membershipSnapshots.getMembershipChanges(days);
-    
-    // Also get raw data for debugging
-    const { dbCache } = await import('../data/database.js');
-    const db = (dbCache as any).initializeDb ? (dbCache as any).initializeDb() : null;
-    
-    if (!db) {
-      return res.status(500).json({ error: 'Could not access database' });
-    }
     
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - days);
     const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
     
-    // Get available snapshot dates for debugging
-    const availableDates = db.prepare(`
-      SELECT DISTINCT date, COUNT(*) as members_count
-      FROM membership_snapshots 
-      WHERE date >= ?
-      GROUP BY date 
-      ORDER BY date DESC
-    `).all(cutoffDateStr);
-    
-    // Get group comparison example for one group
-    const sampleGroupComparison = db.prepare(`
-      SELECT group_id, MAX(date) as latest_date
-      FROM membership_snapshots 
-      GROUP BY group_id 
-      LIMIT 1
-    `).get();
-    
-    let groupComparisonDetail = null;
-    if (sampleGroupComparison) {
-      const currentMembers = db.prepare(`
-        SELECT person_id, person_first_name, person_last_name
-        FROM membership_snapshots 
-        WHERE group_id = ? AND date = ?
-      `).all(sampleGroupComparison.group_id, sampleGroupComparison.latest_date);
-      
-      const pastMembersQuery = db.prepare(`
-        SELECT person_id, person_first_name, person_last_name, date
-        FROM membership_snapshots 
-        WHERE group_id = ? AND date >= ?
-        ORDER BY date ASC
-        LIMIT 1
-      `).get(sampleGroupComparison.group_id, cutoffDateStr);
-      
-      let pastMembers = [];
-      if (pastMembersQuery) {
-        pastMembers = db.prepare(`
-          SELECT person_id, person_first_name, person_last_name
-          FROM membership_snapshots 
-          WHERE group_id = ? AND date = ?
-        `).all(sampleGroupComparison.group_id, pastMembersQuery.date);
+    // Check what dates we have snapshots for
+    const availableDates = [];
+    for (let i = 0; i <= days; i++) {
+      const checkDate = new Date();
+      checkDate.setDate(checkDate.getDate() - i);
+      const dateStr = checkDate.toISOString().split('T')[0];
+      const hasSnapshot = membershipSnapshots.hasSnapshotForDate(dateStr);
+      if (hasSnapshot) {
+        availableDates.push(dateStr);
       }
-      
-      groupComparisonDetail = {
-        groupId: sampleGroupComparison.group_id,
-        latestDate: sampleGroupComparison.latest_date,
-        comparisonDate: pastMembersQuery?.date || 'none',
-        currentMembersCount: currentMembers.length,
-        pastMembersCount: pastMembers.length,
-        currentMembers: currentMembers.slice(0, 3), // First 3 for brevity
-        pastMembers: pastMembers.slice(0, 3)
-      };
     }
     
     res.json({
       requestedDays: days,
       cutoffDate: cutoffDateStr,
-      changes,
-      debugInfo: {
-        availableDates,
-        groupComparisonDetail
+      availableDatesInRange: availableDates,
+      changes: {
+        totalJoins: changes.totalJoins,
+        totalLeaves: changes.totalLeaves,
+        joinsDetails: changes.joins,
+        leavesDetails: changes.leaves
       }
     });
   } catch (error) {
