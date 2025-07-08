@@ -2873,12 +2873,12 @@ app.get('', async (req, res) => {
                 if (membershipQuickSummary) {
                   const netChange = data.totalJoins - data.totalLeaves;
                   const netChangeText = netChange > 0 ? '+' + netChange : netChange.toString();
-                  const netChangeColor = netChange > 0 ? '#28a745' : netChange < 0 ? '#dc3545' : '#666';
+                  const netChangeColor = netChange > 0 ? '#007bff' : netChange < 0 ? '#fd7e14' : '#666';
                   
                   membershipQuickSummary.innerHTML = 
-                    '<span style="color: #28a745;">+' + data.totalJoins + ' joined</span>' +
-                    '<span style="color: #dc3545;">-' + data.totalLeaves + ' left</span>' +
-                    '<span style="color: ' + netChangeColor + '; font-weight: bold;">(' + netChangeText + ' net)</span>';
+                    '<span style="color: #28a745; font-weight: 500;">+' + data.totalJoins + ' members joined</span>' +
+                    '<span style="color: #dc3545; font-weight: 500;">-' + data.totalLeaves + ' members left</span>' +
+                    '<span style="color: ' + netChangeColor + '; font-weight: bold; font-size: 15px;">(' + netChangeText + ' net)</span>';
                 }
                 
                 // Update details with comprehensive view including summary stats and member details
@@ -2901,36 +2901,52 @@ app.get('', async (req, res) => {
                       '</div>';
                     
                     // Show summary stats
+                    const netChange = data.totalJoins - data.totalLeaves;
+                    const netChangeText = netChange > 0 ? '+' + netChange : netChange.toString();
+                    const netChangeColor = netChange > 0 ? '#007bff' : netChange < 0 ? '#fd7e14' : '#666';
+                    
                     timelineHtml += 
                       '<div style="display: flex; gap: 20px; margin-bottom: 25px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">' +
                         '<div style="display: flex; align-items: center; gap: 8px;">' +
                           '<span style="color: #28a745; font-weight: bold; font-size: 18px;">+' + data.totalJoins + '</span>' +
-                          '<span style="color: #666;">new members</span>' +
+                          '<span style="color: #666; font-weight: 500;">members joined</span>' +
                         '</div>' +
                         '<div style="display: flex; align-items: center; gap: 8px;">' +
                           '<span style="color: #dc3545; font-weight: bold; font-size: 18px;">-' + data.totalLeaves + '</span>' +
-                          '<span style="color: #666;">members left</span>' +
+                          '<span style="color: #666; font-weight: 500;">members left</span>' +
                         '</div>' +
-                        '<div style="display: flex; align-items: center; gap: 8px;">' +
-                          '<span style="color: #007bff; font-weight: bold; font-size: 18px;">' + (data.totalJoins - data.totalLeaves > 0 ? '+' : '') + (data.totalJoins - data.totalLeaves) + '</span>' +
-                          '<span style="color: #666;">net change</span>' +
+                        '<div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background-color: rgba(0,0,0,0.02); border-radius: 6px; border: 1px solid rgba(0,0,0,0.1);">' +
+                          '<span style="color: ' + netChangeColor + '; font-weight: bold; font-size: 20px;">' + netChangeText + '</span>' +
+                          '<span style="color: #666; font-weight: 500;">net change</span>' +
                         '</div>' +
                       '</div>';
                     
                     // Show joins section
                     if (data.joins.length > 0) {
+                      const joinsId = 'membershipJoins_' + Date.now();
                       timelineHtml += 
                         '<div style="margin-bottom: 25px;">' +
-                          '<h4 style="margin: 0 0 15px 0; color: #28a745; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
-                            '<span style="background-color: #28a745; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">+</span>' +
-                            'New Members (' + data.joins.length + ')' +
-                          '</h4>' +
-                          '<div style="display: grid; gap: 8px;">';
+                          '<button onclick="toggleMembershipList(\'' + joinsId + '\', this)" style="background: none; border: none; cursor: pointer; width: 100%; text-align: left; padding: 0; margin: 0 0 15px 0;">' +
+                            '<h4 style="margin: 0; color: #28a745; font-weight: 500; display: flex; align-items: center; gap: 8px; transition: all 0.3s ease;" onmouseover="this.style.color=\'#1e7e34\'" onmouseout="this.style.color=\'#28a745\'">' +
+                              '<span style="background-color: #28a745; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">+</span>' +
+                              'Members Joined (' + data.joins.length + ')' +
+                              '<span style="margin-left: auto; font-size: 14px; color: #666;">▼</span>' +
+                            '</h4>' +
+                          '</button>' +
+                          '<div id="' + joinsId + '" style="display: none; grid-template-columns: 1fr; gap: 8px;">';
                       
                       data.joins.forEach(member => {
+                        // Calculate approximate date (since we don't have exact dates, show the data range)
+                        const approximateDate = data.latestSnapshotDate ? 
+                          'within last 30 days' : 
+                          'recent';
+                        
                         timelineHtml += 
                           '<div style="padding: 12px 15px; background-color: rgba(40, 167, 69, 0.1); border-radius: 6px; border-left: 4px solid #28a745; display: flex; justify-content: space-between; align-items: center;">' +
-                            '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
+                            '<div style="display: flex; flex-direction: column; gap: 2px;">' +
+                              '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
+                              '<span style="color: #666; font-size: 12px;">' + approximateDate + '</span>' +
+                            '</div>' +
                             '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
                           '</div>';
                       });
@@ -2940,18 +2956,30 @@ app.get('', async (req, res) => {
                     
                     // Show leaves section
                     if (data.leaves.length > 0) {
+                      const leavesId = 'membershipLeaves_' + Date.now();
                       timelineHtml += 
                         '<div style="margin-bottom: 20px;">' +
-                          '<h4 style="margin: 0 0 15px 0; color: #dc3545; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
-                            '<span style="background-color: #dc3545; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">-</span>' +
-                            'Members Left (' + data.leaves.length + ')' +
-                          '</h4>' +
-                          '<div style="display: grid; gap: 8px;">';
+                          '<button onclick="toggleMembershipList(\'' + leavesId + '\', this)" style="background: none; border: none; cursor: pointer; width: 100%; text-align: left; padding: 0; margin: 0 0 15px 0;">' +
+                            '<h4 style="margin: 0; color: #dc3545; font-weight: 500; display: flex; align-items: center; gap: 8px; transition: all 0.3s ease;" onmouseover="this.style.color=\'#c82333\'" onmouseout="this.style.color=\'#dc3545\'">' +
+                              '<span style="background-color: #dc3545; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">-</span>' +
+                              'Members Left (' + data.leaves.length + ')' +
+                              '<span style="margin-left: auto; font-size: 14px; color: #666;">▼</span>' +
+                            '</h4>' +
+                          '</button>' +
+                          '<div id="' + leavesId + '" style="display: none; grid-template-columns: 1fr; gap: 8px;">';
                       
                       data.leaves.forEach(member => {
+                        // Calculate approximate date (since we don't have exact dates, show the data range)
+                        const approximateDate = data.latestSnapshotDate ? 
+                          'within last 30 days' : 
+                          'recent';
+                        
                         timelineHtml += 
                           '<div style="padding: 12px 15px; background-color: rgba(220, 53, 69, 0.1); border-radius: 6px; border-left: 4px solid #dc3545; display: flex; justify-content: space-between; align-items: center;">' +
-                            '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
+                            '<div style="display: flex; flex-direction: column; gap: 2px;">' +
+                              '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
+                              '<span style="color: #666; font-size: 12px;">' + approximateDate + '</span>' +
+                            '</div>' +
                             '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
                           '</div>';
                       });
@@ -2970,6 +2998,27 @@ app.get('', async (req, res) => {
                 }
               }
             }
+
+            // Function to toggle membership lists
+            function toggleMembershipList(listId, buttonElement) {
+              const listElement = document.getElementById(listId);
+              const iconElement = buttonElement.querySelector('h4 span:last-child');
+              
+              if (listElement && iconElement) {
+                const isVisible = listElement.style.display === 'grid';
+                
+                if (isVisible) {
+                  listElement.style.display = 'none';
+                  iconElement.textContent = '▼';
+                } else {
+                  listElement.style.display = 'grid';
+                  iconElement.textContent = '▲';
+                }
+              }
+            }
+            
+            // Make the function globally available
+            window.toggleMembershipList = toggleMembershipList;
 
             // Check cache and load data when page loads
             checkCacheAndLoad();
