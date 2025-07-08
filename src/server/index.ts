@@ -2908,14 +2908,14 @@ app.get('', async (req, res) => {
                     timelineHtml += 
                       '<div style="display: flex; gap: 20px; margin-bottom: 25px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">' +
                         '<div style="display: flex; align-items: center; gap: 8px;">' +
-                          '<span style="color: #28a745; font-weight: bold; font-size: 18px;">+' + data.totalJoins + '</span>' +
+                          '<span style="color: #333; font-weight: bold; font-size: 18px;">+' + data.totalJoins + '</span>' +
                           '<span style="color: #666; font-weight: 500;">members joined</span>' +
                         '</div>' +
                         '<div style="display: flex; align-items: center; gap: 8px;">' +
-                          '<span style="color: #dc3545; font-weight: bold; font-size: 18px;">-' + data.totalLeaves + '</span>' +
+                          '<span style="color: #333; font-weight: bold; font-size: 18px;">-' + data.totalLeaves + '</span>' +
                           '<span style="color: #666; font-weight: 500;">members left</span>' +
                         '</div>' +
-                        '<div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background-color: rgba(0,0,0,0.02); border-radius: 6px; border: 1px solid rgba(0,0,0,0.1);">' +
+                        '<div style="display: flex; align-items: center; gap: 8px;">' +
                           '<span style="color: ' + netChangeColor + '; font-weight: bold; font-size: 20px;">' + netChangeText + '</span>' +
                           '<span style="color: #666; font-weight: 500;">net change</span>' +
                         '</div>' +
@@ -2923,29 +2923,25 @@ app.get('', async (req, res) => {
                     
                     // Show joins section
                     if (data.joins.length > 0) {
-                      const joinsId = 'membershipJoins_' + Date.now();
                       timelineHtml += 
                         '<div style="margin-bottom: 25px;">' +
-                          '<button data-target="' + joinsId + '" class="membership-toggle" style="background: none; border: none; cursor: pointer; width: 100%; text-align: left; padding: 0; margin: 0 0 15px 0;">' +
-                            '<h4 style="margin: 0; color: #28a745; font-weight: 500; display: flex; align-items: center; gap: 8px; cursor: pointer;">' +
-                              '<span style="background-color: #28a745; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">+</span>' +
-                              'Members Joined (' + data.joins.length + ')' +
-                              '<span class="toggle-icon" style="margin-left: auto; font-size: 14px; color: #666;">▼</span>' +
-                            '</h4>' +
-                          '</button>' +
-                          '<div id="' + joinsId + '" style="display: none; grid-template-columns: 1fr; gap: 8px;">';
+                          '<h4 style="margin: 0 0 15px 0; color: #333; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
+                            '<span style="background-color: #28a745; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">+</span>' +
+                            'Members Joined (' + data.joins.length + ')' +
+                          '</h4>' +
+                          '<div style="display: grid; gap: 8px;">';
                       
                       data.joins.forEach(member => {
-                        // Calculate approximate date (since we don't have exact dates, show the data range)
-                        const approximateDate = data.latestSnapshotDate ? 
-                          'within last 30 days' : 
+                        // Calculate approximate date - use latest snapshot date as join date
+                        const joinDate = data.latestSnapshotDate ? 
+                          new Date(data.latestSnapshotDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 
                           'recent';
                         
                         timelineHtml += 
                           '<div style="padding: 12px 15px; background-color: rgba(40, 167, 69, 0.1); border-radius: 6px; border-left: 4px solid #28a745; display: flex; justify-content: space-between; align-items: center;">' +
                             '<div style="display: flex; flex-direction: column; gap: 2px;">' +
                               '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
-                              '<span style="color: #666; font-size: 12px;">' + approximateDate + '</span>' +
+                              '<span style="color: #666; font-size: 12px;">joined ' + joinDate + '</span>' +
                             '</div>' +
                             '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
                           '</div>';
@@ -2956,29 +2952,29 @@ app.get('', async (req, res) => {
                     
                     // Show leaves section
                     if (data.leaves.length > 0) {
-                      const leavesId = 'membershipLeaves_' + Date.now();
                       timelineHtml += 
                         '<div style="margin-bottom: 20px;">' +
-                          '<button data-target="' + leavesId + '" class="membership-toggle" style="background: none; border: none; cursor: pointer; width: 100%; text-align: left; padding: 0; margin: 0 0 15px 0;">' +
-                            '<h4 style="margin: 0; color: #dc3545; font-weight: 500; display: flex; align-items: center; gap: 8px; cursor: pointer;">' +
-                              '<span style="background-color: #dc3545; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">-</span>' +
-                              'Members Left (' + data.leaves.length + ')' +
-                              '<span class="toggle-icon" style="margin-left: auto; font-size: 14px; color: #666;">▼</span>' +
-                            '</h4>' +
-                          '</button>' +
-                          '<div id="' + leavesId + '" style="display: none; grid-template-columns: 1fr; gap: 8px;">';
+                          '<h4 style="margin: 0 0 15px 0; color: #333; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
+                            '<span style="background-color: #dc3545; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">-</span>' +
+                            'Members Left (' + data.leaves.length + ')' +
+                          '</h4>' +
+                          '<div style="display: grid; gap: 8px;">';
                       
                       data.leaves.forEach(member => {
-                        // Calculate approximate date (since we don't have exact dates, show the data range)
-                        const approximateDate = data.latestSnapshotDate ? 
-                          'within last 30 days' : 
+                        // Calculate approximate date - use 30 days ago as leave date
+                        const leaveDate = data.latestSnapshotDate ? 
+                          (() => {
+                            const thirtyDaysAgo = new Date(data.latestSnapshotDate);
+                            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                            return thirtyDaysAgo.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                          })() : 
                           'recent';
                         
                         timelineHtml += 
                           '<div style="padding: 12px 15px; background-color: rgba(220, 53, 69, 0.1); border-radius: 6px; border-left: 4px solid #dc3545; display: flex; justify-content: space-between; align-items: center;">' +
                             '<div style="display: flex; flex-direction: column; gap: 2px;">' +
                               '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
-                              '<span style="color: #666; font-size: 12px;">' + approximateDate + '</span>' +
+                              '<span style="color: #666; font-size: 12px;">left ' + leaveDate + '</span>' +
                             '</div>' +
                             '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
                           '</div>';
