@@ -187,11 +187,18 @@ app.get('/api/aggregate-attendance', async (req, res) => {
                             req.query.meetingDays ? (req.query.meetingDays as string).split(',') : 
                             ['Wednesday', 'Thursday'];
     
+    // Parse selected group IDs filter
+    const selectedGroupIds = req.query.selectedGroups ? 
+                           (req.query.selectedGroups as string).split(',').filter(id => id.trim()) : 
+                           null;
+    
     console.log('Filter parameters received:', {
       groupTypesQuery: req.query.groupTypes,
       meetingDaysQuery: req.query.meetingDays,
+      selectedGroupsQuery: req.query.selectedGroups,
       groupTypesFilter,
-      meetingDaysFilter
+      meetingDaysFilter,
+      selectedGroupIds
     });
     
     // Get all groups first
@@ -204,6 +211,12 @@ app.get('/api/aggregate-attendance', async (req, res) => {
         const groupType = group.metadata?.groupType || 'Unknown';
         const meetingDay = group.metadata?.meetingDay || 'Unknown';
         
+        // If specific groups are selected, only include those groups
+        if (selectedGroupIds && selectedGroupIds.length > 0) {
+          return selectedGroupIds.includes(group.id);
+        }
+        
+        // Otherwise, use the normal filtering logic
         // If no group types are selected, show no groups
         if (groupTypesFilter.length === 0) {
           return false;
@@ -378,8 +391,8 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     });
     
     // Filter out weeks with insufficient group participation
-    // Check if we're using filters - if so, show all data regardless of group count
-    const isFiltered = groupTypesFilter.length < 3 || meetingDaysFilter.length < 2;
+    // Check if we're using filters or selected groups - if so, show all data regardless of group count
+    const isFiltered = groupTypesFilter.length < 3 || meetingDaysFilter.length < 2 || selectedGroupIds;
     
     const validWeeks = new Set();
     if (isFiltered) {
@@ -1029,6 +1042,29 @@ app.get('', async (req, res) => {
               display: flex;
               justify-content: space-between;
               align-items: center;
+              transition: all 0.3s ease;
+            }
+            .group-item.not-selected {
+              border-left: 4px solid transparent;
+            }
+            .group-item.selection-mode {
+              cursor: pointer;
+              border: 2px solid #ddd;
+              border-left: 4px solid #007bff;
+            }
+            .group-item.selection-mode:hover {
+              border-color: #007bff;
+              background-color: #e3f2fd;
+            }
+            .group-item.selection-mode.selected {
+              background-color: #007bff;
+              color: white;
+              border-color: #0056b3;
+            }
+            .group-item.selection-mode.selected .stat-value,
+            .group-item.selection-mode.selected .stat-label,
+            .group-item.selection-mode.selected a {
+              color: white !important;
             }
             .group-item a {
               color: #007bff;
@@ -1105,11 +1141,7 @@ app.get('', async (req, res) => {
               background-color: #ccc;
               cursor: not-allowed;
             }
-            #groupCount {
-              margin: 10px 0;
-              color: #666;
-              display: none;
-            }
+
             #groupList {
               display: none;
             }
@@ -1307,7 +1339,7 @@ app.get('', async (req, res) => {
               <span class="est-time">est. time ≈ 3 min.</span>
             </button>
             <p id="lastUpdate"></p>
-            <p id="groupCount"></p>
+
             
             <div class="toggle-container" id="toggleContainer" style="display: none;">
               <label class="toggle-switch">
@@ -1327,7 +1359,7 @@ app.get('', async (req, res) => {
 
             
             <div class="membership-changes-container" id="membershipChangesContainer" style="display: none;">
-              <button id="membershipMainToggleBtn" style="width: 100%; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px 20px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.3s ease;" onmouseover="this.style.borderColor='#007bff'; this.style.backgroundColor='#f8f9fa';" onmouseout="this.style.borderColor='#ddd'; this.style.backgroundColor='white';">
+              <button id="membershipMainToggleBtn" style="width: 100%; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px 20px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.3s ease;" onmouseover="this.style.borderColor=&quot;#007bff&quot;; this.style.backgroundColor=&quot;#f8f9fa&quot;;" onmouseout="this.style.borderColor=&quot;#ddd&quot;; this.style.backgroundColor=&quot;white&quot;;">
                 <div style="display: flex; align-items: center; gap: 15px;">
                   <h3 style="margin: 0; color: #333; font-weight: 500;">Recent Membership Changes</h3>
                   <div id="membershipQuickSummary" style="display: flex; gap: 15px; font-size: 14px; color: #666;">
@@ -1352,10 +1384,13 @@ app.get('', async (req, res) => {
                 <span>Loading chart data...</span>
               </div>
               <canvas id="aggregateChart"></canvas>
+              <div id="chartGroupCount" style="display: none; margin-top: 15px; padding: 6px 12px; background-color: #e3f2fd; border-radius: 4px; font-size: 13px; color: #1976d2; text-align: center; border: 1px solid #90caf9;">
+                Chart represents data from X groups
+              </div>
             </div>
             
-            <div class="sort-filter-container" id="sortFilterContainer" style="display: none;">
-              <button id="sortFilterToggleBtn" style="width: 100%; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px 20px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.3s ease;" onmouseover="this.style.borderColor='#007bff'; this.style.backgroundColor='#f8f9fa';" onmouseout="this.style.borderColor='#ddd'; this.style.backgroundColor='white';">
+            <div class="sort-filter-container" id="sortFilterContainer" style="display: none; margin-top: 30px;">
+              <button id="sortFilterToggleBtn" style="width: 100%; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px 20px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.3s ease;" onmouseover="this.style.borderColor=&quot;#007bff&quot;; this.style.backgroundColor=&quot;#f8f9fa&quot;;" onmouseout="this.style.borderColor=&quot;#ddd&quot;; this.style.backgroundColor=&quot;white&quot;;">
                 <div style="display: flex; align-items: center; gap: 15px;">
                   <h3 style="margin: 0; color: #333; font-weight: 500;">Sort & Filter Groups</h3>
                   <div id="sortFilterSummary" style="display: flex; gap: 15px; font-size: 14px; color: #666;">
@@ -1391,7 +1426,7 @@ app.get('', async (req, res) => {
                   <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745;">
                     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px;">
                       <h4 style="margin: 0; color: #28a745; font-weight: 500;">Filter Groups</h4>
-                      <button id="clearFiltersBtn" title="Clear All Filters" style="background: #dc3545; color: white; border: none; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; font-size: 14px; font-weight: bold; display: flex; align-items: center; justify-content: center; transition: background-color 0.3s ease;" onmouseover="this.style.backgroundColor='#c82333';" onmouseout="this.style.backgroundColor='#dc3545';">
+                      <button id="clearFiltersBtn" title="Clear All Filters" style="background: #dc3545; color: white; border: none; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; font-size: 14px; font-weight: bold; display: flex; align-items: center; justify-content: center; transition: background-color 0.3s ease;" onmouseover="this.style.backgroundColor=&quot;#c82333&quot;;" onmouseout="this.style.backgroundColor=&quot;#dc3545&quot;;">
                         X
                       </button>
                     </div>
@@ -1437,6 +1472,20 @@ app.get('', async (req, res) => {
               </div>
             </div>
             
+            <div class="group-selection-controls" id="groupSelectionControls" style="display: none; flex-wrap: wrap; align-items: center; gap: 15px; margin-bottom: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 8px; border-left: 4px solid #007bff;">
+              <span style="font-weight: bold; color: #333;"><strong>Chart Groups:</strong></span>
+              <button id="chartSelectionModeBtn" style="padding: 8px 16px; border: 1px solid #007bff; border-radius: 4px; background-color: white; color: #007bff; cursor: pointer; font-size: 14px; transition: all 0.3s ease;" onmouseover="this.style.backgroundColor=&quot;#007bff&quot;; this.style.color=&quot;white&quot;;" onmouseout="this.style.backgroundColor=&quot;white&quot;; this.style.color=&quot;#007bff&quot;;">Select Groups for Chart</button>
+              <span id="selectedGroupsCount" style="color: #666; font-size: 14px;">All groups selected for chart</span>
+              
+              <!-- Selection mode controls (hidden by default) -->
+              <div id="selectionModeControls" style="display: none; gap: 10px; align-items: center;">
+                <span style="color: #666; font-size: 12px; font-style: italic;">Click groups to select/deselect:</span>
+                <button id="selectAllGroupsBtn" style="padding: 6px 12px; border: 1px solid #28a745; border-radius: 4px; background-color: white; color: #28a745; cursor: pointer; font-size: 12px; transition: all 0.3s ease;" onmouseover="this.style.backgroundColor=&quot;#28a745&quot;; this.style.color=&quot;white&quot;;" onmouseout="this.style.backgroundColor=&quot;white&quot;; this.style.color=&quot;#28a745&quot;;">Select All</button>
+                <button id="deselectAllGroupsBtn" style="padding: 6px 12px; border: 1px solid #dc3545; border-radius: 4px; background-color: white; color: #dc3545; cursor: pointer; font-size: 12px; transition: all 0.3s ease;" onmouseover="this.style.backgroundColor=&quot;#dc3545&quot;; this.style.color=&quot;white&quot;;" onmouseout="this.style.backgroundColor=&quot;white&quot;; this.style.color=&quot;#dc3545&quot;;">Deselect All</button>
+                <button id="confirmSelectionBtn" style="padding: 6px 12px; border: 1px solid #007bff; border-radius: 4px; background-color: #007bff; color: white; cursor: pointer; font-size: 12px; transition: all 0.3s ease;" onmouseover="this.style.backgroundColor=&quot;#0056b3&quot;;" onmouseout="this.style.backgroundColor=&quot;#007bff&quot;;">Done</button>
+              </div>
+            </div>
+            
             <div id="initialMessage" class="initial-message">
               Loading...
             </div>
@@ -1446,7 +1495,6 @@ app.get('', async (req, res) => {
           <script>
             const loadDataBtn = document.getElementById('loadDataBtn');
             const groupList = document.getElementById('groupList');
-            const groupCount = document.getElementById('groupCount');
             const initialMessage = document.getElementById('initialMessage');
             const lastUpdate = document.getElementById('lastUpdate');
 
@@ -1463,6 +1511,11 @@ app.get('', async (req, res) => {
               field: 'name',
               descending: false
             };
+            
+            // Global variables for group selection
+            let selectedGroupIds = new Set();
+            let isSelectionMode = false;
+            let currentlyVisibleGroups = [];
 
             // Sort and Filter Functions
             function setupSortFilterToggle() {
@@ -1654,10 +1707,14 @@ app.get('', async (req, res) => {
             
             function displayFilteredGroups(groups) {
               const groupList = document.getElementById('groupList');
-              const groupCount = document.getElementById('groupCount');
+              
+              // Track currently visible groups for selection logic
+              currentlyVisibleGroups = groups;
               
               if (groupList) {
                 const groupsHtml = groups.map(group => {
+                  // Check if this group is selected
+                  const isSelected = selectedGroupIds.has(group.id);
                   let statsHtml = '';
                   
                   if (group.stats) {
@@ -1728,10 +1785,24 @@ app.get('', async (req, res) => {
                     statsHtml = '<div class="loading"></div>';
                   }
 
-                                      return '<li class="group-item' + (group.isFamilyGroup ? ' family-group' : '') + 
-                         (group.stats?.needsAttention ? ' needs-attention' : '') + '" id="group-' + group.id + '"' +
+                  // Build the group item classes
+                  let groupItemClasses = 'group-item';
+                  if (group.isFamilyGroup) groupItemClasses += ' family-group';
+                  if (group.stats?.needsAttention) groupItemClasses += ' needs-attention';
+                  if (isSelectionMode) groupItemClasses += ' selection-mode';
+                  if (isSelectionMode && isSelected) groupItemClasses += ' selected';
+                  
+                  // Add visual indicator for chart selection when not in selection mode
+                  if (!isSelectionMode) {
+                    const hasCustomSelection = selectedGroupIds.size < allGroupsData.length;
+                    if (hasCustomSelection && !isSelected) {
+                      groupItemClasses += ' not-selected';
+                    }
+                  }
+
+                  return '<li class="' + groupItemClasses + '" id="group-' + group.id + '" data-group-id="' + group.id + '"' +
                          (group.stats?.needsAttention ? ' title="Recent event missing attendance data"' : '') + '>' +
-                    '<a href="/groups/' + group.id + '/attendance">' +
+                    '<a href="/groups/' + group.id + '/attendance" style="color: #007bff; text-decoration: none; font-size: 18px; font-weight: 500;" onmouseover="this.style.textDecoration=&quot;underline&quot;;" onmouseout="this.style.textDecoration=&quot;none&quot;;">' +
                       group.attributes.name +
                     '</a>' +
                     '<div class="stats-container" id="stats-' + group.id + '">' +
@@ -1741,10 +1812,6 @@ app.get('', async (req, res) => {
                 }).join('');
                 
                 groupList.innerHTML = groupsHtml;
-              }
-              
-              if (groupCount) {
-                groupCount.textContent = \`\${groups.length} groups shown (of \${allGroupsData.length} total).\`;
               }
             }
             
@@ -1762,7 +1829,9 @@ app.get('', async (req, res) => {
             
             function updateChartWithFilteredGroups(filteredGroups) {
               // Update chart with filtered data
-              console.log('Updating chart with', filteredGroups.length, 'filtered groups');
+              
+              // Preserve scroll position to prevent page jumping
+              const currentScrollPosition = window.pageYOffset || document.documentElement.scrollTop;
               
               // Show loading indicator on chart
               const chartLoading = document.getElementById('chartLoading');
@@ -1771,21 +1840,232 @@ app.get('', async (req, res) => {
                 chartLoading.style.display = 'flex';
                 chartLoading.innerHTML = '<div class="loading"></div><span>Updating chart with filters...</span>';
                 chartCanvas.style.display = 'none';
+                
+                // Hide chart group count info box while loading
+                const chartGroupCountElement = document.getElementById('chartGroupCount');
+                if (chartGroupCountElement) chartGroupCountElement.style.display = 'none';
+                
+                // Restore scroll position immediately after DOM manipulation
+                window.scrollTo(0, currentScrollPosition);
               }
               
-              // Build filter parameters from current filters
-              // Only pass parameters if filters are actually selected
-              const groupTypesParam = currentFilters.groupTypes.length > 0 ? currentFilters.groupTypes.join(',') : 'EMPTY';
-              const meetingDaysParam = currentFilters.meetingDays.length > 0 ? currentFilters.meetingDays.join(',') : 'EMPTY';
+              // Check if we have a custom selection that should be preserved
+              // If selectedGroupIds contains a subset of the currently visible groups, use group selection
+              // Otherwise, use normal filtering
+              updateChartWithSelectedGroups();
+            }
+            
+            // Group selection functions
+            function updateSelectedGroupsCount() {
+              const countElement = document.getElementById('selectedGroupsCount');
+              if (countElement) {
+                if (isSelectionMode) {
+                  countElement.textContent = \`\${selectedGroupIds.size} groups selected for chart\`;
+                } else {
+                  // Check if user has made a custom selection
+                  const hasCustomSelection = selectedGroupIds.size < allGroupsData.length;
+                  
+                  if (hasCustomSelection) {
+                    countElement.textContent = \`\${selectedGroupIds.size} groups selected for chart\`;
+                  } else {
+                    countElement.textContent = 'All groups selected for chart';
+                  }
+                }
+              }
+            }
+            
+            function updateChartGroupCount(aggregateData) {
+              const chartGroupCountElement = document.getElementById('chartGroupCount');
+              if (chartGroupCountElement && aggregateData && aggregateData.length > 0) {
+                // Find the week with the most groups to get the total group count for the chart
+                let maxGroups = 0;
+                aggregateData.forEach(week => {
+                  const totalGroups = week.groupsWithData || 0;
+                  maxGroups = Math.max(maxGroups, totalGroups);
+                });
+                
+                if (maxGroups > 0) {
+                  chartGroupCountElement.textContent = \`Chart represents data from \${maxGroups} groups\`;
+                  chartGroupCountElement.style.display = 'block';
+                } else {
+                  chartGroupCountElement.style.display = 'none';
+                }
+              } else {
+                if (chartGroupCountElement) {
+                  chartGroupCountElement.style.display = 'none';
+                }
+              }
+            }
+            
+            function enterSelectionMode() {
+              isSelectionMode = true;
               
-              console.log('Updating chart with filters:', {
-                groupTypesParam,
-                meetingDaysParam,
-                currentFilters
+              // Update UI to show selection mode
+              const chartSelectionModeBtn = document.getElementById('chartSelectionModeBtn');
+              const selectionModeControls = document.getElementById('selectionModeControls');
+              
+              if (chartSelectionModeBtn) {
+                chartSelectionModeBtn.style.display = 'none';
+              }
+              
+              if (selectionModeControls) {
+                selectionModeControls.style.display = 'flex';
+              }
+              
+              // Update all group items to show selection mode and restore selection state
+              applyCurrentSortAndFilter();
+              
+              // Disable links in selection mode
+              document.querySelectorAll('.group-item a').forEach(link => {
+                link.style.pointerEvents = 'none';
               });
               
-              // Reload aggregate data with filters
-              loadAggregateData(false, groupTypesParam, meetingDaysParam);
+              // Restore visual selection state to match selectedGroupIds
+              document.querySelectorAll('.group-item').forEach(groupItem => {
+                const groupId = groupItem.dataset.groupId;
+                if (groupId && selectedGroupIds.has(groupId)) {
+                  groupItem.classList.add('selected');
+                } else {
+                  groupItem.classList.remove('selected');
+                }
+              });
+              
+              // Update the selected groups count to show current selection in selection mode
+              updateSelectedGroupsCount();
+            }
+            
+            function exitSelectionMode() {
+              isSelectionMode = false;
+              
+              // Update UI to hide selection mode
+              const chartSelectionModeBtn = document.getElementById('chartSelectionModeBtn');
+              const selectionModeControls = document.getElementById('selectionModeControls');
+              
+              if (chartSelectionModeBtn) {
+                chartSelectionModeBtn.style.display = 'block';
+              }
+              
+              if (selectionModeControls) {
+                selectionModeControls.style.display = 'none';
+              }
+              
+              // Update all group items to hide selection mode
+              applyCurrentSortAndFilter();
+              
+              // Re-enable links
+              document.querySelectorAll('.group-item a').forEach(link => {
+                link.style.pointerEvents = 'auto';
+              });
+              
+              // Update the chart with selected groups
+              updateChartWithSelectedGroups();
+              updateSelectedGroupsCount();
+            }
+            
+            function setupGroupSelectionControls() {
+              const chartSelectionModeBtn = document.getElementById('chartSelectionModeBtn');
+              const selectAllBtn = document.getElementById('selectAllGroupsBtn');
+              const deselectAllBtn = document.getElementById('deselectAllGroupsBtn');
+              const confirmSelectionBtn = document.getElementById('confirmSelectionBtn');
+              const groupSelectionControls = document.getElementById('groupSelectionControls');
+              
+              if (chartSelectionModeBtn) {
+                chartSelectionModeBtn.addEventListener('click', function(event) {
+                  event.preventDefault();
+                  enterSelectionMode();
+                });
+              }
+              
+              if (selectAllBtn) {
+                selectAllBtn.addEventListener('click', function(event) {
+                  event.preventDefault();
+                  // Select all currently visible groups
+                  const visibleGroups = document.querySelectorAll('.group-item:not([style*="display: none"])');
+                  visibleGroups.forEach(groupItem => {
+                    const groupId = groupItem.dataset.groupId;
+                    if (groupId) {
+                      selectedGroupIds.add(groupId);
+                      groupItem.classList.add('selected');
+                    }
+                  });
+                  updateSelectedGroupsCount();
+                });
+              }
+              
+              if (deselectAllBtn) {
+                deselectAllBtn.addEventListener('click', function(event) {
+                  event.preventDefault();
+                  // Deselect all groups
+                  const allGroupItems = document.querySelectorAll('.group-item');
+                  allGroupItems.forEach(groupItem => {
+                    groupItem.classList.remove('selected');
+                  });
+                  selectedGroupIds.clear();
+                  updateSelectedGroupsCount();
+                });
+              }
+              
+              if (confirmSelectionBtn) {
+                confirmSelectionBtn.addEventListener('click', function(event) {
+                  event.preventDefault();
+                  exitSelectionMode();
+                });
+              }
+              
+              // Show the controls when groups are loaded
+              if (groupSelectionControls) {
+                groupSelectionControls.style.display = 'flex';
+              }
+            }
+            
+            function updateChartWithSelectedGroups() {
+              // Check what groups are actually selected from the currently visible/filtered groups
+              const visibleGroupIds = new Set(currentlyVisibleGroups.map(g => g.id));
+              const selectedVisibleGroups = Array.from(selectedGroupIds).filter(id => visibleGroupIds.has(id));
+              
+              // Determine if user has made a custom selection (subset of all available groups)
+              // We need to check against ALL groups, not just visible ones, to detect custom selections
+              const hasCustomSelection = selectedGroupIds.size < allGroupsData.length;
+              
+              if (selectedVisibleGroups.length === 0) {
+                // No groups selected - show empty chart
+                loadAggregateData(false, '', ''); // Empty filters = no groups
+              } else if (hasCustomSelection && selectedVisibleGroups.length < currentlyVisibleGroups.length) {
+                // User has made a custom selection AND not all visible groups are selected
+                // Use selected groups (overrides filtering)
+                const selectedGroupsParam = selectedVisibleGroups.join(',');
+                loadAggregateData(false, null, null, selectedGroupsParam);
+              } else {
+                // All visible groups are selected OR no custom selection made - use normal filtering (more efficient)
+                const groupTypesParam = currentFilters.groupTypes.length > 0 ? currentFilters.groupTypes.join(',') : 'EMPTY';
+                const meetingDaysParam = currentFilters.meetingDays.length > 0 ? currentFilters.meetingDays.join(',') : 'EMPTY';
+                loadAggregateData(false, groupTypesParam, meetingDaysParam);
+              }
+            }
+            
+            function setupGroupClickListeners() {
+              // Use event delegation to handle group item clicks in selection mode
+              document.addEventListener('click', function(event) {
+                const groupItem = event.target.closest('.group-item');
+                
+                if (groupItem && isSelectionMode) {
+                  // Prevent the link from being followed
+                  event.preventDefault();
+                  
+                  const groupId = groupItem.dataset.groupId;
+                  if (groupId) {
+                    if (selectedGroupIds.has(groupId)) {
+                      selectedGroupIds.delete(groupId);
+                      groupItem.classList.remove('selected');
+                    } else {
+                      selectedGroupIds.add(groupId);
+                      groupItem.classList.add('selected');
+                    }
+                    
+                    updateSelectedGroupsCount();
+                  }
+                }
+              });
             }
 
             function formatLastUpdateTime(timestamp) {
@@ -1866,7 +2146,6 @@ app.get('', async (req, res) => {
               // Clear everything and show loading state
               groupList.innerHTML = '';
               groupList.style.display = 'none';
-              groupCount.style.display = 'none';
               
               // Hide toggle container while refreshing
               const toggleContainer = document.getElementById('toggleContainer');
@@ -2102,8 +2381,6 @@ app.get('', async (req, res) => {
                 // Now display everything at once
                 groupList.style.display = 'block';
                 initialMessage.style.display = 'none';
-                groupCount.textContent = \`\${result.filtered_count} total groups.\`;
-                groupCount.style.display = 'block';
                 groupList.innerHTML = groupsHtml;
                 
                 // Show the toggle container now that we have data
@@ -2207,8 +2484,8 @@ app.get('', async (req, res) => {
                 
                 displayGroups(result);
                 
-                // Load aggregate data separately after groups are displayed
-                await loadAggregateData();
+                // Note: Chart is loaded automatically by applyCurrentSortAndFilter() in displayGroups()
+                // so we don't need to call loadAggregateData() explicitly here
                 await updateLastUpdateTime();
                 
                 // Load membership changes
@@ -2232,8 +2509,13 @@ app.get('', async (req, res) => {
                 stats: null // Will be populated as stats load
               }));
               
-              groupCount.textContent = \`\${result.filtered_count} total groups.\`;
-              groupCount.style.display = 'block';
+              // Initialize selectedGroupIds with all visible groups (default behavior)
+              // Note: This will be updated when filters are applied in applyCurrentSortAndFilter()
+              selectedGroupIds.clear();
+              result.data.forEach(group => {
+                selectedGroupIds.add(group.id);
+              });
+              
               initialMessage.style.display = 'none';
               groupList.style.display = 'block';
               
@@ -2262,6 +2544,9 @@ app.get('', async (req, res) => {
               setTimeout(() => {
                 setupSortFilterToggle();
                 setupSortFilterControls();
+                setupGroupSelectionControls();
+                setupGroupClickListeners();
+                updateSelectedGroupsCount();
               }, 100);
 
               loadDataBtn.innerHTML = '<span>Refresh Data</span><span class="est-time">est. time ≈ 3 min.</span>';
@@ -2385,10 +2670,13 @@ app.get('', async (req, res) => {
             }
 
             // Add function to load and display aggregate data
-            async function loadAggregateData(forceRefresh = false, groupTypesFilter = null, meetingDaysFilter = null) {
+            async function loadAggregateData(forceRefresh = false, groupTypesFilter = null, meetingDaysFilter = null, selectedGroupsFilter = null) {
               const chartLoading = document.getElementById('chartLoading');
               const chartCanvas = document.getElementById('aggregateChart');
               const showAllYears = document.getElementById('showAllYears').checked;
+              
+              // Preserve scroll position to prevent page jumping
+              const currentScrollPosition = window.pageYOffset || document.documentElement.scrollTop;
               
               try {
                 // Show loading indicator and hide chart
@@ -2402,16 +2690,24 @@ app.get('', async (req, res) => {
                 }
                 if (chartCanvas) chartCanvas.style.display = 'none';
                 
+                // Hide chart group count info box while loading
+                const chartGroupCountElement = document.getElementById('chartGroupCount');
+                if (chartGroupCountElement) chartGroupCountElement.style.display = 'none';
+                
                 // Build query parameters
                 const params = new URLSearchParams();
                 if (forceRefresh) params.set('forceRefresh', 'true');
                 if (showAllYears) params.set('showAll', 'true');
-                if (groupTypesFilter && groupTypesFilter !== 'EMPTY') params.set('groupTypes', groupTypesFilter);
-                if (meetingDaysFilter && meetingDaysFilter !== 'EMPTY') params.set('meetingDays', meetingDaysFilter);
-                
-                // Handle special case where we explicitly want empty results
-                if (groupTypesFilter === 'EMPTY') params.set('groupTypes', '');
-                if (meetingDaysFilter === 'EMPTY') params.set('meetingDays', '');
+                if (selectedGroupsFilter) {
+                  params.set('selectedGroups', selectedGroupsFilter);
+                } else {
+                  if (groupTypesFilter && groupTypesFilter !== 'EMPTY') params.set('groupTypes', groupTypesFilter);
+                  if (meetingDaysFilter && meetingDaysFilter !== 'EMPTY') params.set('meetingDays', meetingDaysFilter);
+                  
+                  // Handle special case where we explicitly want empty results
+                  if (groupTypesFilter === 'EMPTY') params.set('groupTypes', '');
+                  if (meetingDaysFilter === 'EMPTY') params.set('meetingDays', '');
+                }
                 const queryString = params.toString();
                 const url = '/api/aggregate-attendance' + (queryString ? '?' + queryString : '');
                 
@@ -2452,6 +2748,9 @@ app.get('', async (req, res) => {
                 const aggregateData = await response.json();
                 
                 console.log('Received aggregate data:', aggregateData);
+                
+                // Update chart group count
+                updateChartGroupCount(aggregateData);
                 
                 // Handle empty data case
                 if (!aggregateData || aggregateData.length === 0) {
@@ -2502,7 +2801,7 @@ app.get('', async (req, res) => {
                         title: {
                           display: true,
                           text: 'Weekly Life Groups Attendance Trends (Wed-Thu Combined)' + (showAllYears ? ' - All Years' : ' - Current Year') + 
-                                (groupTypesFilter || meetingDaysFilter ? ' - Filtered' : '')
+                                (selectedGroupsFilter ? ' - Selected Groups' : (groupTypesFilter && groupTypesFilter !== 'Family,Stage of Life,Location Based' || meetingDaysFilter && meetingDaysFilter !== 'Wednesday,Thursday' ? ' - Filtered' : ''))
                         },
                         subtitle: {
                           display: true,
@@ -2671,12 +2970,12 @@ app.get('', async (req, res) => {
                     title: {
                       display: true,
                       text: 'Weekly Life Groups Attendance Trends (Wed-Thu Combined)' + (showAllYears ? ' - All Years' : ' - Current Year') + 
-                            (groupTypesFilter || meetingDaysFilter ? ' - Filtered' : '')
+                            (selectedGroupsFilter ? ' - Selected Groups' : (groupTypesFilter && groupTypesFilter !== 'Family,Stage of Life,Location Based' || meetingDaysFilter && meetingDaysFilter !== 'Wednesday,Thursday' ? ' - Filtered' : ''))
                     },
                       subtitle: {
                         display: true,
                         text: 'Click a dataset color to exclude it from the chart. Hover over a data point to see more info. Data shows ' + (showAllYears ? 'all years' : 'current year') + ', past events only.' +
-                              (groupTypesFilter || meetingDaysFilter ? ' (Filtered data)' : ''),
+                              (selectedGroupsFilter ? ' (Selected groups only)' : (groupTypesFilter && groupTypesFilter !== 'Family,Stage of Life,Location Based' || meetingDaysFilter && meetingDaysFilter !== 'Wednesday,Thursday' ? ' (Filtered data)' : '')),
                         font: {
                           size: 12
                         },
@@ -2770,6 +3069,9 @@ app.get('', async (req, res) => {
                     chartLoading.innerHTML = '<div style="color: red; text-align: center;"><strong>Error loading chart:</strong><br>' + error.message + '</div>';
                   }
                 }
+                
+                // Restore scroll position even on error
+                window.scrollTo(0, currentScrollPosition);
               } finally {
                 // Hide loading indicator and show chart
                 if (chartLoading) chartLoading.style.display = 'none';
@@ -2780,6 +3082,9 @@ app.get('', async (req, res) => {
                 if (dateRangeElement) {
                   dateRangeElement.textContent = 'Showing data from: ' + (showAllYears ? 'All years' : 'Current year');
                 }
+                
+                // Restore scroll position to prevent page jumping
+                window.scrollTo(0, currentScrollPosition);
               }
             }
 
@@ -2863,9 +3168,8 @@ app.get('', async (req, res) => {
                 
                 const data = await response.json();
                 
-                // Show the container and setup toggle functionality
+                // Container is already shown in displayGroups(), just setup toggle functionality
                 if (membershipChangesContainer) {
-                  membershipChangesContainer.style.display = 'block';
                   setupMembershipToggle();
                 }
                 

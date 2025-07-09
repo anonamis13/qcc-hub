@@ -4,7 +4,6 @@ eventually coaches will use
 
 Upcoming Features:
 
-multi-select groups to show data on home page (similar to PCO Workflows)
 compare graphs function?
 month-over-month and year-over-year percentage
 YA groups functionality
@@ -28,3 +27,4 @@ differentiate dads/moms/family weeks on individual group page
 last 30 days, number of people who have left/joined a group
 home page sort function (group type, attendance rate, group size)
 missing persons report
+multi-select groups to show data on home page (similar to PCO Workflows)
