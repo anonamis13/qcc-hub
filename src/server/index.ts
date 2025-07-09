@@ -170,6 +170,192 @@ app.get('/api/cache-info', async (req, res) => {
   }
 });
 
+// Add new endpoint for individual group attendance time-series
+app.get('/api/individual-group-attendance', async (req, res) => {
+  try {
+    const forceRefresh = req.query.forceRefresh === 'true';
+    const showAllEvents = req.query.showAll === 'true';
+    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
+    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
+    
+    // Parse selected group IDs (required for this endpoint)
+    const selectedGroupIds = req.query.selectedGroups ? 
+                           (req.query.selectedGroups as string).split(',').filter(id => id.trim()) : 
+                           [];
+    
+    // Parse metric type (attendance, membership, percentage)
+    const metric = req.query.metric || 'attendance';
+    
+    if (selectedGroupIds.length === 0) {
+      return res.json([]);
+    }
+    
+    if (selectedGroupIds.length > 5) {
+      return res.status(400).json({ error: 'Maximum 5 groups allowed for individual comparison' });
+    }
+    
+    console.log('Individual group attendance requested for groups:', selectedGroupIds);
+    
+    // Get all groups first to filter and get metadata
+    const groups = await getPeopleGroups(groupTypeId, forceRefresh);
+    const selectedGroups = groups.data.filter(group => selectedGroupIds.includes(group.id));
+    
+    if (selectedGroups.length === 0) {
+      return res.json([]);
+    }
+    
+    // Get attendance data for each selected group
+    const groupAttendancePromises = selectedGroups.map(async (group) => {
+      const attendance = await getGroupAttendance(group.id, showAllEvents, forceRefresh);
+      return {
+        groupId: group.id,
+        groupName: group.attributes.name,
+        ...attendance
+      };
+    });
+    
+    const allGroupsAttendance = await Promise.all(groupAttendancePromises);
+    
+    // Helper function to get Wednesday of the week for any given date
+    const getWednesdayOfWeek = (date: Date) => {
+      const result = new Date(date);
+      const day = result.getUTCDay();
+      
+      if (day < 3) {
+        result.setUTCDate(result.getUTCDate() - (day + 4));
+      } else {
+        result.setUTCDate(result.getUTCDate() - (day - 3));
+      }
+      
+      result.setUTCHours(0, 0, 0, 0);
+      return result;
+    };
+    
+    // Collect all weeks from all groups to ensure consistent time series
+    const allWeeks = new Set();
+    
+    allGroupsAttendance.forEach(groupData => {
+      groupData.events.forEach(event => {
+        const eventDate = new Date(event.event.date);
+        const dayOfWeek = eventDate.getDay();
+        
+        // Only process Wednesday and Thursday events
+        if (dayOfWeek === 3 || dayOfWeek === 4) {
+          const wednesday = getWednesdayOfWeek(eventDate);
+          const weekKey = wednesday.toISOString().split('T')[0];
+          
+          // Only include past/current events
+          const now = new Date();
+          if (eventDate <= now) {
+            allWeeks.add(weekKey);
+          }
+        }
+      });
+    });
+    
+    // Sort weeks chronologically
+    const sortedWeeks = Array.from(allWeeks).sort();
+    
+    // Build time series for each group
+    const groupTimeSeries = allGroupsAttendance.map(groupData => {
+      const groupWeekMap = new Map();
+      
+      // Process events for this group
+      groupData.events.forEach(event => {
+        const eventDate = new Date(event.event.date);
+        const dayOfWeek = eventDate.getDay();
+        
+        if (dayOfWeek === 3 || dayOfWeek === 4) {
+          const wednesday = getWednesdayOfWeek(eventDate);
+          const weekKey = wednesday.toISOString().split('T')[0];
+          
+          const yesterday = new Date();
+          yesterday.setDate(yesterday.getDate() - 1);
+          yesterday.setHours(23, 59, 59, 999);
+          
+          if (!event.event.canceled && 
+              (event.attendance_summary.present_count > 0 || eventDate <= yesterday)) {
+            
+            const existing = groupWeekMap.get(weekKey) || { 
+              totalPresent: 0,
+              totalVisitors: 0,
+              totalMembers: 0,
+              hasData: false
+            };
+            
+            // Only count each event once per week
+            const eventKey = `${event.event.id}-${dayOfWeek}`;
+            if (!existing.processedEvents) {
+              existing.processedEvents = new Set();
+            }
+            
+            if (!existing.processedEvents.has(eventKey)) {
+              existing.totalPresent += event.attendance_summary.present_members;
+              existing.totalVisitors += event.attendance_summary.present_visitors;
+              existing.totalMembers = Math.max(existing.totalMembers, event.attendance_summary.total_count || 0);
+              existing.hasData = true;
+              existing.processedEvents.add(eventKey);
+            }
+            
+            groupWeekMap.set(weekKey, existing);
+          }
+        }
+      });
+      
+      // Create time series array for this group
+      const timeSeries = sortedWeeks.map(weekKey => {
+        const weekData = groupWeekMap.get(weekKey);
+        if (weekData && weekData.hasData) {
+          let value;
+          
+          switch (metric) {
+            case 'attendance':
+              value = weekData.totalPresent + weekData.totalVisitors;
+              break;
+            case 'membership':
+              value = weekData.totalMembers;
+              break;
+            case 'percentage':
+              value = weekData.totalMembers > 0 ? 
+                     Math.round((weekData.totalPresent / weekData.totalMembers) * 100) : 
+                     0;
+              break;
+            default:
+              value = weekData.totalPresent + weekData.totalVisitors;
+          }
+          
+          return {
+            date: weekKey,
+            attendance: value
+          };
+        } else {
+          return {
+            date: weekKey,
+            attendance: null // No data for this week
+          };
+        }
+      });
+      
+      return {
+        groupId: groupData.groupId,
+        groupName: groupData.groupName,
+        data: timeSeries
+      };
+    });
+    
+    res.json({
+      groups: groupTimeSeries,
+      weeks: sortedWeeks
+    });
+  } catch (error) {
+    console.error('Error fetching individual group attendance:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch individual group attendance data', 
+      details: error instanceof Error ? error.message : 'Unknown error' 
+    });
+  }
+});
+
 // Add new endpoint for aggregated attendance data
 app.get('/api/aggregate-attendance', async (req, res) => {
   try {
@@ -1477,6 +1663,30 @@ app.get('', async (req, res) => {
               <button id="chartSelectionModeBtn" style="padding: 8px 16px; border: 1px solid #007bff; border-radius: 4px; background-color: white; color: #007bff; cursor: pointer; font-size: 14px; transition: all 0.3s ease;" onmouseover="this.style.backgroundColor=&quot;#007bff&quot;; this.style.color=&quot;white&quot;;" onmouseout="this.style.backgroundColor=&quot;white&quot;; this.style.color=&quot;#007bff&quot;;">Select Groups for Chart</button>
               <span id="selectedGroupsCount" style="color: #666; font-size: 14px;">All groups selected for chart</span>
               
+              <!-- Chart Display Mode Toggle -->
+              <div id="chartDisplayModeToggle" style="display: flex; align-items: center; gap: 10px; margin-left: 20px; padding-left: 20px; border-left: 1px solid #ddd;">
+                <span style="color: #333; font-size: 14px; font-weight: 500;">Display:</span>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="radio" name="chartDisplayMode" value="combined" id="combinedModeRadio" checked style="margin: 0;">
+                  <span style="font-size: 14px; color: #666;">Combined Data</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="radio" name="chartDisplayMode" value="individual" id="individualModeRadio" style="margin: 0;">
+                  <span style="font-size: 14px; color: #666;">Individual Groups</span>
+                </label>
+                <span id="individualModeNote" style="display: none; color: #666; font-size: 12px; font-style: italic;">(max 5 groups)</span>
+              </div>
+              
+              <!-- Individual Metric Selector (hidden by default) -->
+              <div id="individualMetricSelector" style="display: none; align-items: center; gap: 10px; margin-left: 20px; padding-left: 20px; border-left: 1px solid #ddd;">
+                <span style="color: #333; font-size: 14px; font-weight: 500;">Show:</span>
+                <select id="individualMetricSelect" style="padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; background-color: white; color: #333; cursor: pointer;">
+                  <option value="attendance">Total Attendance</option>
+                  <option value="membership">Total Membership</option>
+                  <option value="percentage">Attendance %</option>
+                </select>
+              </div>
+              
               <!-- Selection mode controls (hidden by default) -->
               <div id="selectionModeControls" style="display: none; gap: 10px; align-items: center;">
                 <span style="color: #666; font-size: 12px; font-style: italic;">Click groups to select/deselect:</span>
@@ -1516,6 +1726,8 @@ app.get('', async (req, res) => {
             let selectedGroupIds = new Set();
             let isSelectionMode = false;
             let currentlyVisibleGroups = [];
+            let chartDisplayMode = 'combined'; // 'combined' or 'individual'
+            let individualMetric = 'attendance'; // 'attendance', 'membership', 'percentage'
 
             // Sort and Filter Functions
             function setupSortFilterToggle() {
@@ -1860,13 +2072,21 @@ app.get('', async (req, res) => {
               const countElement = document.getElementById('selectedGroupsCount');
               if (countElement) {
                 if (isSelectionMode) {
-                  countElement.textContent = \`\${selectedGroupIds.size} groups selected for chart\`;
+                  if (chartDisplayMode === 'individual') {
+                    countElement.textContent = \`\${selectedGroupIds.size} of 5 groups selected for chart\`;
+                  } else {
+                    countElement.textContent = \`\${selectedGroupIds.size} groups selected for chart\`;
+                  }
                 } else {
                   // Check if user has made a custom selection
                   const hasCustomSelection = selectedGroupIds.size < allGroupsData.length;
                   
                   if (hasCustomSelection) {
-                    countElement.textContent = \`\${selectedGroupIds.size} groups selected for chart\`;
+                    if (chartDisplayMode === 'individual') {
+                      countElement.textContent = \`\${selectedGroupIds.size} groups selected for individual comparison\`;
+                    } else {
+                      countElement.textContent = \`\${selectedGroupIds.size} groups selected for chart\`;
+                    }
                   } else {
                     countElement.textContent = 'All groups selected for chart';
                   }
@@ -1969,6 +2189,64 @@ app.get('', async (req, res) => {
               const confirmSelectionBtn = document.getElementById('confirmSelectionBtn');
               const groupSelectionControls = document.getElementById('groupSelectionControls');
               
+              // Setup chart display mode toggle
+              const combinedModeRadio = document.getElementById('combinedModeRadio');
+              const individualModeRadio = document.getElementById('individualModeRadio');
+              const individualModeNote = document.getElementById('individualModeNote');
+              const individualMetricSelector = document.getElementById('individualMetricSelector');
+              const individualMetricSelect = document.getElementById('individualMetricSelect');
+              
+              if (combinedModeRadio && individualModeRadio) {
+                combinedModeRadio.addEventListener('change', function() {
+                  if (this.checked) {
+                    chartDisplayMode = 'combined';
+                    if (individualModeNote) individualModeNote.style.display = 'none';
+                    if (individualMetricSelector) individualMetricSelector.style.display = 'none';
+                    updateSelectedGroupsCount();
+                    updateChartWithSelectedGroups();
+                  }
+                });
+                
+                individualModeRadio.addEventListener('change', function() {
+                  if (this.checked) {
+                    chartDisplayMode = 'individual';
+                    if (individualModeNote) individualModeNote.style.display = 'inline';
+                    if (individualMetricSelector) individualMetricSelector.style.display = 'flex';
+                    
+                    // Enforce 5-group limit for individual mode
+                    if (selectedGroupIds.size > 5) {
+                      // Keep only the first 5 selected groups
+                      const selectedArray = Array.from(selectedGroupIds);
+                      selectedGroupIds.clear();
+                      selectedArray.slice(0, 5).forEach(id => selectedGroupIds.add(id));
+                      
+                      // Update visual selection state
+                      document.querySelectorAll('.group-item').forEach(groupItem => {
+                        const groupId = groupItem.dataset.groupId;
+                        if (groupId && selectedGroupIds.has(groupId)) {
+                          groupItem.classList.add('selected');
+                        } else {
+                          groupItem.classList.remove('selected');
+                        }
+                      });
+                    }
+                    
+                    updateSelectedGroupsCount();
+                    updateChartWithSelectedGroups();
+                  }
+                });
+              }
+              
+              // Setup individual metric selector
+              if (individualMetricSelect) {
+                individualMetricSelect.addEventListener('change', function() {
+                  individualMetric = this.value;
+                  if (chartDisplayMode === 'individual') {
+                    updateChartWithSelectedGroups();
+                  }
+                });
+              }
+              
               if (chartSelectionModeBtn) {
                 chartSelectionModeBtn.addEventListener('click', function(event) {
                   event.preventDefault();
@@ -1979,13 +2257,17 @@ app.get('', async (req, res) => {
               if (selectAllBtn) {
                 selectAllBtn.addEventListener('click', function(event) {
                   event.preventDefault();
-                  // Select all currently visible groups
+                  // Select all currently visible groups (with limit for individual mode)
                   const visibleGroups = document.querySelectorAll('.group-item:not([style*="display: none"])');
+                  const maxGroups = chartDisplayMode === 'individual' ? 5 : visibleGroups.length;
+                  
+                  let selectedCount = 0;
                   visibleGroups.forEach(groupItem => {
                     const groupId = groupItem.dataset.groupId;
-                    if (groupId) {
+                    if (groupId && selectedCount < maxGroups) {
                       selectedGroupIds.add(groupId);
                       groupItem.classList.add('selected');
+                      selectedCount++;
                     }
                   });
                   updateSelectedGroupsCount();
@@ -2018,7 +2300,7 @@ app.get('', async (req, res) => {
               }
             }
             
-            function updateChartWithSelectedGroups() {
+                        function updateChartWithSelectedGroups() {
               // Check what groups are actually selected from the currently visible/filtered groups
               const visibleGroupIds = new Set(currentlyVisibleGroups.map(g => g.id));
               const selectedVisibleGroups = Array.from(selectedGroupIds).filter(id => visibleGroupIds.has(id));
@@ -2029,14 +2311,21 @@ app.get('', async (req, res) => {
               
               if (selectedVisibleGroups.length === 0) {
                 // No groups selected - show empty chart
-                loadAggregateData(false, '', ''); // Empty filters = no groups
+                if (chartDisplayMode === 'individual') {
+                  loadIndividualGroupChart([]); // Empty array = no groups
+                } else {
+                  loadAggregateData(false, '', ''); // Empty filters = no groups
+                }
+              } else if (chartDisplayMode === 'individual') {
+                // Individual mode - load individual group comparison chart
+                loadIndividualGroupChart(selectedVisibleGroups);
               } else if (hasCustomSelection && selectedVisibleGroups.length < currentlyVisibleGroups.length) {
-                // User has made a custom selection AND not all visible groups are selected
+                // Combined mode: User has made a custom selection AND not all visible groups are selected
                 // Use selected groups (overrides filtering)
                 const selectedGroupsParam = selectedVisibleGroups.join(',');
                 loadAggregateData(false, null, null, selectedGroupsParam);
               } else {
-                // All visible groups are selected OR no custom selection made - use normal filtering (more efficient)
+                // Combined mode: All visible groups are selected OR no custom selection made - use normal filtering (more efficient)
                 const groupTypesParam = currentFilters.groupTypes.length > 0 ? currentFilters.groupTypes.join(',') : 'EMPTY';
                 const meetingDaysParam = currentFilters.meetingDays.length > 0 ? currentFilters.meetingDays.join(',') : 'EMPTY';
                 loadAggregateData(false, groupTypesParam, meetingDaysParam);
@@ -2058,6 +2347,12 @@ app.get('', async (req, res) => {
                       selectedGroupIds.delete(groupId);
                       groupItem.classList.remove('selected');
                     } else {
+                      // Check group limit for individual mode
+                      if (chartDisplayMode === 'individual' && selectedGroupIds.size >= 5) {
+                        alert('You can select a maximum of 5 groups for individual comparison.');
+                        return;
+                      }
+                      
                       selectedGroupIds.add(groupId);
                       groupItem.classList.add('selected');
                     }
@@ -2669,6 +2964,304 @@ app.get('', async (req, res) => {
               }
             }
 
+            // Add function to load and display individual group comparison chart
+            async function loadIndividualGroupChart(selectedGroupIds) {
+              const chartLoading = document.getElementById('chartLoading');
+              const chartCanvas = document.getElementById('aggregateChart');
+              const showAllYears = document.getElementById('showAllYears').checked;
+              
+              // Preserve scroll position to prevent page jumping
+              const currentScrollPosition = window.pageYOffset || document.documentElement.scrollTop;
+              
+              try {
+                // Show loading indicator and hide chart
+                if (chartLoading) {
+                  chartLoading.style.display = 'flex';
+                  chartLoading.innerHTML = '<div class="loading"></div><span>Loading individual group comparison...</span>';
+                }
+                if (chartCanvas) chartCanvas.style.display = 'none';
+                
+                // Hide chart group count info box while loading
+                const chartGroupCountElement = document.getElementById('chartGroupCount');
+                if (chartGroupCountElement) chartGroupCountElement.style.display = 'none';
+                
+                // If no groups selected, show empty chart
+                if (selectedGroupIds.length === 0) {
+                  createEmptyIndividualChart();
+                  return;
+                }
+                
+                // Build query parameters
+                const params = new URLSearchParams();
+                if (showAllYears) params.set('showAll', 'true');
+                params.set('selectedGroups', selectedGroupIds.join(','));
+                params.set('metric', individualMetric);
+                const queryString = params.toString();
+                const url = '/api/individual-group-attendance' + (queryString ? '?' + queryString : '');
+                
+                const response = await fetch(url);
+                
+                if (!response.ok) {
+                  const errorText = await response.text();
+                  throw new Error('Failed to fetch individual group data: ' + response.status + ' ' + errorText);
+                }
+                
+                const individualData = await response.json();
+                
+                console.log('Received individual group data:', individualData);
+                
+                                 // Update chart group count for individual mode
+                 if (chartGroupCountElement && selectedGroupIds.length > 0) {
+                   chartGroupCountElement.textContent = 'Comparing ' + selectedGroupIds.length + ' individual groups';
+                   chartGroupCountElement.style.display = 'block';
+                 }
+                
+                // Create individual group comparison chart
+                createIndividualGroupChart(individualData, showAllYears);
+                
+              } catch (error) {
+                console.error('Error loading individual group data:', error);
+                
+                // Show error in the chart area
+                if (chartLoading) {
+                  chartLoading.innerHTML = '<div style="color: red; text-align: center;"><strong>Error loading individual group chart:</strong><br>' + error.message + '</div>';
+                }
+              } finally {
+                // Hide loading indicator and show chart
+                if (chartLoading) chartLoading.style.display = 'none';
+                if (chartCanvas) chartCanvas.style.display = 'block';
+                
+                // Restore scroll position to prevent page jumping
+                window.scrollTo(0, currentScrollPosition);
+              }
+            }
+            
+            // Function to create empty individual chart
+            function createEmptyIndividualChart() {
+              const ctx = document.getElementById('aggregateChart').getContext('2d');
+              
+              // Clear any existing chart
+              if (window.aggregateChartInstance) {
+                window.aggregateChartInstance.destroy();
+              }
+              
+              // Get metric-specific labels
+              const metricLabels = getMetricLabels(individualMetric);
+              
+              window.aggregateChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                  labels: [],
+                  datasets: []
+                },
+                options: {
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  plugins: {
+                    title: {
+                      display: true,
+                      text: 'Individual Group Comparison - No Groups Selected'
+                    },
+                    subtitle: {
+                      display: true,
+                      text: 'Select up to 5 groups to compare their ' + metricLabels.subtitle + ' trends.',
+                      font: {
+                        size: 12
+                      },
+                      color: '#666'
+                    }
+                  },
+                  scales: {
+                    y: {
+                      beginAtZero: true,
+                      title: {
+                        display: true,
+                        text: metricLabels.yAxis
+                      }
+                    },
+                    x: {
+                      title: {
+                        display: true,
+                        text: 'Week'
+                      }
+                    }
+                  }
+                }
+              });
+            }
+            
+            // Function to get metric-specific labels
+            function getMetricLabels(metric) {
+              switch (metric) {
+                case 'attendance':
+                  return {
+                    yAxis: 'Total Attendance (Members + Visitors)',
+                    subtitle: 'attendance'
+                  };
+                case 'membership':
+                  return {
+                    yAxis: 'Total Membership',
+                    subtitle: 'membership'
+                  };
+                case 'percentage':
+                  return {
+                    yAxis: 'Attendance Rate (%)',
+                    subtitle: 'attendance rate'
+                  };
+                default:
+                  return {
+                    yAxis: 'Total Attendance (Members + Visitors)',
+                    subtitle: 'attendance'
+                  };
+              }
+            }
+            
+            // Function to create individual group comparison chart
+            function createIndividualGroupChart(individualData, showAllYears) {
+              if (!individualData || !individualData.groups || individualData.groups.length === 0) {
+                createEmptyIndividualChart();
+                return;
+              }
+              
+              const ctx = document.getElementById('aggregateChart').getContext('2d');
+              
+              // Clear any existing chart
+              if (window.aggregateChartInstance) {
+                window.aggregateChartInstance.destroy();
+              }
+              
+              // Define colors for different groups
+              const groupColors = [
+                '#007bff', // Blue
+                '#28a745', // Green
+                '#dc3545', // Red
+                '#ffc107', // Yellow
+                '#6f42c1'  // Purple
+              ];
+              
+              // Create dataset for each group
+              const datasets = individualData.groups.map((group, index) => {
+                const color = groupColors[index % groupColors.length];
+                
+                return {
+                  label: group.groupName,
+                  data: group.data.map(item => item.attendance),
+                  borderColor: color,
+                  backgroundColor: color + '20', // Add transparency for fill
+                  fill: false,
+                  tension: 0.4,
+                  pointRadius: 3.5,
+                  pointHoverRadius: 5
+                };
+              });
+              
+              // Create labels from weeks
+              const labels = individualData.weeks.map(weekKey => {
+                const date = new Date(weekKey);
+                const sunday = new Date(date);
+                sunday.setDate(sunday.getDate() - date.getDay()); // Get Sunday of the week
+                
+                return 'Week of ' + sunday.toLocaleDateString('en-US', { 
+                  month: 'short', 
+                  day: 'numeric',
+                  year: 'numeric'
+                });
+              });
+              
+              // Calculate year boundaries for vertical lines (if showing all years)
+              const yearBoundaries = [];
+              if (showAllYears && individualData.weeks.length > 0) {
+                let currentYear = null;
+                individualData.weeks.forEach((weekKey, index) => {
+                  const itemYear = new Date(weekKey).getFullYear();
+                  if (currentYear !== null && itemYear !== currentYear) {
+                    yearBoundaries.push(index);
+                  }
+                  currentYear = itemYear;
+                });
+              }
+              
+              // Get metric-specific labels
+              const metricLabels = getMetricLabels(individualMetric);
+              
+              window.aggregateChartInstance = new Chart(ctx, {
+                type: 'line',
+                plugins: showAllYears && yearBoundaries.length > 0 ? [{
+                  id: 'yearSeparators',
+                  afterDraw: function(chart) {
+                    const ctx = chart.ctx;
+                    const chartArea = chart.chartArea;
+                    
+                    ctx.save();
+                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([5, 5]);
+                    
+                    yearBoundaries.forEach(boundaryIndex => {
+                      const x = chart.scales.x.getPixelForValue(boundaryIndex);
+                      ctx.beginPath();
+                      ctx.moveTo(x, chartArea.top);
+                      ctx.lineTo(x, chartArea.bottom);
+                      ctx.stroke();
+                    });
+                    
+                    ctx.restore();
+                  }
+                }] : [],
+                data: {
+                  labels: labels,
+                  datasets: datasets
+                },
+                options: {
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  plugins: {
+                    title: {
+                      display: true,
+                      text: 'Individual Group ' + metricLabels.subtitle.charAt(0).toUpperCase() + metricLabels.subtitle.slice(1) + ' Comparison' + (showAllYears ? ' - All Years' : ' - Current Year')
+                    },
+                    subtitle: {
+                      display: true,
+                      text: metricLabels.yAxis.toLowerCase() + ' for each selected group. Hover over data points for details.',
+                      font: {
+                        size: 12
+                      },
+                      color: '#666'
+                    },
+                    tooltip: {
+                      callbacks: {
+                        afterBody: function(context) {
+                          const tooltipLines = [];
+                          const weekKey = individualData.weeks[context[0].dataIndex];
+                          tooltipLines.push('Week: ' + weekKey);
+                          return tooltipLines;
+                        }
+                      }
+                    }
+                  },
+                  scales: {
+                    y: {
+                      beginAtZero: true,
+                      title: {
+                        display: true,
+                        text: metricLabels.yAxis
+                      }
+                    },
+                    x: {
+                      title: {
+                        display: true,
+                        text: 'Week'
+                      },
+                      ticks: {
+                        maxRotation: 45,
+                        minRotation: 45
+                      }
+                    }
+                  }
+                }
+              });
+            }
+
             // Add function to load and display aggregate data
             async function loadAggregateData(forceRefresh = false, groupTypesFilter = null, meetingDaysFilter = null, selectedGroupsFilter = null) {
               const chartLoading = document.getElementById('chartLoading');
@@ -3096,10 +3689,18 @@ app.get('', async (req, res) => {
               const showAllYears = this.checked;
               
               try {
-                // Update chart data with current filters
-                const groupTypesParam = currentFilters.groupTypes.join(',');
-                const meetingDaysParam = currentFilters.meetingDays.join(',');
-                await loadAggregateData(false, groupTypesParam, meetingDaysParam);
+                // Update chart data based on current mode
+                if (chartDisplayMode === 'individual') {
+                  // For individual mode, reload the individual group chart
+                  const visibleGroupIds = new Set(currentlyVisibleGroups.map(g => g.id));
+                  const selectedVisibleGroups = Array.from(selectedGroupIds).filter(id => visibleGroupIds.has(id));
+                  await loadIndividualGroupChart(selectedVisibleGroups);
+                } else {
+                  // For combined mode, reload aggregate data
+                  const groupTypesParam = currentFilters.groupTypes.join(',');
+                  const meetingDaysParam = currentFilters.meetingDays.join(',');
+                  await loadAggregateData(false, groupTypesParam, meetingDaysParam);
+                }
                 
                 // Update all group stats to reflect the new time period
                 const groupItems = document.querySelectorAll('[id^="group-"]');
