@@ -6,7 +6,6 @@ Upcoming Features:
 
 month-over-month and year-over-year percentage
 YA groups functionality
-attendance reminder sent button (or auto-notify)
 
 
 Completed Features:
@@ -28,3 +27,4 @@ home page sort function (group type, attendance rate, group size)
 missing persons report
 multi-select groups to show data on home page (similar to PCO Workflows)
 compare graphs function?
+attendance reminder sent button (or auto-notify)

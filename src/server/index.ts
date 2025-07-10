@@ -1234,6 +1234,120 @@ app.post('/api/capture-membership-snapshot', async (req, res) => {
   }
 });
 
+// Add endpoint to request attendance for missing events
+app.post('/api/request-attendance', async (req, res) => {
+  try {
+    const { groupId } = req.body;
+    
+    if (!groupId) {
+      return res.status(400).json({ error: 'Group ID is required' });
+    }
+    
+    // Get recent events for this group that need attendance
+    const attendanceData = await getGroupAttendance(groupId, false, false);
+    const eventsNeedingAttention = attendanceData.events.filter(event => {
+      const now = new Date();
+      const sixDaysAgo = new Date(now.getTime() - (6 * 24 * 60 * 60 * 1000));
+      const eventDate = new Date(event.event.date);
+      
+      // Only check events from the last 6 days
+      if (eventDate < sixDaysAgo || eventDate > now) {
+        return false;
+      }
+      
+      // Check if event is cancelled
+      if (event.event.canceled) {
+        return false;
+      }
+      
+      // Check if attendance has been submitted
+      const hasAttendanceData = event.attendance_summary.present_count > 0 || 
+                               (event.attendance_summary.present_count === 0 && event.attendance_summary.total_count > 0);
+      
+      // Add a buffer time - only flag events that ended at least 4 hours ago
+      const fourHoursAgo = new Date(now.getTime() - (4 * 60 * 60 * 1000));
+      const eventEndTime = new Date(eventDate.getTime() + (2 * 60 * 60 * 1000));
+      
+      return eventEndTime < fourHoursAgo && !hasAttendanceData;
+    });
+    
+    if (eventsNeedingAttention.length === 0) {
+      return res.json({ 
+        success: false, 
+        message: 'No events need attendance requests',
+        requestsSent: 0
+      });
+    }
+    
+    // Check rate limiting - only allow one request per day per event
+    const today = new Date().toISOString().split('T')[0];
+    const attendanceRequestsKey = `attendance_requests_${today}`;
+    const todaysRequests = cache.get<Set<string>>(attendanceRequestsKey) || new Set();
+    
+    let requestsSent = 0;
+    let alreadyRequested = 0;
+    const errors = [];
+    
+    for (const event of eventsNeedingAttention) {
+      const eventRequestKey = `${event.event.id}_${today}`;
+      
+      // Skip if already requested today
+      if (todaysRequests.has(eventRequestKey)) {
+        alreadyRequested++;
+        continue;
+      }
+      
+      try {
+        // Make request to Planning Center attendance request endpoint
+        const pcoResponse = await fetch(`https://groups.planningcenteronline.com/events/${event.event.id}/attendance_request`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${process.env.PCO_ACCESS_TOKEN}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (pcoResponse.ok) {
+          // Mark this event as requested today
+          todaysRequests.add(eventRequestKey);
+          requestsSent++;
+        } else {
+          const errorText = await pcoResponse.text();
+          errors.push(`Event ${event.event.id}: ${pcoResponse.status} - ${errorText}`);
+        }
+      } catch (error) {
+        errors.push(`Event ${event.event.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+    
+    // Cache the updated requests set for 24 hours
+    cache.set(attendanceRequestsKey, todaysRequests, 24 * 60 * 60 * 1000);
+    
+    const totalEvents = eventsNeedingAttention.length;
+    const responseMessage = [
+      requestsSent > 0 ? `${requestsSent} attendance request${requestsSent !== 1 ? 's' : ''} sent` : null,
+      alreadyRequested > 0 ? `${alreadyRequested} already requested today` : null,
+      errors.length > 0 ? `${errors.length} failed` : null
+    ].filter(Boolean).join(', ');
+    
+    res.json({
+      success: requestsSent > 0,
+      message: responseMessage || 'No requests sent',
+      requestsSent,
+      alreadyRequested,
+      totalEvents,
+      errors: errors.length > 0 ? errors : undefined
+    });
+    
+  } catch (error) {
+    console.error('Error requesting attendance:', error);
+    res.status(500).json({ 
+      error: 'Failed to request attendance', 
+      details: error instanceof Error ? error.message : 'Unknown error' 
+    });
+  }
+});
+
 //Membership Changes Page
 app.get('/membership-changes', async (req, res) => {
   try {
@@ -1859,6 +1973,29 @@ app.get('', async (req, res) => {
               font-weight: bold;
               font-family: Arial, sans-serif;
               border: 2px solid white;
+              cursor: pointer;
+              transition: all 0.3s ease;
+              z-index: 10;
+            }
+            .group-item.needs-attention::before:hover {
+              background-color: #e55a3a;
+              transform: translateY(-50%) scale(1.1);
+            }
+            .group-item.requesting-attendance::before {
+              content: "⟳";
+              animation: spin 1s linear infinite;
+            }
+            .group-item.attendance-requested::before {
+              content: "✓";
+              background-color: #28a745;
+            }
+            .group-item.attendance-request-error::before {
+              content: "✗";
+              background-color: #dc3545;
+            }
+            @keyframes spin {
+              0% { transform: translateY(-50%) rotate(0deg); }
+              100% { transform: translateY(-50%) rotate(360deg); }
             }
             .attention-tooltip {
               position: absolute;
@@ -2405,7 +2542,7 @@ app.get('', async (req, res) => {
                   }
 
                   return '<li class="' + groupItemClasses + '" id="group-' + group.id + '" data-group-id="' + group.id + '"' +
-                         (group.stats?.needsAttention ? ' title="Recent event missing attendance data"' : '') + '>' +
+                         (group.stats?.needsAttention ? ' title="Recent event missing attendance data - Click exclamation mark to request"' : '') + '>' +
                     '<a href="/groups/' + group.id + '/attendance" style="color: #007bff; text-decoration: none; font-size: 18px; font-weight: 500;" onmouseover="this.style.textDecoration=&quot;underline&quot;;" onmouseout="this.style.textDecoration=&quot;none&quot;;">' +
                       group.attributes.name +
                     '</a>' +
@@ -2753,6 +2890,103 @@ app.get('', async (req, res) => {
                   }
                 }
               });
+              
+              // Add event delegation for attendance request clicks
+              document.addEventListener('click', function(event) {
+                const groupItem = event.target.closest('.group-item.needs-attention');
+                
+                if (groupItem && !isSelectionMode) {
+                  const rect = groupItem.getBoundingClientRect();
+                  const clickX = event.clientX - rect.left;
+                  const clickY = event.clientY - rect.top;
+                  
+                  // Check if click is within the exclamation mark area (left side, -10px to 8px from left edge)
+                  if (clickX >= -10 && clickX <= 8 && clickY >= rect.height/2 - 9 && clickY <= rect.height/2 + 9) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    
+                    const groupId = groupItem.id.replace('group-', '');
+                    if (groupId) {
+                      requestAttendanceForGroup(groupId, groupItem);
+                    }
+                  }
+                }
+              });
+            }
+            
+            // Function to request attendance for a group
+            async function requestAttendanceForGroup(groupId, groupElement) {
+              // Prevent multiple simultaneous requests for the same group
+              if (groupElement.classList.contains('requesting-attendance') || 
+                  groupElement.classList.contains('attendance-requested') ||
+                  groupElement.classList.contains('attendance-request-error')) {
+                return;
+              }
+              
+              // Show loading state
+              groupElement.classList.remove('needs-attention');
+              groupElement.classList.add('requesting-attendance');
+              groupElement.title = 'Sending attendance request...';
+              
+              try {
+                const response = await fetch('/api/request-attendance', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ groupId })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.success) {
+                  // Show success state
+                  groupElement.classList.remove('requesting-attendance');
+                  groupElement.classList.add('attendance-requested');
+                  groupElement.title = \`Attendance request sent! \${result.message}\`;
+                  
+                  // Reset to normal state after 5 seconds, but keep it from showing needs-attention today
+                  setTimeout(() => {
+                    if (groupElement.classList.contains('attendance-requested')) {
+                      groupElement.classList.remove('attendance-requested');
+                      groupElement.title = 'Attendance request sent today';
+                      // Don't add needs-attention back since request was sent
+                    }
+                  }, 5000);
+                  
+                } else {
+                  // Show error state
+                  groupElement.classList.remove('requesting-attendance');
+                  groupElement.classList.add('attendance-request-error');
+                  groupElement.title = \`Error: \${result.message || 'Failed to send attendance request'}\`;
+                  
+                  // Reset to needs-attention state after 3 seconds
+                  setTimeout(() => {
+                    if (groupElement.classList.contains('attendance-request-error')) {
+                      groupElement.classList.remove('attendance-request-error');
+                      groupElement.classList.add('needs-attention');
+                      groupElement.title = 'Recent event missing attendance data - Click exclamation mark to request';
+                    }
+                  }, 3000);
+                }
+                
+              } catch (error) {
+                console.error('Error requesting attendance:', error);
+                
+                // Show error state
+                groupElement.classList.remove('requesting-attendance');
+                groupElement.classList.add('attendance-request-error');
+                groupElement.title = \`Network error: \${error.message}\`;
+                
+                // Reset to needs-attention state after 3 seconds
+                setTimeout(() => {
+                  if (groupElement.classList.contains('attendance-request-error')) {
+                    groupElement.classList.remove('attendance-request-error');
+                    groupElement.classList.add('needs-attention');
+                    groupElement.title = 'Recent event missing attendance data - Click exclamation mark to request';
+                  }
+                }, 3000);
+              }
             }
 
             function formatLastUpdateTime(timestamp) {
@@ -2815,9 +3049,9 @@ app.get('', async (req, res) => {
                     
                     // Format with colored numbers: "+13 Joined -5 Left +8 Net"
                     membershipButtonSummary.innerHTML = 
-                      '<span style="color: #006400; font-weight: bold;">+' + data.totalJoins + '</span> Joined ' +
-                      '<span style="color: #dc3545; font-weight: bold;">-' + data.totalLeaves + '</span> Left ' +
-                      '<span style="color: #007bff; font-weight: bold;">' + netChangeText + '</span> Net';
+                      '<span style="color: #fff; background-color: rgba(46, 125, 50, 0.8); padding: 2px 4px; border-radius: 3px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">+' + data.totalJoins + '</span> Joined ' +
+                      '<span style="color: #fff; background-color: rgba(220, 53, 69, 0.9); padding: 2px 4px; border-radius: 3px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">-' + data.totalLeaves + '</span> Left ' +
+                      '<span style="color: #fff; background-color: rgba(0, 123, 255, 0.9); padding: 2px 4px; border-radius: 3px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">' + netChangeText + '</span> Net';
                   }
                 }
               } catch (error) {
@@ -2889,6 +3123,12 @@ app.get('', async (req, res) => {
               const sortFilterContainer = document.getElementById('sortFilterContainer');
               if (sortFilterContainer) {
                 sortFilterContainer.style.display = 'none';
+              }
+              
+              // Hide group selection controls while refreshing
+              const groupSelectionControls = document.getElementById('groupSelectionControls');
+              if (groupSelectionControls) {
+                groupSelectionControls.style.display = 'none';
               }
               
               // Hide chart container while loading
@@ -3121,6 +3361,12 @@ app.get('', async (req, res) => {
                   sortFilterContainer.style.display = 'block';
                 }
                 
+                // Show group selection controls now that data is loaded
+                const groupSelectionControls = document.getElementById('groupSelectionControls');
+                if (groupSelectionControls) {
+                  groupSelectionControls.style.display = 'flex';
+                }
+                
                 // Show membership changes container now that data is loaded
                 const membershipChangesContainer = document.getElementById('membershipChangesContainer');
                 if (membershipChangesContainer) {
@@ -3254,6 +3500,12 @@ app.get('', async (req, res) => {
                 sortFilterContainer.style.display = 'block';
               }
               
+              // Show group selection controls now that we have data
+              const groupSelectionControls = document.getElementById('groupSelectionControls');
+              if (groupSelectionControls) {
+                groupSelectionControls.style.display = 'flex';
+              }
+              
               // Initial display with default sort (by name)
               applyCurrentSortAndFilter();
               
@@ -3309,7 +3561,7 @@ app.get('', async (req, res) => {
                   // Update attention styling
                   if (stats.needsAttention) {
                     groupElement.classList.add('needs-attention');
-                    groupElement.setAttribute('title', 'Recent event missing attendance data');
+                    groupElement.setAttribute('title', 'Recent event missing attendance data - Click exclamation mark to request');
                   } else {
                     groupElement.classList.remove('needs-attention');
                     groupElement.removeAttribute('title');
