@@ -1588,6 +1588,9 @@ app.get('/membership-changes', async (req, res) => {
               // Show joins section
               if (data.joins.length > 0) {
                 timelineHtml += 
+                  '<div style="color: #666; font-size: 13px; margin-bottom: 15px; font-style: italic; padding-left: 4px; border-left: 2px solid #e9ecef;">' +
+                    'Members are sorted by group name, then date (most recent first), then name alphabetically' +
+                  '</div>' +
                   '<div style="margin-bottom: 25px;">' +
                     '<h4 style="margin: 0 0 15px 0; color: #28a745; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
                       '<span style="background-color: #28a745; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">+</span>' +
@@ -4504,6 +4507,9 @@ app.get('', async (req, res) => {
                     // Show joins section
                     if (data.joins.length > 0) {
                       timelineHtml += 
+                        '<div style="color: #666; font-size: 13px; margin-bottom: 15px; font-style: italic; padding-left: 4px; border-left: 2px solid #e9ecef;">' +
+                          'Members are sorted by group name, then date (most recent first), then name alphabetically' +
+                        '</div>' +
                         '<div style="margin-bottom: 25px;">' +
                           '<h4 style="margin: 0 0 15px 0; color: #28a745; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
                             '<span style="background-color: #28a745; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">+</span>' +
