@@ -1187,6 +1187,331 @@ app.get('/api/membership-snapshot-status', async (req, res) => {
 
 
 
+//Membership Changes Page
+app.get('/membership-changes', async (req, res) => {
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Recent Membership Changes - Queen City Church</title>
+          <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              margin: 20px;
+              background-color: #f5f5f5;
+            }
+            .container {
+              max-width: 1200px;
+              margin: 0 auto;
+              background-color: white;
+              padding: 20px;
+              border-radius: 8px;
+              box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            h1 {
+              color: #333;
+              margin-bottom: 20px;
+            }
+            .back-button {
+              display: inline-flex;
+              align-items: center;
+              gap: 8px;
+              padding: 10px 16px;
+              background-color: #6c757d;
+              color: white;
+              text-decoration: none;
+              border-radius: 4px;
+              font-size: 14px;
+              margin-bottom: 20px;
+              transition: background-color 0.3s ease;
+            }
+            .back-button:hover {
+              background-color: #5a6268;
+            }
+            .loading {
+              display: inline-block;
+              width: 20px;
+              height: 20px;
+              border: 3px solid #f3f3f3;
+              border-radius: 50%;
+              border-top: 3px solid #007bff;
+              animation: spin 1s linear infinite;
+            }
+            @keyframes spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+            .membership-details {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 30px;
+              margin-top: 20px;
+            }
+            .membership-section {
+              background-color: #f8f9fa;
+              padding: 20px;
+              border-radius: 8px;
+              border-left: 4px solid #007bff;
+            }
+            .membership-section h3 {
+              margin: 0 0 15px 0;
+              color: #333;
+              font-size: 18px;
+            }
+            .membership-section.additions {
+              border-left-color: #28a745;
+            }
+            .membership-section.departures {
+              border-left-color: #dc3545;
+            }
+            .membership-list {
+              list-style: none;
+              padding: 0;
+              margin: 0;
+            }
+            .membership-item {
+              padding: 12px;
+              margin: 8px 0;
+              background-color: white;
+              border-radius: 4px;
+              border-left: 3px solid #007bff;
+            }
+            .membership-item.addition {
+              border-left-color: #28a745;
+            }
+            .membership-item.departure {
+              border-left-color: #dc3545;
+            }
+            .membership-item-name {
+              font-weight: bold;
+              color: #333;
+              margin-bottom: 4px;
+            }
+            .membership-item-group {
+              color: #666;
+              font-size: 14px;
+            }
+            .membership-item-date {
+              color: #999;
+              font-size: 12px;
+              margin-top: 4px;
+            }
+            .summary-stats {
+              display: grid;
+              grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+              gap: 20px;
+              margin-bottom: 30px;
+            }
+            .stat-card {
+              background-color: white;
+              padding: 20px;
+              border-radius: 8px;
+              box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+              text-align: center;
+              border-left: 4px solid #007bff;
+            }
+            .stat-card.additions {
+              border-left-color: #28a745;
+            }
+            .stat-card.departures {
+              border-left-color: #dc3545;
+            }
+            .stat-card.net {
+              border-left-color: #6f42c1;
+            }
+            .stat-number {
+              font-size: 32px;
+              font-weight: bold;
+              color: #333;
+              margin-bottom: 5px;
+            }
+            .stat-label {
+              color: #666;
+              font-size: 14px;
+              text-transform: uppercase;
+              letter-spacing: 1px;
+            }
+            .no-data {
+              color: #6c757d;
+              font-style: italic;
+              text-align: center;
+              padding: 40px;
+            }
+            .error-message {
+              background-color: #f8d7da;
+              color: #721c24;
+              padding: 12px;
+              border-radius: 4px;
+              margin-bottom: 20px;
+              border: 1px solid #f5c6cb;
+            }
+            .loading-container {
+              text-align: center;
+              padding: 40px;
+              color: #666;
+            }
+            .loading-container .loading {
+              width: 40px;
+              height: 40px;
+              border: 4px solid #f3f3f3;
+              border-top: 4px solid #007bff;
+              margin: 0 auto 20px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <a href="/" class="back-button">
+              <span>←</span>
+              <span>Back to Home</span>
+            </a>
+            <h1>Recent Membership Changes</h1>
+            
+            <div id="loadingContainer" class="loading-container">
+              <div class="loading"></div>
+              <p>Loading membership changes...</p>
+            </div>
+            
+            <div id="errorContainer" style="display: none;">
+              <div class="error-message" id="errorMessage"></div>
+            </div>
+            
+            <div id="contentContainer" style="display: none;">
+              <div class="summary-stats" id="summaryStats">
+                <!-- Stats will be populated here -->
+              </div>
+              
+              <div class="membership-details" id="membershipDetails">
+                <!-- Membership changes will be populated here -->
+              </div>
+            </div>
+          </div>
+          
+          <script>
+            // Load membership changes when page loads
+            document.addEventListener('DOMContentLoaded', function() {
+              loadMembershipChanges();
+            });
+            
+            async function loadMembershipChanges() {
+              const loadingContainer = document.getElementById('loadingContainer');
+              const errorContainer = document.getElementById('errorContainer');
+              const contentContainer = document.getElementById('contentContainer');
+              const errorMessage = document.getElementById('errorMessage');
+              
+              try {
+                // Show loading
+                loadingContainer.style.display = 'block';
+                errorContainer.style.display = 'none';
+                contentContainer.style.display = 'none';
+                
+                // Fetch membership changes (last 30 days)
+                const response = await fetch('/api/membership-changes?days=30');
+                if (!response.ok) {
+                  throw new Error('Failed to fetch membership changes');
+                }
+                
+                const data = await response.json();
+                
+                // Hide loading
+                loadingContainer.style.display = 'none';
+                
+                if (data.additions.length === 0 && data.departures.length === 0) {
+                  // Show no data message
+                  contentContainer.innerHTML = '<div class="no-data">No membership changes found in the last 30 days.</div>';
+                  contentContainer.style.display = 'block';
+                } else {
+                  // Display the data
+                  displayMembershipChanges(data);
+                  contentContainer.style.display = 'block';
+                }
+                
+              } catch (error) {
+                console.error('Error loading membership changes:', error);
+                loadingContainer.style.display = 'none';
+                errorMessage.textContent = 'Failed to load membership changes: ' + error.message;
+                errorContainer.style.display = 'block';
+              }
+            }
+            
+            function displayMembershipChanges(data) {
+              const summaryStats = document.getElementById('summaryStats');
+              const membershipDetails = document.getElementById('membershipDetails');
+              
+              // Calculate stats
+              const totalAdditions = data.additions.length;
+              const totalDepartures = data.departures.length;
+              const netChange = totalAdditions - totalDepartures;
+              
+              // Create summary stats
+              summaryStats.innerHTML = \`
+                <div class="stat-card additions">
+                  <div class="stat-number">\${totalAdditions}</div>
+                  <div class="stat-label">New Members</div>
+                </div>
+                <div class="stat-card departures">
+                  <div class="stat-number">\${totalDepartures}</div>
+                  <div class="stat-label">Departures</div>
+                </div>
+                <div class="stat-card net">
+                  <div class="stat-number">\${netChange > 0 ? '+' : ''}\${netChange}</div>
+                  <div class="stat-label">Net Change</div>
+                </div>
+              \`;
+              
+              // Create membership details
+              membershipDetails.innerHTML = \`
+                <div class="membership-section additions">
+                  <h3>New Members (\${totalAdditions})</h3>
+                  <ul class="membership-list">
+                    \${data.additions.map(addition => \`
+                      <li class="membership-item addition">
+                        <div class="membership-item-name">\${addition.personName}</div>
+                        <div class="membership-item-group">\${addition.groupName}</div>
+                        <div class="membership-item-date">Joined: \${formatDate(addition.joinedDate)}</div>
+                      </li>
+                    \`).join('')}
+                  </ul>
+                </div>
+                
+                <div class="membership-section departures">
+                  <h3>Departures (\${totalDepartures})</h3>
+                  <ul class="membership-list">
+                    \${data.departures.map(departure => \`
+                      <li class="membership-item departure">
+                        <div class="membership-item-name">\${departure.personName}</div>
+                        <div class="membership-item-group">\${departure.groupName}</div>
+                        <div class="membership-item-date">Left: \${formatDate(departure.leftDate)}</div>
+                      </li>
+                    \`).join('')}
+                  </ul>
+                </div>
+              \`;
+            }
+            
+            function formatDate(dateString) {
+              if (!dateString) return 'Unknown';
+              const date = new Date(dateString);
+              return date.toLocaleDateString('en-US', { 
+                year: 'numeric', 
+                month: 'short', 
+                day: 'numeric' 
+              });
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    
+    res.send(html);
+  } catch (error) {
+    console.error('Error rendering membership changes page:', error);
+    res.status(500).send('Error rendering membership changes page');
+  }
+});
+
 //Home Page
 app.get('', async (req, res) => {
   try {
@@ -1520,10 +1845,16 @@ app.get('', async (req, res) => {
         <body>
           <div class="container">
             <h1>Queen City Church - Life Groups Health Report</h1>
-            <button id="loadDataBtn" title="Click to refresh current year data. Shift+Click to refresh ALL historical data.">
-              <span>Load Data</span>
-              <span class="est-time">est. time ≈ 3 min.</span>
-            </button>
+            <div style="display: flex; gap: 15px; align-items: center; margin-bottom: -10px;">
+              <button id="loadDataBtn" title="Click to refresh current year data. Shift+Click to refresh ALL historical data.">
+                <span>Load Data</span>
+                <span class="est-time">est. time ≈ 3 min.</span>
+              </button>
+              <button id="viewMembershipChangesBtn" style="padding: 12px 24px; font-size: 16px; font-weight: 500; color: white; background-color: #28a745; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 20px; transition: all 0.3s ease; display: flex; flex-direction: column; align-items: center; min-width: 160px;" onmouseover="this.style.backgroundColor='#218838';" onmouseout="this.style.backgroundColor='#28a745';">
+                <span>View Membership Changes</span>
+                <span id="membershipButtonSummary" style="font-size: 11px; opacity: 0.9; margin-top: 4px; line-height: 1.2;">Loading...</span>
+              </button>
+            </div>
             <p id="lastUpdate"></p>
 
             
@@ -1543,26 +1874,7 @@ app.get('', async (req, res) => {
             </div>
             
 
-            
-            <div class="membership-changes-container" id="membershipChangesContainer" style="display: none;">
-              <button id="membershipMainToggleBtn" style="width: 100%; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px 20px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.3s ease;" onmouseover="this.style.borderColor=&quot;#007bff&quot;; this.style.backgroundColor=&quot;#f8f9fa&quot;;" onmouseout="this.style.borderColor=&quot;#ddd&quot;; this.style.backgroundColor=&quot;white&quot;;">
-                <div style="display: flex; align-items: center; gap: 15px;">
-                  <h3 style="margin: 0; color: #333; font-weight: 500;">Recent Membership Changes</h3>
-                  <div id="membershipQuickSummary" style="display: flex; gap: 15px; font-size: 14px; color: #666;">
-                    <div class="loading" style="width: 16px; height: 16px;"></div>
-                    <span>Loading...</span>
-                  </div>
-                </div>
-                <span id="membershipMainToggleIcon" style="color: #666; font-size: 16px;">▼</span>
-              </button>
-              
-              <div id="membershipExpandedContent" style="display: none; background-color: white; padding: 20px; border-radius: 8px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-top: none; margin-top: -20px; border-top-left-radius: 0; border-top-right-radius: 0;">
-                <div class="membership-details" id="membershipDetails" style="grid-template-columns: 1fr; gap: 20px;">
-                  <div class="loading"></div>
-                  <span>Loading membership changes...</span>
-                </div>
-              </div>
-            </div>
+
             
             <div class="chart-container">
               <div id="chartLoading" class="chart-loading">
@@ -2391,6 +2703,51 @@ app.get('', async (req, res) => {
               }
             }
 
+            // Setup membership changes button
+            function setupMembershipChangesButton() {
+              const viewMembershipChangesBtn = document.getElementById('viewMembershipChangesBtn');
+              if (viewMembershipChangesBtn) {
+                viewMembershipChangesBtn.addEventListener('click', function() {
+                  window.location.href = '/membership-changes';
+                });
+              }
+              
+              // Load membership changes summary for the button
+              loadMembershipChangesSummary();
+            }
+            
+            // Function to load membership changes summary for the button
+            async function loadMembershipChangesSummary() {
+              const membershipButtonSummary = document.getElementById('membershipButtonSummary');
+              
+              try {
+                const response = await fetch('/api/membership-changes?days=30');
+                if (!response.ok) throw new Error('Failed to fetch membership changes');
+                
+                const data = await response.json();
+                
+                if (membershipButtonSummary) {
+                  if (data.totalJoins === 0 && data.totalLeaves === 0) {
+                    membershipButtonSummary.textContent = 'No changes in last 30 days';
+                  } else {
+                    const netChange = data.totalJoins - data.totalLeaves;
+                    const netChangeText = netChange > 0 ? '+' + netChange : netChange.toString();
+                    
+                    // Format: "+13 Joined -5 Left +8 Net"
+                    membershipButtonSummary.textContent = 
+                      '+' + data.totalJoins + ' Joined ' +
+                      '-' + data.totalLeaves + ' Left ' +
+                      netChangeText + ' Net';
+                  }
+                }
+              } catch (error) {
+                console.error('Error loading membership changes summary:', error);
+                if (membershipButtonSummary) {
+                  membershipButtonSummary.textContent = 'Unable to load summary';
+                }
+              }
+            }
+
             // Add click event listener
             loadDataBtn.addEventListener('click', async (event) => {
               const isHistoricalRefresh = event.shiftKey;
@@ -2452,12 +2809,6 @@ app.get('', async (req, res) => {
               const sortFilterContainer = document.getElementById('sortFilterContainer');
               if (sortFilterContainer) {
                 sortFilterContainer.style.display = 'none';
-              }
-              
-              // Hide membership changes container while refreshing
-              const membershipChangesContainer = document.getElementById('membershipChangesContainer');
-              if (membershipChangesContainer) {
-                membershipChangesContainer.style.display = 'none';
               }
               
               // Hide chart container while loading
@@ -2782,9 +3133,6 @@ app.get('', async (req, res) => {
                 // Note: Chart is loaded automatically by applyCurrentSortAndFilter() in displayGroups()
                 // so we don't need to call loadAggregateData() explicitly here
                 await updateLastUpdateTime();
-                
-                // Load membership changes
-                await loadMembershipChanges();
               } catch (error) {
                 console.error('Error:', error);
                 loadDataBtn.disabled = false;
@@ -2826,12 +3174,6 @@ app.get('', async (req, res) => {
                 sortFilterContainer.style.display = 'block';
               }
               
-              // Show membership changes container now that we have data
-              const membershipChangesContainer = document.getElementById('membershipChangesContainer');
-              if (membershipChangesContainer) {
-                membershipChangesContainer.style.display = 'block';
-              }
-              
               // Initial display with default sort (by name)
               applyCurrentSortAndFilter();
               
@@ -2842,6 +3184,7 @@ app.get('', async (req, res) => {
                 setupGroupSelectionControls();
                 setupGroupClickListeners();
                 updateSelectedGroupsCount();
+                setupMembershipChangesButton();
               }, 100);
 
               loadDataBtn.innerHTML = '<span>Refresh Data</span><span class="est-time">est. time ≈ 3 min.</span>';
@@ -3771,7 +4114,7 @@ app.get('', async (req, res) => {
                 
                 // Container is already shown in displayGroups(), just setup toggle functionality
                 if (membershipChangesContainer) {
-                  setupMembershipToggle();
+                  // Note: setupMembershipToggle() removed since membership changes moved to separate page
                 }
                 
                 // Update quick summary in collapsed button
