@@ -1366,7 +1366,7 @@ app.get('/membership-changes', async (req, res) => {
               </button>
             </div>
             
-            <h1>Recent Membership Changes</h1>
+            <h1>Recent Membership Changes (Last 30 Days)</h1>
             
             <div id="loadingContainer" class="loading-container">
               <div class="loading"></div>
@@ -1442,36 +1442,33 @@ app.get('/membership-changes', async (req, res) => {
               // Generate comprehensive HTML with summary stats and member details (old dropdown format)
               let timelineHtml = '<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px;">';
               
-              // Data source info at the top
+              // Data source info for summary stats
               const dataText = data.latestSnapshotDate ? 
                 'Data as of: ' + new Date(data.latestSnapshotDate).toLocaleDateString() : 
                 'No snapshot data available';
               
-              timelineHtml += 
-                '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #dee2e6;">' +
-                  '<h3 style="margin: 0; color: #333; font-weight: 500;">Membership Changes (Last 30 Days)</h3>' +
-                  '<div style="color: #666; font-size: 14px;">' + dataText + '</div>' +
-                '</div>';
-              
-              // Show summary stats
+              // Show summary stats with data source
               const netChange = data.totalJoins - data.totalLeaves;
               const netChangeText = netChange > 0 ? '+' + netChange : netChange.toString();
               const netChangeColor = netChange > 0 ? '#007bff' : netChange < 0 ? '#fd7e14' : '#666';
               
               timelineHtml += 
-                '<div style="display: flex; gap: 20px; margin-bottom: 25px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">' +
-                  '<div style="display: flex; align-items: center; gap: 8px;">' +
-                    '<span style="color: #28a745; font-weight: bold; font-size: 18px;">+' + data.totalJoins + '</span>' +
-                    '<span style="color: #666; font-weight: 500;">joined</span>' +
+                '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">' +
+                  '<div style="display: flex; gap: 20px;">' +
+                    '<div style="display: flex; align-items: center; gap: 8px;">' +
+                      '<span style="color: #28a745; font-weight: bold; font-size: 18px;">+' + data.totalJoins + '</span>' +
+                      '<span style="color: #666; font-weight: 500;">Members Joined</span>' +
+                    '</div>' +
+                    '<div style="display: flex; align-items: center; gap: 8px;">' +
+                      '<span style="color: #dc3545; font-weight: bold; font-size: 18px;">-' + data.totalLeaves + '</span>' +
+                      '<span style="color: #666; font-weight: 500;">Members Left</span>' +
+                    '</div>' +
+                    '<div style="display: flex; align-items: center; gap: 8px;">' +
+                      '<span style="color: ' + netChangeColor + '; font-weight: bold; font-size: 20px;">' + netChangeText + '</span>' +
+                      '<span style="color: #666; font-weight: 500;">Net Change</span>' +
+                    '</div>' +
                   '</div>' +
-                  '<div style="display: flex; align-items: center; gap: 8px;">' +
-                    '<span style="color: #dc3545; font-weight: bold; font-size: 18px;">-' + data.totalLeaves + '</span>' +
-                    '<span style="color: #666; font-weight: 500;">left</span>' +
-                  '</div>' +
-                  '<div style="display: flex; align-items: center; gap: 8px;">' +
-                    '<span style="color: ' + netChangeColor + '; font-weight: bold; font-size: 20px;">' + netChangeText + '</span>' +
-                    '<span style="color: #666; font-weight: 500;">net</span>' +
-                  '</div>' +
+                  '<div style="color: #666; font-size: 14px;">' + dataText + '</div>' +
                 '</div>';
               
               // Show joins section
@@ -1486,14 +1483,14 @@ app.get('/membership-changes', async (req, res) => {
                 
                 data.joins.forEach(member => {
                   const formattedJoinDate = member.date ? 
-                    new Date(member.date).toLocaleDateString('en-US') : 
+                    new Date(member.date).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) : 
                     'recent';
                   
                   timelineHtml += 
                     '<div style="padding: 8px 12px; background-color: rgba(40, 167, 69, 0.1); border-radius: 6px; border-left: 4px solid #28a745; display: flex; justify-content: space-between; align-items: center;">' +
                       '<div style="display: flex; align-items: center; gap: 8px;">' +
                         '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
-                        '<span style="color: #666; font-size: 12px;">(' + formattedJoinDate + ')</span>' +
+                        '<span style="color: #666; font-size: 12px;">' + formattedJoinDate + '</span>' +
                       '</div>' +
                       '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
                     '</div>';
@@ -1514,14 +1511,14 @@ app.get('/membership-changes', async (req, res) => {
                 
                 data.leaves.forEach(member => {
                   const formattedLeaveDate = member.date ? 
-                    new Date(member.date).toLocaleDateString('en-US') : 
+                    new Date(member.date).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) : 
                     'recent';
                   
                   timelineHtml += 
                     '<div style="padding: 8px 12px; background-color: rgba(220, 53, 69, 0.1); border-radius: 6px; border-left: 4px solid #dc3545; display: flex; justify-content: space-between; align-items: center;">' +
                       '<div style="display: flex; align-items: center; gap: 8px;">' +
                         '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
-                        '<span style="color: #666; font-size: 12px;">(' + formattedLeaveDate + ')</span>' +
+                        '<span style="color: #666; font-size: 12px;">' + formattedLeaveDate + '</span>' +
                       '</div>' +
                       '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
                     '</div>';
