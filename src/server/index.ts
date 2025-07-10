@@ -1172,11 +1172,10 @@ app.get('/api/membership-snapshot-status', async (req, res) => {
     const latestSnapshotDate = membershipSnapshots.getLatestSnapshotDate();
     
     res.json({
-      today: today,
       latestSnapshotDate: latestSnapshotDate,
       hasSnapshotForToday: membershipSnapshots.hasSnapshotForDate(today),
-      daysSinceLastSnapshot: latestSnapshotDate ? 
-        Math.floor((new Date().getTime() - new Date(latestSnapshotDate).getTime()) / (1000 * 60 * 60 * 24)) : 
+      daysSinceLastSnapshot: latestSnapshotDate ?
+        Math.floor((new Date().getTime() - new Date(latestSnapshotDate).getTime()) / (1000 * 60 * 60 * 24)) :
         null
     });
   } catch (error) {
@@ -1185,7 +1184,55 @@ app.get('/api/membership-snapshot-status', async (req, res) => {
   }
 });
 
-
+// Add alias endpoint for manual snapshot capture from the UI
+app.post('/api/capture-membership-snapshot', async (req, res) => {
+  try {
+    const forceRefresh = req.body?.forceRefresh || false;
+    const date = new Date().toISOString().split('T')[0];
+    
+    // Check if we already have a snapshot for today (unless force refresh)
+    if (!forceRefresh && membershipSnapshots.hasSnapshotForDate(date)) {
+      return res.json({
+        success: true,
+        message: 'Snapshot already exists for today',
+        date: date
+      });
+    }
+    
+    // Get all groups
+    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
+    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
+    const groups = await getPeopleGroups(groupTypeId, false);
+    
+    let successCount = 0;
+    let errorCount = 0;
+    
+    // Create snapshots for each group
+    for (const group of groups.data) {
+      try {
+        const memberships = await getGroupMemberships(group.id, true); // Force refresh for snapshots!
+        membershipSnapshots.storeDailySnapshot(date, group.id, group.attributes.name, memberships);
+        successCount++;
+      } catch (error) {
+        errorCount++;
+        console.error(`Failed to create snapshot for group ${group.id} (${group.attributes.name}):`, error);
+      }
+    }
+    
+    console.log(`Membership snapshot created for ${date}. Success: ${successCount}, Errors: ${errorCount}`);
+    
+    res.json({
+      success: true,
+      message: `Captured snapshot for ${successCount} group${successCount !== 1 ? 's' : ''}`,
+      date: date,
+      successCount: successCount,
+      errorCount: errorCount
+    });
+  } catch (error) {
+    console.error('Error creating membership snapshot:', error);
+    res.status(500).json({ error: 'Failed to create membership snapshot', details: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
 
 //Membership Changes Page
 app.get('/membership-changes', async (req, res) => {
@@ -1230,6 +1277,28 @@ app.get('/membership-changes', async (req, res) => {
             .back-button:hover {
               background-color: #5a6268;
             }
+            .capture-button {
+              display: inline-flex;
+              align-items: center;
+              gap: 8px;
+              padding: 10px 16px;
+              background-color: #007bff;
+              color: white;
+              border: none;
+              border-radius: 4px;
+              font-size: 14px;
+              margin-bottom: 20px;
+              margin-left: 10px;
+              cursor: pointer;
+              transition: background-color 0.3s ease;
+            }
+            .capture-button:hover {
+              background-color: #0056b3;
+            }
+            .capture-button:disabled {
+              background-color: #6c757d;
+              cursor: not-allowed;
+            }
             .loading {
               display: inline-block;
               width: 20px;
@@ -1243,95 +1312,17 @@ app.get('/membership-changes', async (req, res) => {
               0% { transform: rotate(0deg); }
               100% { transform: rotate(360deg); }
             }
-            .membership-details {
-              display: grid;
-              grid-template-columns: 1fr 1fr;
-              gap: 30px;
-              margin-top: 20px;
-            }
-            .membership-section {
-              background-color: #f8f9fa;
-              padding: 20px;
-              border-radius: 8px;
-              border-left: 4px solid #007bff;
-            }
-            .membership-section h3 {
-              margin: 0 0 15px 0;
-              color: #333;
-              font-size: 18px;
-            }
-            .membership-section.additions {
-              border-left-color: #28a745;
-            }
-            .membership-section.departures {
-              border-left-color: #dc3545;
-            }
-            .membership-list {
-              list-style: none;
-              padding: 0;
-              margin: 0;
-            }
-            .membership-item {
-              padding: 12px;
-              margin: 8px 0;
-              background-color: white;
-              border-radius: 4px;
-              border-left: 3px solid #007bff;
-            }
-            .membership-item.addition {
-              border-left-color: #28a745;
-            }
-            .membership-item.departure {
-              border-left-color: #dc3545;
-            }
-            .membership-item-name {
-              font-weight: bold;
-              color: #333;
-              margin-bottom: 4px;
-            }
-            .membership-item-group {
-              color: #666;
-              font-size: 14px;
-            }
-            .membership-item-date {
-              color: #999;
-              font-size: 12px;
-              margin-top: 4px;
-            }
-            .summary-stats {
-              display: grid;
-              grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-              gap: 20px;
-              margin-bottom: 30px;
-            }
-            .stat-card {
-              background-color: white;
-              padding: 20px;
-              border-radius: 8px;
-              box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            .loading-container {
               text-align: center;
-              border-left: 4px solid #007bff;
-            }
-            .stat-card.additions {
-              border-left-color: #28a745;
-            }
-            .stat-card.departures {
-              border-left-color: #dc3545;
-            }
-            .stat-card.net {
-              border-left-color: #6f42c1;
-            }
-            .stat-number {
-              font-size: 32px;
-              font-weight: bold;
-              color: #333;
-              margin-bottom: 5px;
-            }
-            .stat-label {
+              padding: 40px;
               color: #666;
-              font-size: 14px;
-              text-transform: uppercase;
-              letter-spacing: 1px;
+            }
+            .loading-container .loading {
+              width: 40px;
+              height: 40px;
+              border: 4px solid #f3f3f3;
+              border-top: 4px solid #007bff;
+              margin: 0 auto 20px;
             }
             .no-data {
               color: #6c757d;
@@ -1347,26 +1338,34 @@ app.get('/membership-changes', async (req, res) => {
               margin-bottom: 20px;
               border: 1px solid #f5c6cb;
             }
-            .loading-container {
-              text-align: center;
-              padding: 40px;
-              color: #666;
+            .success-message {
+              background-color: #d4edda;
+              color: #155724;
+              padding: 12px;
+              border-radius: 4px;
+              margin-bottom: 20px;
+              border: 1px solid #c3e6cb;
             }
-            .loading-container .loading {
-              width: 40px;
-              height: 40px;
-              border: 4px solid #f3f3f3;
-              border-top: 4px solid #007bff;
-              margin: 0 auto 20px;
+            .button-group {
+              display: flex;
+              gap: 10px;
+              margin-bottom: 20px;
             }
           </style>
         </head>
         <body>
           <div class="container">
-            <a href="/" class="back-button">
-              <span>←</span>
-              <span>Back to Home</span>
-            </a>
+            <div class="button-group">
+              <a href="/" class="back-button">
+                <span>←</span>
+                <span>Back to Home</span>
+              </a>
+              <button id="captureSnapshotBtn" class="capture-button">
+                <span>📸</span>
+                <span>Capture Snapshot</span>
+              </button>
+            </div>
+            
             <h1>Recent Membership Changes</h1>
             
             <div id="loadingContainer" class="loading-container">
@@ -1378,14 +1377,12 @@ app.get('/membership-changes', async (req, res) => {
               <div class="error-message" id="errorMessage"></div>
             </div>
             
+            <div id="successContainer" style="display: none;">
+              <div class="success-message" id="successMessage"></div>
+            </div>
+            
             <div id="contentContainer" style="display: none;">
-              <div class="summary-stats" id="summaryStats">
-                <!-- Stats will be populated here -->
-              </div>
-              
-              <div class="membership-details" id="membershipDetails">
-                <!-- Membership changes will be populated here -->
-              </div>
+              <!-- Membership changes will be populated here in old dropdown format -->
             </div>
           </div>
           
@@ -1393,6 +1390,9 @@ app.get('/membership-changes', async (req, res) => {
             // Load membership changes when page loads
             document.addEventListener('DOMContentLoaded', function() {
               loadMembershipChanges();
+              
+              // Setup capture snapshot button
+              document.getElementById('captureSnapshotBtn').addEventListener('click', captureSnapshot);
             });
             
             async function loadMembershipChanges() {
@@ -1418,15 +1418,15 @@ app.get('/membership-changes', async (req, res) => {
                 // Hide loading
                 loadingContainer.style.display = 'none';
                 
-                                 if (data.joins.length === 0 && data.leaves.length === 0) {
-                   // Show no data message
-                   contentContainer.innerHTML = '<div class="no-data">No membership changes found in the last 30 days.</div>';
-                   contentContainer.style.display = 'block';
-                 } else {
-                   // Display the data
-                   displayMembershipChanges(data);
-                   contentContainer.style.display = 'block';
-                 }
+                if (data.totalJoins === 0 && data.totalLeaves === 0) {
+                  // Show no data message
+                  contentContainer.innerHTML = '<div class="no-data">No membership changes in the last 30 days</div>';
+                  contentContainer.style.display = 'block';
+                } else {
+                  // Display the data using old dropdown format
+                  displayMembershipChanges(data);
+                  contentContainer.style.display = 'block';
+                }
                 
               } catch (error) {
                 console.error('Error loading membership changes:', error);
@@ -1437,68 +1437,151 @@ app.get('/membership-changes', async (req, res) => {
             }
             
             function displayMembershipChanges(data) {
-              const summaryStats = document.getElementById('summaryStats');
-              const membershipDetails = document.getElementById('membershipDetails');
+              const contentContainer = document.getElementById('contentContainer');
               
-                             // Calculate stats
-               const totalAdditions = data.joins.length;
-               const totalDepartures = data.leaves.length;
-               const netChange = totalAdditions - totalDepartures;
+              // Generate comprehensive HTML with summary stats and member details (old dropdown format)
+              let timelineHtml = '<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px;">';
               
-              // Create summary stats
-              summaryStats.innerHTML = \`
-                <div class="stat-card additions">
-                  <div class="stat-number">\${totalAdditions}</div>
-                  <div class="stat-label">New Members</div>
-                </div>
-                <div class="stat-card departures">
-                  <div class="stat-number">\${totalDepartures}</div>
-                  <div class="stat-label">Departures</div>
-                </div>
-                <div class="stat-card net">
-                  <div class="stat-number">\${netChange > 0 ? '+' : ''}\${netChange}</div>
-                  <div class="stat-label">Net Change</div>
-                </div>
-              \`;
+              // Data source info at the top
+              const dataText = data.latestSnapshotDate ? 
+                'Data as of: ' + new Date(data.latestSnapshotDate).toLocaleDateString() : 
+                'No snapshot data available';
               
-              // Create membership details
-              membershipDetails.innerHTML = \`
-                                 <div class="membership-section additions">
-                   <h3>New Members (\${totalAdditions})</h3>
-                   <ul class="membership-list">
-                     \${data.joins.map(member => \`
-                       <li class="membership-item addition">
-                         <div class="membership-item-name">\${member.firstName} \${member.lastName}</div>
-                         <div class="membership-item-group">\${member.groupName}</div>
-                         <div class="membership-item-date">Joined: \${formatDate(member.date)}</div>
-                       </li>
-                     \`).join('')}
-                   </ul>
-                 </div>
-                 
-                 <div class="membership-section departures">
-                   <h3>Departures (\${totalDepartures})</h3>
-                   <ul class="membership-list">
-                     \${data.leaves.map(member => \`
-                       <li class="membership-item departure">
-                         <div class="membership-item-name">\${member.firstName} \${member.lastName}</div>
-                         <div class="membership-item-group">\${member.groupName}</div>
-                         <div class="membership-item-date">Left: \${formatDate(member.date)}</div>
-                       </li>
-                     \`).join('')}
-                   </ul>
-                 </div>
-              \`;
+              timelineHtml += 
+                '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #dee2e6;">' +
+                  '<h3 style="margin: 0; color: #333; font-weight: 500;">Membership Changes (Last 30 Days)</h3>' +
+                  '<div style="color: #666; font-size: 14px;">' + dataText + '</div>' +
+                '</div>';
+              
+              // Show summary stats
+              const netChange = data.totalJoins - data.totalLeaves;
+              const netChangeText = netChange > 0 ? '+' + netChange : netChange.toString();
+              const netChangeColor = netChange > 0 ? '#007bff' : netChange < 0 ? '#fd7e14' : '#666';
+              
+              timelineHtml += 
+                '<div style="display: flex; gap: 20px; margin-bottom: 25px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">' +
+                  '<div style="display: flex; align-items: center; gap: 8px;">' +
+                    '<span style="color: #28a745; font-weight: bold; font-size: 18px;">+' + data.totalJoins + '</span>' +
+                    '<span style="color: #666; font-weight: 500;">joined</span>' +
+                  '</div>' +
+                  '<div style="display: flex; align-items: center; gap: 8px;">' +
+                    '<span style="color: #dc3545; font-weight: bold; font-size: 18px;">-' + data.totalLeaves + '</span>' +
+                    '<span style="color: #666; font-weight: 500;">left</span>' +
+                  '</div>' +
+                  '<div style="display: flex; align-items: center; gap: 8px;">' +
+                    '<span style="color: ' + netChangeColor + '; font-weight: bold; font-size: 20px;">' + netChangeText + '</span>' +
+                    '<span style="color: #666; font-weight: 500;">net</span>' +
+                  '</div>' +
+                '</div>';
+              
+              // Show joins section
+              if (data.joins.length > 0) {
+                timelineHtml += 
+                  '<div style="margin-bottom: 25px;">' +
+                    '<h4 style="margin: 0 0 15px 0; color: #28a745; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
+                      '<span style="background-color: #28a745; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">+</span>' +
+                      'Members Joined (' + data.joins.length + ')' +
+                    '</h4>' +
+                    '<div style="display: grid; gap: 8px;">';
+                
+                data.joins.forEach(member => {
+                  const formattedJoinDate = member.date ? 
+                    new Date(member.date).toLocaleDateString('en-US') : 
+                    'recent';
+                  
+                  timelineHtml += 
+                    '<div style="padding: 8px 12px; background-color: rgba(40, 167, 69, 0.1); border-radius: 6px; border-left: 4px solid #28a745; display: flex; justify-content: space-between; align-items: center;">' +
+                      '<div style="display: flex; align-items: center; gap: 8px;">' +
+                        '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
+                        '<span style="color: #666; font-size: 12px;">(' + formattedJoinDate + ')</span>' +
+                      '</div>' +
+                      '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
+                    '</div>';
+                });
+                
+                timelineHtml += '</div></div>';
+              }
+              
+              // Show leaves section
+              if (data.leaves.length > 0) {
+                timelineHtml += 
+                  '<div style="margin-bottom: 20px;">' +
+                    '<h4 style="margin: 0 0 15px 0; color: #dc3545; font-weight: 500; display: flex; align-items: center; gap: 8px;">' +
+                      '<span style="background-color: #dc3545; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">-</span>' +
+                      'Members Left (' + data.leaves.length + ')' +
+                    '</h4>' +
+                    '<div style="display: grid; gap: 8px;">';
+                
+                data.leaves.forEach(member => {
+                  const formattedLeaveDate = member.date ? 
+                    new Date(member.date).toLocaleDateString('en-US') : 
+                    'recent';
+                  
+                  timelineHtml += 
+                    '<div style="padding: 8px 12px; background-color: rgba(220, 53, 69, 0.1); border-radius: 6px; border-left: 4px solid #dc3545; display: flex; justify-content: space-between; align-items: center;">' +
+                      '<div style="display: flex; align-items: center; gap: 8px;">' +
+                        '<span style="font-weight: 500; color: #333;">' + member.firstName + ' ' + member.lastName + '</span>' +
+                        '<span style="color: #666; font-size: 12px;">(' + formattedLeaveDate + ')</span>' +
+                      '</div>' +
+                      '<span style="color: #666; font-size: 14px;">' + member.groupName + '</span>' +
+                    '</div>';
+                });
+                
+                timelineHtml += '</div></div>';
+              }
+              
+              timelineHtml += '</div>';
+              contentContainer.innerHTML = timelineHtml;
             }
             
-            function formatDate(dateString) {
-              if (!dateString) return 'Unknown';
-              const date = new Date(dateString);
-              return date.toLocaleDateString('en-US', { 
-                year: 'numeric', 
-                month: 'short', 
-                day: 'numeric' 
-              });
+            async function captureSnapshot() {
+              const captureBtn = document.getElementById('captureSnapshotBtn');
+              const errorContainer = document.getElementById('errorContainer');
+              const successContainer = document.getElementById('successContainer');
+              const errorMessage = document.getElementById('errorMessage');
+              const successMessage = document.getElementById('successMessage');
+              
+              try {
+                // Disable button and show loading
+                captureBtn.disabled = true;
+                captureBtn.innerHTML = '<span class="loading" style="width: 16px; height: 16px; border: 2px solid #fff; border-top: 2px solid transparent; margin-right: 8px;"></span>Capturing...';
+                
+                // Hide previous messages
+                errorContainer.style.display = 'none';
+                successContainer.style.display = 'none';
+                
+                // Make API call to capture snapshot
+                const response = await fetch('/api/capture-membership-snapshot', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  }
+                });
+                
+                if (!response.ok) {
+                  throw new Error('Failed to capture snapshot');
+                }
+                
+                const result = await response.json();
+                
+                // Show success message
+                successMessage.textContent = 'Snapshot captured successfully! ' + result.message;
+                successContainer.style.display = 'block';
+                
+                // Refresh the data to show updated snapshot date
+                setTimeout(() => {
+                  loadMembershipChanges();
+                }, 2000);
+                
+              } catch (error) {
+                console.error('Error capturing snapshot:', error);
+                errorMessage.textContent = 'Failed to capture snapshot: ' + error.message;
+                errorContainer.style.display = 'block';
+              } finally {
+                // Re-enable button
+                captureBtn.disabled = false;
+                captureBtn.innerHTML = '<span>📸</span><span>Capture Snapshot</span>';
+              }
             }
           </script>
         </body>
@@ -2733,11 +2816,11 @@ app.get('', async (req, res) => {
                     const netChange = data.totalJoins - data.totalLeaves;
                     const netChangeText = netChange > 0 ? '+' + netChange : netChange.toString();
                     
-                    // Format: "+13 Joined -5 Left +8 Net"
-                    membershipButtonSummary.textContent = 
-                      '+' + data.totalJoins + ' Joined ' +
-                      '-' + data.totalLeaves + ' Left ' +
-                      netChangeText + ' Net';
+                    // Format with colored numbers: "+13 Joined -5 Left +8 Net"
+                    membershipButtonSummary.innerHTML = 
+                      '<span style="color: #006400; font-weight: bold;">+' + data.totalJoins + '</span> Joined ' +
+                      '<span style="color: #dc3545; font-weight: bold;">-' + data.totalLeaves + '</span> Left ' +
+                      '<span style="color: #007bff; font-weight: bold;">' + netChangeText + '</span> Net';
                   }
                 }
               } catch (error) {
