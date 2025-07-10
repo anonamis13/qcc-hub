@@ -1418,15 +1418,15 @@ app.get('/membership-changes', async (req, res) => {
                 // Hide loading
                 loadingContainer.style.display = 'none';
                 
-                if (data.additions.length === 0 && data.departures.length === 0) {
-                  // Show no data message
-                  contentContainer.innerHTML = '<div class="no-data">No membership changes found in the last 30 days.</div>';
-                  contentContainer.style.display = 'block';
-                } else {
-                  // Display the data
-                  displayMembershipChanges(data);
-                  contentContainer.style.display = 'block';
-                }
+                                 if (data.joins.length === 0 && data.leaves.length === 0) {
+                   // Show no data message
+                   contentContainer.innerHTML = '<div class="no-data">No membership changes found in the last 30 days.</div>';
+                   contentContainer.style.display = 'block';
+                 } else {
+                   // Display the data
+                   displayMembershipChanges(data);
+                   contentContainer.style.display = 'block';
+                 }
                 
               } catch (error) {
                 console.error('Error loading membership changes:', error);
@@ -1440,10 +1440,10 @@ app.get('/membership-changes', async (req, res) => {
               const summaryStats = document.getElementById('summaryStats');
               const membershipDetails = document.getElementById('membershipDetails');
               
-              // Calculate stats
-              const totalAdditions = data.additions.length;
-              const totalDepartures = data.departures.length;
-              const netChange = totalAdditions - totalDepartures;
+                             // Calculate stats
+               const totalAdditions = data.joins.length;
+               const totalDepartures = data.leaves.length;
+               const netChange = totalAdditions - totalDepartures;
               
               // Create summary stats
               summaryStats.innerHTML = \`
@@ -1463,31 +1463,31 @@ app.get('/membership-changes', async (req, res) => {
               
               // Create membership details
               membershipDetails.innerHTML = \`
-                <div class="membership-section additions">
-                  <h3>New Members (\${totalAdditions})</h3>
-                  <ul class="membership-list">
-                    \${data.additions.map(addition => \`
-                      <li class="membership-item addition">
-                        <div class="membership-item-name">\${addition.personName}</div>
-                        <div class="membership-item-group">\${addition.groupName}</div>
-                        <div class="membership-item-date">Joined: \${formatDate(addition.joinedDate)}</div>
-                      </li>
-                    \`).join('')}
-                  </ul>
-                </div>
-                
-                <div class="membership-section departures">
-                  <h3>Departures (\${totalDepartures})</h3>
-                  <ul class="membership-list">
-                    \${data.departures.map(departure => \`
-                      <li class="membership-item departure">
-                        <div class="membership-item-name">\${departure.personName}</div>
-                        <div class="membership-item-group">\${departure.groupName}</div>
-                        <div class="membership-item-date">Left: \${formatDate(departure.leftDate)}</div>
-                      </li>
-                    \`).join('')}
-                  </ul>
-                </div>
+                                 <div class="membership-section additions">
+                   <h3>New Members (\${totalAdditions})</h3>
+                   <ul class="membership-list">
+                     \${data.joins.map(member => \`
+                       <li class="membership-item addition">
+                         <div class="membership-item-name">\${member.firstName} \${member.lastName}</div>
+                         <div class="membership-item-group">\${member.groupName}</div>
+                         <div class="membership-item-date">Joined: \${formatDate(member.date)}</div>
+                       </li>
+                     \`).join('')}
+                   </ul>
+                 </div>
+                 
+                 <div class="membership-section departures">
+                   <h3>Departures (\${totalDepartures})</h3>
+                   <ul class="membership-list">
+                     \${data.leaves.map(member => \`
+                       <li class="membership-item departure">
+                         <div class="membership-item-name">\${member.firstName} \${member.lastName}</div>
+                         <div class="membership-item-group">\${member.groupName}</div>
+                         <div class="membership-item-date">Left: \${formatDate(member.date)}</div>
+                       </li>
+                     \`).join('')}
+                   </ul>
+                 </div>
               \`;
             }
             
