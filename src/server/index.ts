@@ -1846,8 +1846,12 @@ app.get('', async (req, res) => {
               background-color: #0056b3;
             }
             #loadDataBtn:disabled {
-              background-color: #ccc;
-              cursor: not-allowed;
+              background-color: #007bff !important;
+              cursor: not-allowed !important;
+            }
+            #viewMembershipChangesBtn:disabled {
+              background-color: #6c757d !important;
+              cursor: not-allowed !important;
             }
 
             #groupList {
@@ -2066,14 +2070,14 @@ app.get('', async (req, res) => {
           <div class="container">
             <h1>Queen City Church - Life Groups Health Report</h1>
             <div style="display: flex; gap: 15px; align-items: center; margin-bottom: -10px;">
-              <button id="loadDataBtn" title="Click to refresh current year data. Shift+Click to refresh ALL historical data.">
+              <button id="loadDataBtn" title="Click to refresh current year data. Shift+Click to refresh ALL historical data." onmouseover="if (!this.disabled) { this.style.backgroundColor='#0056b3'; this.style.cursor='pointer'; } else { this.style.cursor='not-allowed'; }" onmouseout="if (!this.disabled) { this.style.backgroundColor='#007bff'; this.style.cursor='pointer'; } else { this.style.cursor='not-allowed'; }">
                 <span>Load Data</span>
                 <span class="est-time">est. time ≈ 3 min.</span>
               </button>
-              <button id="viewMembershipChangesBtn" style="padding: 12px 24px; font-size: 16px; font-weight: 500; color: white; background-color: #28a745; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 20px; transition: all 0.3s ease; display: flex; flex-direction: column; align-items: center; min-width: 160px;" onmouseover="this.style.backgroundColor='#218838';" onmouseout="this.style.backgroundColor='#28a745';">
-                <span>View Membership Changes</span>
-                <span id="membershipButtonSummary" style="font-size: 11px; opacity: 0.9; margin-top: 4px; line-height: 1.2;">Loading...</span>
-              </button>
+                          <button id="viewMembershipChangesBtn" style="padding: 12px 24px; font-size: 16px; font-weight: 500; color: white; background-color: #28a745; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 20px; transition: all 0.3s ease; display: flex; flex-direction: column; align-items: center; min-width: 160px;" onmouseover="if (!this.disabled) { this.style.backgroundColor='#218838'; this.style.cursor='pointer'; } else { this.style.cursor='not-allowed'; }" onmouseout="if (!this.disabled) { this.style.backgroundColor='#28a745'; this.style.cursor='pointer'; } else { this.style.cursor='not-allowed'; }">
+              <span>View Membership Changes</span>
+              <span id="membershipButtonSummary" style="font-size: 11px; opacity: 0.9; margin-top: 4px; line-height: 1.2;">Loading...</span>
+            </button>
             </div>
             <p id="lastUpdate"></p>
 
@@ -3111,6 +3115,12 @@ app.get('', async (req, res) => {
               loadDataBtn.innerHTML = loadingHtml;
               loadDataBtn.style.backgroundColor = '#007bff';
               loadDataBtn.disabled = true;
+              
+              // Disable membership changes button during refresh
+              const viewMembershipChangesBtn = document.getElementById('viewMembershipChangesBtn');
+              if (viewMembershipChangesBtn) {
+                viewMembershipChangesBtn.disabled = true;
+              }
 
               // Clear everything and show loading state
               groupList.innerHTML = '';
@@ -3410,6 +3420,12 @@ app.get('', async (req, res) => {
                 loadDataBtn.innerHTML = refreshHtml;
                 loadDataBtn.style.backgroundColor = '#007bff';
                 loadDataBtn.disabled = false;
+                
+                // Re-enable membership changes button after refresh
+                const viewMembershipChangesBtn = document.getElementById('viewMembershipChangesBtn');
+                if (viewMembershipChangesBtn) {
+                  viewMembershipChangesBtn.disabled = false;
+                }
               }
             });
 
@@ -3437,12 +3453,24 @@ app.get('', async (req, res) => {
                   loadDataBtn.disabled = false;
                   loadDataBtn.innerHTML = initialButtonHtml;
                   initialMessage.textContent = 'No data available. Click "Load Data" to fetch Life Groups data.';
+                  
+                  // Enable membership changes button when no cached data
+                  const viewMembershipChangesBtn = document.getElementById('viewMembershipChangesBtn');
+                  if (viewMembershipChangesBtn) {
+                    viewMembershipChangesBtn.disabled = false;
+                  }
                 }
               } catch (error) {
                 console.error('Error checking cache:', error);
                 loadDataBtn.disabled = false;
                 loadDataBtn.innerHTML = '<span>Load Data</span><span class="est-time">est. time ≈ 3 min.</span>';
                 initialMessage.textContent = 'Error checking data status. Click "Load Data" to try fetching Life Groups data.';
+                
+                // Enable membership changes button on error
+                const viewMembershipChangesBtn = document.getElementById('viewMembershipChangesBtn');
+                if (viewMembershipChangesBtn) {
+                  viewMembershipChangesBtn.disabled = false;
+                }
               }
             }
 
@@ -3450,6 +3478,12 @@ app.get('', async (req, res) => {
               try {
                 loadDataBtn.disabled = true;
                 loadDataBtn.innerHTML = '<span>Loading...</span><span class="est-time">est. time ≈ 3 min.</span>';
+                
+                // Disable membership changes button during loading
+                const viewMembershipChangesBtn = document.getElementById('viewMembershipChangesBtn');
+                if (viewMembershipChangesBtn) {
+                  viewMembershipChangesBtn.disabled = true;
+                }
                 
                 // Only load groups, don't load aggregate data here to avoid duplicate API calls
                 const response = await fetch('/api/load-groups');
@@ -3469,8 +3503,20 @@ app.get('', async (req, res) => {
                 initialMessage.textContent = 'Failed to load groups. Please try again.';
                 initialMessage.style.display = 'block';
                 alert('Failed to load groups. Please try again.');
+                
+                // Re-enable membership changes button on error
+                const viewMembershipChangesBtn = document.getElementById('viewMembershipChangesBtn');
+                if (viewMembershipChangesBtn) {
+                  viewMembershipChangesBtn.disabled = false;
+                }
               } finally {
                 loadDataBtn.disabled = false;
+                
+                // Re-enable membership changes button when loading completes
+                const viewMembershipChangesBtn = document.getElementById('viewMembershipChangesBtn');
+                if (viewMembershipChangesBtn) {
+                  viewMembershipChangesBtn.disabled = false;
+                }
               }
             }
 
