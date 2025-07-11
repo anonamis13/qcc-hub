@@ -1238,12 +1238,21 @@ app.post('/api/capture-membership-snapshot', async (req, res) => {
 app.post('/api/request-attendance', async (req, res) => {
   try {
     const { groupId } = req.body;
+    console.log(`[ATTENDANCE REQUEST] Starting request for group ${groupId}`);
     
     if (!groupId) {
+      console.log('[ATTENDANCE REQUEST] Error: No group ID provided');
       return res.status(400).json({ error: 'Group ID is required' });
     }
     
+    // Check for required environment variables
+    if (!process.env.PCO_APP_ID || !process.env.PCO_SECRET) {
+      console.log('[ATTENDANCE REQUEST] Error: Missing PCO credentials');
+      return res.status(500).json({ error: 'PCO API credentials not configured' });
+    }
+    
     // Get recent events for this group that need attendance
+    console.log(`[ATTENDANCE REQUEST] Fetching attendance data for group ${groupId}`);
     const attendanceData = await getGroupAttendance(groupId, false, false);
     const eventsNeedingAttention = attendanceData.events.filter(event => {
       const now = new Date();
@@ -1271,7 +1280,15 @@ app.post('/api/request-attendance', async (req, res) => {
       return eventEndTime < fourHoursAgo && !hasAttendanceData;
     });
     
+    console.log(`[ATTENDANCE REQUEST] Found ${eventsNeedingAttention.length} events needing attention for group ${groupId}`);
+    if (eventsNeedingAttention.length > 0) {
+      eventsNeedingAttention.forEach(event => {
+        console.log(`[ATTENDANCE REQUEST] Event ${event.event.id} on ${event.event.date} needs attention`);
+      });
+    }
+    
     if (eventsNeedingAttention.length === 0) {
+      console.log(`[ATTENDANCE REQUEST] No events need attention for group ${groupId}`);
       return res.json({ 
         success: false, 
         message: 'No events need attendance requests',
@@ -1282,19 +1299,24 @@ app.post('/api/request-attendance', async (req, res) => {
     // Check rate limiting - only allow one request per day per event
     const today = new Date().toISOString().split('T')[0];
     const attendanceRequestsKey = `attendance_requests_${today}`;
+    console.log(`[ATTENDANCE REQUEST] Checking cache for key: ${attendanceRequestsKey}`);
     const cachedRequests = cache.get(attendanceRequestsKey);
+    console.log(`[ATTENDANCE REQUEST] Cached requests:`, cachedRequests, `(type: ${typeof cachedRequests})`);
     
     // Handle different cached data formats safely
     let todaysRequests;
     if (!cachedRequests) {
+      console.log('[ATTENDANCE REQUEST] No cached requests found, creating empty Set');
       todaysRequests = new Set();
     } else if (Array.isArray(cachedRequests)) {
+      console.log('[ATTENDANCE REQUEST] Converting array to Set');
       todaysRequests = new Set(cachedRequests);
     } else if (typeof cachedRequests === 'object' && cachedRequests.constructor === Object) {
       // If it's a plain object, try to get its values or keys
+      console.log('[ATTENDANCE REQUEST] Converting object keys to Set');
       todaysRequests = new Set(Object.keys(cachedRequests));
     } else {
-      console.warn('Unexpected cached requests format:', typeof cachedRequests, cachedRequests);
+      console.warn('[ATTENDANCE REQUEST] Unexpected cached requests format:', typeof cachedRequests, cachedRequests);
       todaysRequests = new Set();
     }
     
@@ -1304,38 +1326,55 @@ app.post('/api/request-attendance', async (req, res) => {
     
     for (const event of eventsNeedingAttention) {
       const eventRequestKey = `${event.event.id}_${today}`;
+      console.log(`[ATTENDANCE REQUEST] Processing event ${event.event.id} with key ${eventRequestKey}`);
       
       // Skip if already requested today
       if (todaysRequests.has(eventRequestKey)) {
+        console.log(`[ATTENDANCE REQUEST] Event ${event.event.id} already requested today, skipping`);
         alreadyRequested++;
         continue;
       }
       
       try {
         // Make request to Planning Center attendance request endpoint
-        const pcoResponse = await fetch(`https://groups.planningcenteronline.com/events/${event.event.id}/attendance_request`, {
+        const url = `https://groups.planningcenteronline.com/events/${event.event.id}/attendance_request`;
+        console.log(`[ATTENDANCE REQUEST] Making POST request to: ${url}`);
+        console.log(`[ATTENDANCE REQUEST] Using Basic Auth - App ID: ${process.env.PCO_APP_ID ? '[PRESENT]' : '[MISSING]'}, Secret: ${process.env.PCO_SECRET ? '[PRESENT]' : '[MISSING]'}`);
+        
+        // Create Basic Auth header
+        const authString = `${process.env.PCO_APP_ID}:${process.env.PCO_SECRET}`;
+        const authHeader = `Basic ${Buffer.from(authString).toString('base64')}`;
+        
+        const pcoResponse = await fetch(url, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${process.env.PCO_ACCESS_TOKEN}`,
+            'Authorization': authHeader,
             'Content-Type': 'application/json'
           }
         });
         
+        console.log(`[ATTENDANCE REQUEST] Response status: ${pcoResponse.status} ${pcoResponse.statusText}`);
+        
         if (pcoResponse.ok) {
           // Mark this event as requested today
+          console.log(`[ATTENDANCE REQUEST] Success! Marking event ${event.event.id} as requested`);
           todaysRequests.add(eventRequestKey);
           requestsSent++;
         } else {
           const errorText = await pcoResponse.text();
+          console.log(`[ATTENDANCE REQUEST] Error response: ${pcoResponse.status} - ${errorText}`);
           errors.push(`Event ${event.event.id}: ${pcoResponse.status} - ${errorText}`);
         }
       } catch (error) {
+        console.error(`[ATTENDANCE REQUEST] Exception for event ${event.event.id}:`, error);
         errors.push(`Event ${event.event.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
     
     // Cache the updated requests set for 24 hours (convert Set to Array for storage)
-    cache.set(attendanceRequestsKey, Array.from(todaysRequests), 24 * 60 * 60 * 1000);
+    const requestsArray = Array.from(todaysRequests);
+    console.log(`[ATTENDANCE REQUEST] Caching ${requestsArray.length} requests:`, requestsArray);
+    cache.set(attendanceRequestsKey, requestsArray, 24 * 60 * 60 * 1000);
     
     const totalEvents = eventsNeedingAttention.length;
     const responseMessage = [
@@ -1344,21 +1383,31 @@ app.post('/api/request-attendance', async (req, res) => {
       errors.length > 0 ? `${errors.length} failed` : null
     ].filter(Boolean).join(', ');
     
-    res.json({
+    console.log(`[ATTENDANCE REQUEST] Final result: ${requestsSent} sent, ${alreadyRequested} already requested, ${errors.length} errors`);
+    if (errors.length > 0) {
+      console.log(`[ATTENDANCE REQUEST] Errors:`, errors);
+    }
+    
+    const response = {
       success: requestsSent > 0,
       message: responseMessage || 'No requests sent',
       requestsSent,
       alreadyRequested,
       totalEvents,
       errors: errors.length > 0 ? errors : undefined
-    });
+    };
+    
+    console.log(`[ATTENDANCE REQUEST] Sending response:`, response);
+    res.json(response);
     
   } catch (error) {
-    console.error('Error requesting attendance:', error);
-    res.status(500).json({ 
+    console.error('[ATTENDANCE REQUEST] Fatal error:', error);
+    const response = { 
       error: 'Failed to request attendance', 
       details: error instanceof Error ? error.message : 'Unknown error' 
-    });
+    };
+    console.log('[ATTENDANCE REQUEST] Sending error response:', response);
+    res.status(500).json(response);
   }
 });
 
