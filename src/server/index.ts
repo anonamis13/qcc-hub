@@ -1234,21 +1234,15 @@ app.post('/api/capture-membership-snapshot', async (req, res) => {
   }
 });
 
-// Add endpoint to request attendance for missing events
+// Add endpoint to get attendance request information
 app.post('/api/request-attendance', async (req, res) => {
   try {
-    const { groupId } = req.body;
-    console.log(`[ATTENDANCE REQUEST] Starting request for group ${groupId}`);
+    const { groupId, getUrlsOnly } = req.body;
+    console.log(`[ATTENDANCE REQUEST] Starting request for group ${groupId}, URLs only: ${getUrlsOnly}`);
     
     if (!groupId) {
       console.log('[ATTENDANCE REQUEST] Error: No group ID provided');
       return res.status(400).json({ error: 'Group ID is required' });
-    }
-    
-    // Check for required environment variables
-    if (!process.env.PCO_APP_ID || !process.env.PCO_SECRET) {
-      console.log('[ATTENDANCE REQUEST] Error: Missing PCO credentials');
-      return res.status(500).json({ error: 'PCO API credentials not configured' });
     }
     
     // Get recent events for this group that need attendance
@@ -1292,113 +1286,28 @@ app.post('/api/request-attendance', async (req, res) => {
       return res.json({ 
         success: false, 
         message: 'No events need attendance requests',
-        requestsSent: 0
+        eventUrls: []
       });
     }
     
-    // Check rate limiting - only allow one request per day per event
-    const today = new Date().toISOString().split('T')[0];
-    const attendanceRequestsKey = `attendance_requests_${today}`;
-    console.log(`[ATTENDANCE REQUEST] Checking cache for key: ${attendanceRequestsKey}`);
-    const cachedRequests = cache.get(attendanceRequestsKey);
-    console.log(`[ATTENDANCE REQUEST] Cached requests:`, cachedRequests, `(type: ${typeof cachedRequests})`);
-    
-    // Handle different cached data formats safely
-    let todaysRequests;
-    if (!cachedRequests) {
-      console.log('[ATTENDANCE REQUEST] No cached requests found, creating empty Set');
-      todaysRequests = new Set();
-    } else if (Array.isArray(cachedRequests)) {
-      console.log('[ATTENDANCE REQUEST] Converting array to Set');
-      todaysRequests = new Set(cachedRequests);
-    } else if (typeof cachedRequests === 'object' && cachedRequests.constructor === Object) {
-      // If it's a plain object, try to get its values or keys
-      console.log('[ATTENDANCE REQUEST] Converting object keys to Set');
-      todaysRequests = new Set(Object.keys(cachedRequests));
+    // If getUrlsOnly is true, just return the event IDs for opening PCO pages
+    if (getUrlsOnly) {
+      const eventIds = eventsNeedingAttention.map(event => event.event.id);
+      console.log(`[ATTENDANCE REQUEST] Returning ${eventIds.length} event IDs for manual request:`, eventIds);
+      
+      res.json({
+        success: true,
+        message: `Found ${eventIds.length} event${eventIds.length !== 1 ? 's' : ''} needing attendance requests`,
+        eventUrls: eventIds
+      });
     } else {
-      console.warn('[ATTENDANCE REQUEST] Unexpected cached requests format:', typeof cachedRequests, cachedRequests);
-      todaysRequests = new Set();
+      // Legacy response for backwards compatibility
+      res.json({
+        success: false,
+        message: 'API attendance requests are not supported - this endpoint now returns URLs for manual requests',
+        eventUrls: eventsNeedingAttention.map(event => event.event.id)
+      });
     }
-    
-    let requestsSent = 0;
-    let alreadyRequested = 0;
-    const errors = [];
-    
-    for (const event of eventsNeedingAttention) {
-      const eventRequestKey = `${event.event.id}_${today}`;
-      console.log(`[ATTENDANCE REQUEST] Processing event ${event.event.id} with key ${eventRequestKey}`);
-      
-      // Skip if already requested today
-      if (todaysRequests.has(eventRequestKey)) {
-        console.log(`[ATTENDANCE REQUEST] Event ${event.event.id} already requested today, skipping`);
-        alreadyRequested++;
-        continue;
-      }
-      
-      try {
-        // Make request to Planning Center attendance request endpoint
-        const url = `https://groups.planningcenteronline.com/events/${event.event.id}/attendance_request`;
-        console.log(`[ATTENDANCE REQUEST] Making POST request to: ${url}`);
-        console.log(`[ATTENDANCE REQUEST] Using Basic Auth - App ID: ${process.env.PCO_APP_ID ? '[PRESENT]' : '[MISSING]'}, Secret: ${process.env.PCO_SECRET ? '[PRESENT]' : '[MISSING]'}`);
-        
-        // Create Basic Auth header
-        const authString = `${process.env.PCO_APP_ID}:${process.env.PCO_SECRET}`;
-        const authHeader = `Basic ${Buffer.from(authString).toString('base64')}`;
-        
-        const pcoResponse = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Authorization': authHeader,
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        console.log(`[ATTENDANCE REQUEST] Response status: ${pcoResponse.status} ${pcoResponse.statusText}`);
-        
-        if (pcoResponse.ok) {
-          // Mark this event as requested today
-          console.log(`[ATTENDANCE REQUEST] Success! Marking event ${event.event.id} as requested`);
-          todaysRequests.add(eventRequestKey);
-          requestsSent++;
-        } else {
-          const errorText = await pcoResponse.text();
-          console.log(`[ATTENDANCE REQUEST] Error response: ${pcoResponse.status} - ${errorText}`);
-          errors.push(`Event ${event.event.id}: ${pcoResponse.status} - ${errorText}`);
-        }
-      } catch (error) {
-        console.error(`[ATTENDANCE REQUEST] Exception for event ${event.event.id}:`, error);
-        errors.push(`Event ${event.event.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      }
-    }
-    
-    // Cache the updated requests set for 24 hours (convert Set to Array for storage)
-    const requestsArray = Array.from(todaysRequests);
-    console.log(`[ATTENDANCE REQUEST] Caching ${requestsArray.length} requests:`, requestsArray);
-    cache.set(attendanceRequestsKey, requestsArray, 24 * 60 * 60 * 1000);
-    
-    const totalEvents = eventsNeedingAttention.length;
-    const responseMessage = [
-      requestsSent > 0 ? `${requestsSent} attendance request${requestsSent !== 1 ? 's' : ''} sent` : null,
-      alreadyRequested > 0 ? `${alreadyRequested} already requested today` : null,
-      errors.length > 0 ? `${errors.length} failed` : null
-    ].filter(Boolean).join(', ');
-    
-    console.log(`[ATTENDANCE REQUEST] Final result: ${requestsSent} sent, ${alreadyRequested} already requested, ${errors.length} errors`);
-    if (errors.length > 0) {
-      console.log(`[ATTENDANCE REQUEST] Errors:`, errors);
-    }
-    
-    const response = {
-      success: requestsSent > 0,
-      message: responseMessage || 'No requests sent',
-      requestsSent,
-      alreadyRequested,
-      totalEvents,
-      errors: errors.length > 0 ? errors : undefined
-    };
-    
-    console.log(`[ATTENDANCE REQUEST] Sending response:`, response);
-    res.json(response);
     
   } catch (error) {
     console.error('[ATTENDANCE REQUEST] Fatal error:', error);
@@ -2051,18 +1960,7 @@ app.get('', async (req, res) => {
               background-color: #e55a3a;
               transform: translateY(-50%) scale(1.1);
             }
-            .group-item.requesting-attendance::before {
-              content: "⟳";
-              animation: spin 1s linear infinite;
-            }
-            .group-item.attendance-requested::before {
-              content: "✓";
-              background-color: #28a745;
-            }
-            .group-item.attendance-request-error::before {
-              content: "✗";
-              background-color: #dc3545;
-            }
+
             @keyframes spin {
               0% { transform: translateY(-50%) rotate(0deg); }
               100% { transform: translateY(-50%) rotate(360deg); }
@@ -2612,7 +2510,7 @@ app.get('', async (req, res) => {
                   }
 
                   return '<li class="' + groupItemClasses + '" id="group-' + group.id + '" data-group-id="' + group.id + '"' +
-                         (group.stats?.needsAttention ? ' title="Recent event missing attendance data - Click exclamation mark to request"' : '') + '>' +
+                         (group.stats?.needsAttention ? ' title="Recent event missing attendance data - Click exclamation mark to open Planning Center"' : '') + '>' +
                     '<a href="/groups/' + group.id + '/attendance" style="color: #007bff; text-decoration: none; font-size: 18px; font-weight: 500;" onmouseover="this.style.textDecoration=&quot;underline&quot;;" onmouseout="this.style.textDecoration=&quot;none&quot;;">' +
                       group.attributes.name +
                     '</a>' +
@@ -2984,78 +2882,35 @@ app.get('', async (req, res) => {
               });
             }
             
-            // Function to request attendance for a group
+            // Function to open Planning Center attendance request page
             async function requestAttendanceForGroup(groupId, groupElement) {
-              // Prevent multiple simultaneous requests for the same group
-              if (groupElement.classList.contains('requesting-attendance') || 
-                  groupElement.classList.contains('attendance-requested') ||
-                  groupElement.classList.contains('attendance-request-error')) {
-                return;
-              }
-              
-              // Show loading state
-              groupElement.classList.remove('needs-attention');
-              groupElement.classList.add('requesting-attendance');
-              groupElement.title = 'Sending attendance request...';
-              
               try {
+                // Get recent events for this group that need attendance
                 const response = await fetch('/api/request-attendance', {
                   method: 'POST',
                   headers: {
                     'Content-Type': 'application/json'
                   },
-                  body: JSON.stringify({ groupId })
+                  body: JSON.stringify({ groupId, getUrlsOnly: true })
                 });
                 
                 const result = await response.json();
                 
-                if (response.ok && result.success) {
-                  // Show success state
-                  groupElement.classList.remove('requesting-attendance');
-                  groupElement.classList.add('attendance-requested');
-                  groupElement.title = \`Attendance request sent! \${result.message}\`;
+                if (response.ok && result.eventUrls && result.eventUrls.length > 0) {
+                  // Open the first event's attendance request page
+                  const eventUrl = \`https://groups.planningcenteronline.com/events/\${result.eventUrls[0]}\`;
+                  window.open(eventUrl, '_blank');
                   
-                  // Reset to normal state after 5 seconds, but keep it from showing needs-attention today
-                  setTimeout(() => {
-                    if (groupElement.classList.contains('attendance-requested')) {
-                      groupElement.classList.remove('attendance-requested');
-                      groupElement.title = 'Attendance request sent today';
-                      // Don't add needs-attention back since request was sent
-                    }
-                  }, 5000);
-                  
+                  // Update tooltip to indicate the page was opened
+                  groupElement.title = 'Opened Planning Center page - click "Request attendance from leaders" button there';
                 } else {
-                  // Show error state
-                  groupElement.classList.remove('requesting-attendance');
-                  groupElement.classList.add('attendance-request-error');
-                  groupElement.title = \`Error: \${result.message || 'Failed to send attendance request'}\`;
-                  
-                  // Reset to needs-attention state after 3 seconds
-                  setTimeout(() => {
-                    if (groupElement.classList.contains('attendance-request-error')) {
-                      groupElement.classList.remove('attendance-request-error');
-                      groupElement.classList.add('needs-attention');
-                      groupElement.title = 'Recent event missing attendance data - Click exclamation mark to request';
-                    }
-                  }, 3000);
+                  // No events need attention
+                  groupElement.title = result.message || 'No recent events need attendance requests';
                 }
                 
               } catch (error) {
-                console.error('Error requesting attendance:', error);
-                
-                // Show error state
-                groupElement.classList.remove('requesting-attendance');
-                groupElement.classList.add('attendance-request-error');
-                groupElement.title = \`Network error: \${error.message}\`;
-                
-                // Reset to needs-attention state after 3 seconds
-                setTimeout(() => {
-                  if (groupElement.classList.contains('attendance-request-error')) {
-                    groupElement.classList.remove('attendance-request-error');
-                    groupElement.classList.add('needs-attention');
-                    groupElement.title = 'Recent event missing attendance data - Click exclamation mark to request';
-                  }
-                }, 3000);
+                console.error('Error getting attendance request info:', error);
+                groupElement.title = 'Error getting event information';
               }
             }
 
@@ -3118,10 +2973,13 @@ app.get('', async (req, res) => {
                     const netChangeText = netChange > 0 ? '+' + netChange : netChange.toString();
                     
                     // Format with colored numbers: "+13 Joined -5 Left +8 Net"
+                    // Use same colors as membership changes page: blue for positive, orange for negative, gray for zero
+                    const netChangeColor = netChange > 0 ? 'rgba(0, 123, 255, 0.9)' : netChange < 0 ? 'rgba(253, 126, 20, 0.9)' : 'rgba(102, 102, 102, 0.9)';
+                    
                     membershipButtonSummary.innerHTML = 
                       '<span style="color: #fff; background-color: rgba(46, 125, 50, 0.8); padding: 2px 4px; border-radius: 3px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">+' + data.totalJoins + '</span> Joined ' +
                       '<span style="color: #fff; background-color: rgba(220, 53, 69, 0.9); padding: 2px 4px; border-radius: 3px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">-' + data.totalLeaves + '</span> Left ' +
-                      '<span style="color: #fff; background-color: rgba(0, 123, 255, 0.9); padding: 2px 4px; border-radius: 3px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">' + netChangeText + '</span> Net';
+                      '<span style="color: #fff; background-color: ' + netChangeColor + '; padding: 2px 4px; border-radius: 3px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">' + netChangeText + '</span> Net';
                   }
                 }
               } catch (error) {
@@ -3673,7 +3531,7 @@ app.get('', async (req, res) => {
                   // Update attention styling
                   if (stats.needsAttention) {
                     groupElement.classList.add('needs-attention');
-                    groupElement.setAttribute('title', 'Recent event missing attendance data - Click exclamation mark to request');
+                    groupElement.setAttribute('title', 'Recent event missing attendance data - Click exclamation mark to open Planning Center');
                   } else {
                     groupElement.classList.remove('needs-attention');
                     groupElement.removeAttribute('title');
