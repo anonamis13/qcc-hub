@@ -1282,8 +1282,21 @@ app.post('/api/request-attendance', async (req, res) => {
     // Check rate limiting - only allow one request per day per event
     const today = new Date().toISOString().split('T')[0];
     const attendanceRequestsKey = `attendance_requests_${today}`;
-    const cachedRequests = cache.get<string[]>(attendanceRequestsKey) || [];
-    const todaysRequests = new Set(cachedRequests); // Convert array back to Set
+    const cachedRequests = cache.get(attendanceRequestsKey);
+    
+    // Handle different cached data formats safely
+    let todaysRequests;
+    if (!cachedRequests) {
+      todaysRequests = new Set();
+    } else if (Array.isArray(cachedRequests)) {
+      todaysRequests = new Set(cachedRequests);
+    } else if (typeof cachedRequests === 'object' && cachedRequests.constructor === Object) {
+      // If it's a plain object, try to get its values or keys
+      todaysRequests = new Set(Object.keys(cachedRequests));
+    } else {
+      console.warn('Unexpected cached requests format:', typeof cachedRequests, cachedRequests);
+      todaysRequests = new Set();
+    }
     
     let requestsSent = 0;
     let alreadyRequested = 0;
