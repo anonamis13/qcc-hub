@@ -1282,7 +1282,8 @@ app.post('/api/request-attendance', async (req, res) => {
     // Check rate limiting - only allow one request per day per event
     const today = new Date().toISOString().split('T')[0];
     const attendanceRequestsKey = `attendance_requests_${today}`;
-    const todaysRequests = cache.get<Set<string>>(attendanceRequestsKey) || new Set();
+    const cachedRequests = cache.get<string[]>(attendanceRequestsKey) || [];
+    const todaysRequests = new Set(cachedRequests); // Convert array back to Set
     
     let requestsSent = 0;
     let alreadyRequested = 0;
@@ -1320,8 +1321,8 @@ app.post('/api/request-attendance', async (req, res) => {
       }
     }
     
-    // Cache the updated requests set for 24 hours
-    cache.set(attendanceRequestsKey, todaysRequests, 24 * 60 * 60 * 1000);
+    // Cache the updated requests set for 24 hours (convert Set to Array for storage)
+    cache.set(attendanceRequestsKey, Array.from(todaysRequests), 24 * 60 * 60 * 1000);
     
     const totalEvents = eventsNeedingAttention.length;
     const responseMessage = [
@@ -2907,8 +2908,8 @@ app.get('', async (req, res) => {
                   const clickX = event.clientX - rect.left;
                   const clickY = event.clientY - rect.top;
                   
-                  // Check if click is within the exclamation mark area (left side, -10px to 8px from left edge)
-                  if (clickX >= -10 && clickX <= 8 && clickY >= rect.height/2 - 9 && clickY <= rect.height/2 + 9) {
+                  // Check if click is within the exclamation mark area (18px width + 4px border = 22px total, positioned at -10px)
+                  if (clickX >= -12 && clickX <= 14 && clickY >= rect.height/2 - 12 && clickY <= rect.height/2 + 12) {
                     event.preventDefault();
                     event.stopPropagation();
                     
