@@ -4448,13 +4448,20 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
               color: #dc3545;
             }
             .back-link {
-              display: inline-block;
-              margin-bottom: 20px;
-              color: #007bff;
+              display: inline-flex;
+              align-items: center;
+              gap: 8px;
+              padding: 10px 16px;
+              background-color: #6c757d;
+              color: white;
               text-decoration: none;
+              border-radius: 4px;
+              font-size: 14px;
+              margin-bottom: 20px;
+              transition: background-color 0.3s ease;
             }
             .back-link:hover {
-              text-decoration: underline;
+              background-color: #5a6268;
             }
             .visitor-count {
               color: #28a745;
