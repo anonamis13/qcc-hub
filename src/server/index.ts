@@ -193,8 +193,7 @@ app.get('/api/individual-group-attendance', async (req, res) => {
     if (selectedGroupIds.length > 5) {
       return res.status(400).json({ error: 'Maximum 5 groups allowed for individual comparison' });
     }
-    
-    console.log('Individual group attendance requested for groups:', selectedGroupIds);
+
     
     // Get all groups first to filter and get metadata
     const groups = await getPeopleGroups(groupTypeId, forceRefresh);
@@ -378,14 +377,7 @@ app.get('/api/aggregate-attendance', async (req, res) => {
                            (req.query.selectedGroups as string).split(',').filter(id => id.trim()) : 
                            null;
     
-    console.log('Filter parameters received:', {
-      groupTypesQuery: req.query.groupTypes,
-      meetingDaysQuery: req.query.meetingDays,
-      selectedGroupsQuery: req.query.selectedGroups,
-      groupTypesFilter,
-      meetingDaysFilter,
-      selectedGroupIds
-    });
+
     
     // Get all groups first
     const groups = await getPeopleGroups(groupTypeId, forceRefresh);
@@ -758,103 +750,8 @@ app.get('/api/aggregate-attendance', async (req, res) => {
   }
 });
 
-// Add new debugging endpoint
-app.get('/api/debug-info', async (req, res) => {
-  try {
-    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
-    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
-    
-    // Get basic environment info
-    const envInfo = {
-      nodeEnv: process.env.NODE_ENV,
-      groupTypeId: groupTypeId,
-      groupTypeIdSource: groupTypeIdFromEnv ? 'env' : 'default',
-      hasApiCreds: !!(process.env.PCO_APP_ID && process.env.PCO_SECRET),
-      currentTime: new Date().toISOString(),
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
-    };
 
-    // Get cache stats
-    const cacheStats = cache.getStats();
-    
-    // Get group count
-    const groups = await getPeopleGroups(groupTypeId, false);
-    
-    res.json({
-      environment: envInfo,
-      cache: cacheStats,
-      groupCount: groups.data.length,
-      filteredCount: groups.filtered_count,
-      groupIds: groups.data.map(g => g.id).sort()
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to get debug info', details: error instanceof Error ? error.message : 'Unknown error' });
-  }
-});
 
-// Add new endpoint to check specific week data
-app.get('/api/debug-week/:date', async (req, res) => {
-  try {
-    const { date } = req.params; // Expected format: YYYY-MM-DD
-    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
-    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
-    
-    const groups = await getPeopleGroups(groupTypeId, false);
-    
-    // Get attendance data for each group for the specific week
-    const attendancePromises = groups.data.map(async group => {
-      const attendance = await getGroupAttendance(group.id, false, false);
-      // Filter events for the specific week using UTC to avoid timezone issues
-      const targetDate = new Date(date + 'T00:00:00.000Z'); // Force UTC
-      const weekStart = new Date(targetDate);
-      
-      // Get the Sunday of the week - use UTC methods to avoid timezone issues
-      const dayOfWeek = weekStart.getUTCDay();
-      weekStart.setUTCDate(weekStart.getUTCDate() - dayOfWeek); // Go back to Sunday
-      
-      const weekEnd = new Date(weekStart);
-      weekEnd.setUTCDate(weekStart.getUTCDate() + 6); // Get Saturday
-      
-      const weekEvents = attendance.events.filter(event => {
-        const eventDate = new Date(event.event.date);
-        return eventDate >= weekStart && eventDate <= weekEnd && !event.event.canceled;
-      });
-      
-      return {
-        groupId: group.id,
-        groupName: group.attributes.name,
-        weekEvents: weekEvents.map(e => ({
-          date: e.event.date,
-          totalMembers: e.attendance_summary.total_count,
-          presentMembers: e.attendance_summary.present_members,
-          visitors: e.attendance_summary.present_visitors
-        }))
-      };
-    });
-    
-    const weekData = await Promise.all(attendancePromises);
-    const totalMembers = weekData.reduce((sum, group) => {
-      const groupMax = Math.max(...group.weekEvents.map(e => e.totalMembers), 0);
-      return sum + groupMax;
-    }, 0);
-    
-    // Calculate week start using UTC to ensure consistency
-    const targetDateUTC = new Date(date + 'T00:00:00.000Z');
-    const weekStartUTC = new Date(targetDateUTC);
-    weekStartUTC.setUTCDate(targetDateUTC.getUTCDate() - targetDateUTC.getUTCDay());
-    
-    res.json({
-      requestedDate: date,
-      weekStart: weekStartUTC.toISOString().split('T')[0],
-      totalGroups: groups.data.length,
-      groupsWithData: weekData.filter(g => g.weekEvents.length > 0).length,
-      totalMembers: totalMembers,
-      groupBreakdown: weekData.filter(g => g.weekEvents.length > 0)
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to get week debug info', details: error instanceof Error ? error.message : 'Unknown error' });
-  }
-});
 
 // Add new endpoint to clear cache
 app.get('/api/clear-cache', async (req, res) => {
@@ -890,205 +787,6 @@ app.get('/api/health', async (req, res) => {
       error: 'Health check failed', 
       details: error instanceof Error ? error.message : 'Unknown error',
       timestamp: new Date().toISOString()
-    });
-  }
-});
-
-// Add new endpoint to debug specific group attendance data
-app.get('/api/debug-group/:groupId', async (req, res) => {
-  try {
-    const { groupId } = req.params;
-    const forceRefresh = req.query.forceRefresh === 'true';
-    
-    const attendanceData = await getGroupAttendance(groupId, false, forceRefresh);
-    
-    // Filter for February events specifically
-    const februaryEvents = attendanceData.events.filter(event => {
-      const eventDate = new Date(event.event.date);
-      return eventDate.getMonth() === 1 && eventDate.getFullYear() === 2025; // February = month 1
-    });
-    
-    // Also filter for Wed/Thu February events
-    const wedThuFebEvents = februaryEvents.filter(event => {
-      // Use local time (Eastern) since Life Groups meet Wed/Thu in Cincinnati
-      const dayOfWeek = new Date(event.event.date).getDay();
-      return dayOfWeek === 3 || dayOfWeek === 4; // Wednesday or Thursday
-    });
-    
-    const debugInfo = {
-      environment: process.env.NODE_ENV || 'development',
-      groupId: groupId,
-      totalEvents: attendanceData.events.length,
-      februaryEvents: februaryEvents.length,
-      wedThuFebEvents: wedThuFebEvents.length,
-      februaryEventDetails: februaryEvents.map(event => ({
-        date: event.event.date,
-        // Use local time (Eastern) since meetings are Wed/Thu in Cincinnati
-        dayOfWeek: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(event.event.date).getDay()],
-        canceled: event.event.canceled,
-        presentCount: event.attendance_summary.present_count,
-        presentMembers: event.attendance_summary.present_members,
-        presentVisitors: event.attendance_summary.present_visitors,
-        totalCount: event.attendance_summary.total_count
-      })),
-      cacheKey: `events_${groupId}_false`,
-      timestamp: new Date().toISOString()
-    };
-    
-    res.json(debugInfo);
-  } catch (error) {
-    console.error(`Error debugging group ${req.params.groupId}:`, error);
-    res.status(500).json({ 
-      error: 'Failed to debug group', 
-      details: error instanceof Error ? error.message : 'Unknown error',
-      groupId: req.params.groupId
-    });
-  }
-});
-
-// Add new endpoint to debug Family Group tags
-app.get('/api/debug-family-groups', async (req, res) => {
-  try {
-    const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
-    const groupTypeId = groupTypeIdFromEnv ? parseInt(groupTypeIdFromEnv, 10) : 429361;
-    
-    const groups = await getPeopleGroups(groupTypeId, false);
-    
-    const familyGroups = groups.data.filter(group => group.isFamilyGroup);
-    const regularGroups = groups.data.filter(group => !group.isFamilyGroup);
-    
-    res.json({
-      totalGroups: groups.data.length,
-      familyGroups: familyGroups.length,
-      regularGroups: regularGroups.length,
-      familyGroupNames: familyGroups.map(g => g.attributes.name),
-      regularGroupNames: regularGroups.map(g => g.attributes.name)
-    });
-  } catch (error) {
-    console.error('Error debugging Family Groups:', error);
-    res.status(500).json({ 
-      error: 'Failed to debug Family Groups', 
-      details: error instanceof Error ? error.message : 'Unknown error'
-    });
-  }
-});
-
-// Add debug endpoint for Family Group metrics
-app.get('/api/debug-family-metrics/:groupId', async (req, res) => {
-  try {
-    const { groupId } = req.params;
-    const attendanceData = await getGroupAttendance(groupId, false, false);
-    const stats = attendanceData.overall_statistics;
-    const hasFamilyMetrics = 'familyGroup' in stats;
-    
-    // Create a detailed breakdown showing ALL events (including cancelled/zero attendance) for position identification
-    const eventsByMonth = new Map();
-    const allPastEvents = attendanceData.events.filter(event => 
-      new Date(event.event.date) <= new Date()
-    );
-    
-    allPastEvents.forEach(event => {
-      const eventDate = new Date(event.event.date);
-      const monthKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}`;
-      
-      if (!eventsByMonth.has(monthKey)) {
-        eventsByMonth.set(monthKey, []);
-      }
-      eventsByMonth.get(monthKey).push({
-        date: event.event.date,
-        canceled: event.event.canceled,
-        present: event.attendance_summary.present_members,
-        total: event.attendance_summary.total_count,
-        rate: event.attendance_summary.attendance_rate,
-        validForCalculation: !event.event.canceled && event.attendance_summary.present_count > 0
-      });
-    });
-    
-    // Sort events within each month
-    eventsByMonth.forEach((monthEvents: any[]) => {
-      monthEvents.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    });
-    
-    const monthlyBreakdown = Array.from(eventsByMonth.entries()).map(([month, events]: [string, any[]]) => {
-      const breakdown = {
-        month,
-        totalEvents: events.length,
-        mothersNight: null as any,
-        fathersNight: null as any,
-        familyNight: null as any,
-        hasParentsData: false,
-        hasFamilyData: false
-      };
-
-      // Process each position
-      for (let i = 0; i < events.length && i < 3; i++) {
-        const event = events[i];
-        
-        if (i === 0) {
-          // 1st meeting = Mothers Night
-          breakdown.mothersNight = {
-            ...event,
-            meetingType: 'Mothers Night',
-            calculatedRate: event.validForCalculation 
-              ? Math.round((event.present / Math.ceil(event.total / 2)) * 100) + '%' 
-              : 'N/A (cancelled or no attendance)',
-            usedInCalculation: event.validForCalculation
-          };
-          if (event.validForCalculation) breakdown.hasParentsData = true;
-        } else if (i === 1) {
-          // 2nd meeting = Fathers Night
-          breakdown.fathersNight = {
-            ...event,
-            meetingType: 'Fathers Night',
-            calculatedRate: event.validForCalculation 
-              ? Math.round((event.present / Math.ceil(event.total / 2)) * 100) + '%' 
-              : 'N/A (cancelled or no attendance)',
-            usedInCalculation: event.validForCalculation
-          };
-          if (event.validForCalculation) breakdown.hasParentsData = true;
-        } else if (i === 2) {
-          // 3rd meeting = Family Night
-          breakdown.familyNight = {
-            ...event,
-            meetingType: 'Family Night',
-            calculatedRate: event.validForCalculation 
-              ? event.rate + '%' 
-              : 'N/A (cancelled or no attendance)',
-            usedInCalculation: event.validForCalculation
-          };
-          if (event.validForCalculation) breakdown.hasFamilyData = true;
-        }
-      }
-
-      return breakdown;
-    });
-    
-    res.json({
-      groupId: groupId,
-      isFamilyGroup: hasFamilyMetrics,
-      regularStats: {
-        totalEvents: stats.total_events,
-        eventsWithAttendance: stats.events_with_attendance,
-        averageAttendance: stats.average_attendance,
-        averageMembers: stats.average_members,
-        overallAttendanceRate: stats.overall_attendance_rate
-      },
-      familyGroupStats: hasFamilyMetrics ? (stats as any).familyGroup : null,
-      monthlyBreakdown: monthlyBreakdown,
-      explanation: {
-        methodology: "All events (including cancelled) are used to determine meeting positions. Only non-cancelled events with attendance are used in calculations.",
-        positions: {
-          "1st meeting": "Mothers Night (present / half of total members)",
-          "2nd meeting": "Fathers Night (present / half of total members)", 
-          "3rd meeting": "Family Night (present / total members)"
-        }
-      }
-    });
-  } catch (error) {
-    console.error(`Error testing Family Group metrics for ${req.params.groupId}:`, error);
-    res.status(500).json({ 
-      error: 'Failed to test Family Group metrics', 
-      details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });
@@ -1174,8 +872,8 @@ app.get('/api/membership-snapshot-status', async (req, res) => {
     res.json({
       latestSnapshotDate: latestSnapshotDate,
       hasSnapshotForToday: membershipSnapshots.hasSnapshotForDate(today),
-      daysSinceLastSnapshot: latestSnapshotDate ?
-        Math.floor((new Date().getTime() - new Date(latestSnapshotDate).getTime()) / (1000 * 60 * 60 * 24)) :
+      daysSinceLastSnapshot: latestSnapshotDate ? 
+        Math.floor((new Date().getTime() - new Date(latestSnapshotDate).getTime()) / (1000 * 60 * 60 * 24)) : 
         null
     });
   } catch (error) {
@@ -1238,15 +936,12 @@ app.post('/api/capture-membership-snapshot', async (req, res) => {
 app.post('/api/request-attendance', async (req, res) => {
   try {
     const { groupId, getUrlsOnly } = req.body;
-    console.log(`[ATTENDANCE REQUEST] Starting request for group ${groupId}, URLs only: ${getUrlsOnly}`);
     
     if (!groupId) {
-      console.log('[ATTENDANCE REQUEST] Error: No group ID provided');
       return res.status(400).json({ error: 'Group ID is required' });
     }
     
     // Get recent events for this group that need attendance
-    console.log(`[ATTENDANCE REQUEST] Fetching attendance data for group ${groupId}`);
     const attendanceData = await getGroupAttendance(groupId, false, false);
     const eventsNeedingAttention = attendanceData.events.filter(event => {
       const now = new Date();
@@ -1274,15 +969,7 @@ app.post('/api/request-attendance', async (req, res) => {
       return eventEndTime < fourHoursAgo && !hasAttendanceData;
     });
     
-    console.log(`[ATTENDANCE REQUEST] Found ${eventsNeedingAttention.length} events needing attention for group ${groupId}`);
-    if (eventsNeedingAttention.length > 0) {
-      eventsNeedingAttention.forEach(event => {
-        console.log(`[ATTENDANCE REQUEST] Event ${event.event.id} on ${event.event.date} needs attention`);
-      });
-    }
-    
     if (eventsNeedingAttention.length === 0) {
-      console.log(`[ATTENDANCE REQUEST] No events need attention for group ${groupId}`);
       return res.json({ 
         success: false, 
         message: 'No events need attendance requests',
@@ -1293,7 +980,6 @@ app.post('/api/request-attendance', async (req, res) => {
     // If getUrlsOnly is true, just return the event IDs for opening PCO pages
     if (getUrlsOnly) {
       const eventIds = eventsNeedingAttention.map(event => event.event.id);
-      console.log(`[ATTENDANCE REQUEST] Returning ${eventIds.length} event IDs for manual request:`, eventIds);
       
       res.json({
         success: true,
@@ -1310,12 +996,12 @@ app.post('/api/request-attendance', async (req, res) => {
     }
     
   } catch (error) {
-    console.error('[ATTENDANCE REQUEST] Fatal error:', error);
+    console.error('Fatal error:', error);
     const response = { 
       error: 'Failed to request attendance', 
       details: error instanceof Error ? error.message : 'Unknown error' 
     };
-    console.log('[ATTENDANCE REQUEST] Sending error response:', response);
+    console.log('Sending error response:', response);
     res.status(500).json(response);
   }
 });
@@ -1330,6 +1016,22 @@ app.get('/membership-changes', async (req, res) => {
           <title>Recent Membership Changes - Queen City Church</title>
           <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
           <style>
+            /* Fix radio buttons and checkboxes to show blue when checked */
+            input[type="radio"]:checked {
+              accent-color: #007bff;
+            }
+            input[type="checkbox"]:checked {
+              accent-color: #007bff;
+            }
+            /* Fallback for older browsers */
+            input[type="radio"] {
+              appearance: auto;
+              -webkit-appearance: auto;
+            }
+            input[type="checkbox"] {
+              appearance: auto;
+              -webkit-appearance: auto;
+            }
             body {
               font-family: Arial, sans-serif;
               margin: 20px;
@@ -1692,6 +1394,22 @@ app.get('', async (req, res) => {
           <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
           <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
           <style>
+            /* Fix radio buttons and checkboxes to show blue when checked */
+            input[type="radio"]:checked {
+              accent-color: #007bff;
+            }
+            input[type="checkbox"]:checked {
+              accent-color: #007bff;
+            }
+            /* Fallback for older browsers */
+            input[type="radio"] {
+              appearance: auto;
+              -webkit-appearance: auto;
+            }
+            input[type="checkbox"] {
+              appearance: auto;
+              -webkit-appearance: auto;
+            }
             body {
               font-family: Arial, sans-serif;
               margin: 20px;
@@ -1934,8 +1652,7 @@ app.get('', async (req, res) => {
               border-left: 12px solid #ff6b47;
               position: relative;
             }
-            .group-item.needs-attention::before {
-              content: "!";
+            .attention-button {
               position: absolute;
               left: -10px;
               top: 50%;
@@ -1955,8 +1672,9 @@ app.get('', async (req, res) => {
               cursor: pointer;
               transition: all 0.3s ease;
               z-index: 10;
+              user-select: none;
             }
-            .group-item.needs-attention::before:hover {
+            .attention-button:hover {
               background-color: #e55a3a;
               transform: translateY(-50%) scale(1.1);
             }
@@ -2032,9 +1750,9 @@ app.get('', async (req, res) => {
             <h1>Queen City Church - Life Groups Health Report</h1>
             <div style="display: flex; gap: 15px; align-items: center; margin-bottom: -10px;">
               <button id="loadDataBtn" title="Click to refresh current year data. Shift+Click to refresh ALL historical data." onmouseover="if (!this.disabled) { this.style.backgroundColor='#0056b3'; this.style.cursor='pointer'; } else { this.style.cursor='not-allowed'; }" onmouseout="if (!this.disabled) { this.style.backgroundColor='#007bff'; this.style.cursor='pointer'; } else { this.style.cursor='not-allowed'; }">
-                <span>Load Data</span>
-                <span class="est-time">est. time ≈ 3 min.</span>
-              </button>
+              <span>Load Data</span>
+              <span class="est-time">est. time ≈ 3 min.</span>
+            </button>
                           <button id="viewMembershipChangesBtn" style="padding: 12px 24px; font-size: 16px; font-weight: 500; color: white; background-color: #28a745; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 20px; transition: all 0.3s ease; display: flex; flex-direction: column; align-items: center; min-width: 160px;" onmouseover="if (!this.disabled) { this.style.backgroundColor='#218838'; this.style.cursor='pointer'; } else { this.style.cursor='not-allowed'; }" onmouseout="if (!this.disabled) { this.style.backgroundColor='#28a745'; this.style.cursor='pointer'; } else { this.style.cursor='not-allowed'; }">
               <span>View Membership Changes</span>
               <span id="membershipButtonSummary" style="font-size: 11px; opacity: 0.9; margin-top: 4px; line-height: 1.2;">Loading...</span>
@@ -2059,7 +1777,7 @@ app.get('', async (req, res) => {
             </div>
             
 
-
+            
             
             <div class="chart-container">
               <div id="chartLoading" class="chart-loading">
@@ -2228,21 +1946,12 @@ app.get('', async (req, res) => {
 
             // Sort and Filter Functions
             function setupSortFilterToggle() {
-              console.log('Setting up sort/filter toggle...');
               const sortFilterToggleBtn = document.getElementById('sortFilterToggleBtn');
               const sortFilterToggleIcon = document.getElementById('sortFilterToggleIcon');
               const sortFilterExpandedContent = document.getElementById('sortFilterExpandedContent');
               
-              console.log('Elements found:', {
-                sortFilterToggleBtn: !!sortFilterToggleBtn,
-                sortFilterToggleIcon: !!sortFilterToggleIcon,
-                sortFilterExpandedContent: !!sortFilterExpandedContent
-              });
-              
               if (sortFilterToggleBtn && sortFilterToggleIcon && sortFilterExpandedContent) {
-                console.log('Adding click event listener to sort/filter toggle');
                 sortFilterToggleBtn.addEventListener('click', function() {
-                  console.log('Sort/filter toggle clicked');
                   const isVisible = sortFilterExpandedContent.style.display === 'block';
                   
                   if (isVisible) {
@@ -2823,8 +2532,8 @@ app.get('', async (req, res) => {
                 loadAggregateData(false, null, null, selectedGroupsParam);
               } else {
                 // Combined mode: All visible groups are selected OR no custom selection made - use normal filtering (more efficient)
-                const groupTypesParam = currentFilters.groupTypes.length > 0 ? currentFilters.groupTypes.join(',') : 'EMPTY';
-                const meetingDaysParam = currentFilters.meetingDays.length > 0 ? currentFilters.meetingDays.join(',') : 'EMPTY';
+              const groupTypesParam = currentFilters.groupTypes.length > 0 ? currentFilters.groupTypes.join(',') : 'EMPTY';
+              const meetingDaysParam = currentFilters.meetingDays.length > 0 ? currentFilters.meetingDays.join(',') : 'EMPTY';
                 loadAggregateData(false, groupTypesParam, meetingDaysParam);
               }
             }
@@ -2859,24 +2568,18 @@ app.get('', async (req, res) => {
                 }
               });
               
-              // Add event delegation for attendance request clicks
+              // Add event delegation for attention button clicks
               document.addEventListener('click', function(event) {
-                const groupItem = event.target.closest('.group-item.needs-attention');
+                const attentionButton = event.target.closest('.attention-button');
                 
-                if (groupItem && !isSelectionMode) {
-                  const rect = groupItem.getBoundingClientRect();
-                  const clickX = event.clientX - rect.left;
-                  const clickY = event.clientY - rect.top;
+                if (attentionButton && !isSelectionMode) {
+                  event.preventDefault();
+                  event.stopPropagation();
                   
-                  // Check if click is within the exclamation mark area (18px width + 4px border = 22px total, positioned at -10px)
-                  if (clickX >= -12 && clickX <= 14 && clickY >= rect.height/2 - 12 && clickY <= rect.height/2 + 12) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    
-                    const groupId = groupItem.id.replace('group-', '');
-                    if (groupId) {
-                      requestAttendanceForGroup(groupId, groupItem);
-                    }
+                  const groupItem = attentionButton.closest('.group-item');
+                  const groupId = groupItem.id.replace('group-', '');
+                  if (groupId) {
+                    requestAttendanceForGroup(groupId, groupItem);
                   }
                 }
               });
@@ -2898,7 +2601,7 @@ app.get('', async (req, res) => {
                 
                 if (response.ok && result.eventUrls && result.eventUrls.length > 0) {
                   // Open the first event's attendance request page
-                  const eventUrl = \`https://groups.planningcenteronline.com/events/\${result.eventUrls[0]}\`;
+                  const eventUrl = \`https://groups.planningcenteronline.com/groups/\${groupId}/events/\${result.eventUrls[0]}\`;
                   window.open(eventUrl, '_blank');
                   
                   // Update tooltip to indicate the page was opened
@@ -3528,13 +3231,28 @@ app.get('', async (req, res) => {
                   const isFamilyGroup = document.querySelector(\`#group-\${groupId}\`).classList.contains('family-group');
                   const groupElement = document.querySelector(\`#group-\${groupId}\`);
                   
-                  // Update attention styling
+                  // Update attention styling and button
                   if (stats.needsAttention) {
                     groupElement.classList.add('needs-attention');
                     groupElement.setAttribute('title', 'Recent event missing attendance data - Click exclamation mark to open Planning Center');
+                    
+                    // Add attention button if it doesn't exist
+                    if (!groupElement.querySelector('.attention-button')) {
+                      const attentionButton = document.createElement('div');
+                      attentionButton.className = 'attention-button';
+                      attentionButton.textContent = '!';
+                      attentionButton.title = 'Click to open Planning Center';
+                      groupElement.appendChild(attentionButton);
+                    }
                   } else {
                     groupElement.classList.remove('needs-attention');
                     groupElement.removeAttribute('title');
+                    
+                    // Remove attention button if it exists
+                    const existingButton = groupElement.querySelector('.attention-button');
+                    if (existingButton) {
+                      existingButton.remove();
+                    }
                   }
                   
                   if (isFamilyGroup && stats.familyGroup) {
@@ -3652,8 +3370,6 @@ app.get('', async (req, res) => {
                 }
                 
                 const individualData = await response.json();
-                
-                console.log('Received individual group data:', individualData);
                 
                                  // Update chart group count for individual mode
                  if (chartGroupCountElement && selectedGroupIds.length > 0) {
@@ -3939,12 +3655,12 @@ app.get('', async (req, res) => {
                 if (selectedGroupsFilter) {
                   params.set('selectedGroups', selectedGroupsFilter);
                 } else {
-                  if (groupTypesFilter && groupTypesFilter !== 'EMPTY') params.set('groupTypes', groupTypesFilter);
-                  if (meetingDaysFilter && meetingDaysFilter !== 'EMPTY') params.set('meetingDays', meetingDaysFilter);
-                  
-                  // Handle special case where we explicitly want empty results
-                  if (groupTypesFilter === 'EMPTY') params.set('groupTypes', '');
-                  if (meetingDaysFilter === 'EMPTY') params.set('meetingDays', '');
+                if (groupTypesFilter && groupTypesFilter !== 'EMPTY') params.set('groupTypes', groupTypesFilter);
+                if (meetingDaysFilter && meetingDaysFilter !== 'EMPTY') params.set('meetingDays', meetingDaysFilter);
+                
+                // Handle special case where we explicitly want empty results
+                if (groupTypesFilter === 'EMPTY') params.set('groupTypes', '');
+                if (meetingDaysFilter === 'EMPTY') params.set('meetingDays', '');
                 }
                 const queryString = params.toString();
                 const url = '/api/aggregate-attendance' + (queryString ? '?' + queryString : '');
@@ -3985,14 +3701,11 @@ app.get('', async (req, res) => {
                 
                 const aggregateData = await response.json();
                 
-                console.log('Received aggregate data:', aggregateData);
-                
                 // Update chart group count
                 updateChartGroupCount(aggregateData);
                 
                 // Handle empty data case
                 if (!aggregateData || aggregateData.length === 0) {
-                  console.log('No aggregate data - showing empty chart');
                   
                   // Clear any existing chart
                   if (window.aggregateChartInstance) {
@@ -4342,9 +4055,9 @@ app.get('', async (req, res) => {
                   await loadIndividualGroupChart(selectedVisibleGroups);
                 } else {
                   // For combined mode, reload aggregate data
-                  const groupTypesParam = currentFilters.groupTypes.join(',');
-                  const meetingDaysParam = currentFilters.meetingDays.join(',');
-                  await loadAggregateData(false, groupTypesParam, meetingDaysParam);
+                const groupTypesParam = currentFilters.groupTypes.join(',');
+                const meetingDaysParam = currentFilters.meetingDays.join(',');
+                await loadAggregateData(false, groupTypesParam, meetingDaysParam);
                 }
                 
                 // Update all group stats to reflect the new time period
@@ -4601,6 +4314,22 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
           <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
           <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
           <style>
+            /* Fix radio buttons and checkboxes to show blue when checked */
+            input[type="radio"]:checked {
+              accent-color: #007bff;
+            }
+            input[type="checkbox"]:checked {
+              accent-color: #007bff;
+            }
+            /* Fallback for older browsers */
+            input[type="radio"] {
+              appearance: auto;
+              -webkit-appearance: auto;
+            }
+            input[type="checkbox"] {
+              appearance: auto;
+              -webkit-appearance: auto;
+            }
             body {
               font-family: Arial, sans-serif;
               margin: 20px;
