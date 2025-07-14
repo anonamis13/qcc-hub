@@ -1444,6 +1444,8 @@ app.get('', async (req, res) => {
             }
             .group-item.not-selected {
               border-left: 4px solid transparent;
+              opacity: 0.6;
+              background-color: #f0f0f0;
             }
             .group-item.selection-mode {
               cursor: pointer;
@@ -1651,6 +1653,11 @@ app.get('', async (req, res) => {
             .group-item.needs-attention {
               border-left: 12px solid #ff6b47;
               position: relative;
+            }
+            .group-item.needs-attention.not-selected {
+              border-left: 12px solid #ff6b47;
+              opacity: 0.6;
+              background-color: #f0f0f0;
             }
             .attention-button {
               position: absolute;
@@ -2226,6 +2233,7 @@ app.get('', async (req, res) => {
                     '<div class="stats-container" id="stats-' + group.id + '">' +
                       statsHtml +
                     '</div>' +
+                    (group.stats?.needsAttention ? '<div class="attention-button" title="Click to open Planning Center">!</div>' : '') +
                   '</li>';
                 }).join('');
                 
