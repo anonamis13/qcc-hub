@@ -89,6 +89,61 @@ function initializeDb() {
         ON membership_snapshots(date, group_id)
       `);
       
+      // Create dream teams review tracking table
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS dream_team_reviews (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          workflow_id TEXT NOT NULL,
+          workflow_name TEXT NOT NULL,
+          review_date TEXT NOT NULL,
+          reviewer_name TEXT NOT NULL,
+          reviewer_notes TEXT,
+          has_changes BOOLEAN DEFAULT 0,
+          timestamp INTEGER NOT NULL
+        )
+      `);
+      
+      // Create dream teams removal tracking table
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS dream_team_removals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          workflow_id TEXT NOT NULL,
+          workflow_name TEXT NOT NULL,
+          person_id TEXT NOT NULL,
+          person_first_name TEXT NOT NULL,
+          person_last_name TEXT NOT NULL,
+          removal_reason TEXT,
+          removal_date TEXT NOT NULL,
+          reviewer_name TEXT NOT NULL,
+          processed BOOLEAN DEFAULT 0,
+          timestamp INTEGER NOT NULL
+        )
+      `);
+      
+      // Add reviewer_name column to existing tables if it doesn't exist
+      try {
+        db.exec(`ALTER TABLE dream_team_reviews ADD COLUMN reviewer_name TEXT DEFAULT 'Unknown'`);
+      } catch (error) {
+        // Column already exists, ignore error
+      }
+      
+      try {
+        db.exec(`ALTER TABLE dream_team_removals ADD COLUMN reviewer_name TEXT DEFAULT 'Unknown'`);
+      } catch (error) {
+        // Column already exists, ignore error
+      }
+      
+      // Create indexes for faster queries
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_dream_team_reviews_workflow 
+        ON dream_team_reviews(workflow_id, review_date)
+      `);
+      
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_dream_team_removals_workflow 
+        ON dream_team_removals(workflow_id, processed)
+      `);
+      
       // Run initial cleanup
       cleanupOldData();
       
@@ -150,6 +205,16 @@ export const dbCache = {
       db.prepare('DELETE FROM cache').run();
     } catch (error) {
       console.error('Failed to clear cache:', error);
+      throw error;
+    }
+  },
+
+  delete: (key: string): void => {
+    try {
+      const db = initializeDb();
+      db.prepare('DELETE FROM cache WHERE key = ?').run(key);
+    } catch (error) {
+      console.error(`Failed to delete cache key ${key}:`, error);
       throw error;
     }
   },
@@ -410,6 +475,299 @@ export const membershipSnapshots = {
     } catch (error) {
       console.error(`Failed to check snapshot for date ${date}:`, error);
       return false;
+    }
+  }
+};
+
+// Helper function to get local date in YYYY-MM-DD format (Eastern timezone)
+const getLocalDateString = (): string => {
+  const now = new Date();
+  
+  const easternViaIntl = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(now);
+  
+  // Use Intl.DateTimeFormat to get Eastern timezone date parts reliably
+  return easternViaIntl;
+};
+
+// Dream Teams tracking functions
+export const dreamTeamsTracking = {
+  // Record a team review (no changes)
+  recordReview: (workflowId: string, workflowName: string, reviewerName: string, notes?: string): void => {
+    try {
+      const db = initializeDb();
+      const reviewDate = getLocalDateString(); // YYYY-MM-DD format in local time
+      const timestamp = Date.now();
+      
+      const stmt = db.prepare(`
+        INSERT INTO dream_team_reviews 
+        (workflow_id, workflow_name, review_date, reviewer_name, reviewer_notes, has_changes, timestamp)
+        VALUES (?, ?, ?, ?, ?, 0, ?)
+      `);
+      
+      stmt.run(workflowId, workflowName, reviewDate, reviewerName, notes || null, timestamp);
+    } catch (error) {
+      console.error(`Failed to record review for workflow ${workflowId}:`, error);
+      throw error;
+    }
+  },
+
+  // Record team removals
+  recordRemovals: (workflowId: string, workflowName: string, reviewerName: string, removals: Array<{
+    personId: string;
+    firstName: string;
+    lastName: string;
+    reason?: string;
+  }>): void => {
+    try {
+      const db = initializeDb();
+      const removalDate = getLocalDateString(); // YYYY-MM-DD format in local time
+      const timestamp = Date.now();
+      
+      const insertStmt = db.prepare(`
+        INSERT INTO dream_team_removals 
+        (workflow_id, workflow_name, person_id, person_first_name, person_last_name, removal_reason, removal_date, reviewer_name, processed, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+      `);
+      
+      // Also record a review with changes
+      const reviewStmt = db.prepare(`
+        INSERT INTO dream_team_reviews 
+        (workflow_id, workflow_name, review_date, reviewer_name, reviewer_notes, has_changes, timestamp)
+        VALUES (?, ?, ?, ?, ?, 1, ?)
+      `);
+      
+      const transaction = db.transaction((removals: any[]) => {
+        // Record the review
+        reviewStmt.run(workflowId, workflowName, removalDate, reviewerName, `Removed ${removals.length} member(s)`, timestamp);
+        
+        // Record each removal
+        for (const removal of removals) {
+          insertStmt.run(
+            workflowId,
+            workflowName,
+            removal.personId,
+            removal.firstName,
+            removal.lastName,
+            removal.reason || null,
+            removalDate,
+            reviewerName,
+            timestamp
+          );
+        }
+      });
+      
+      transaction(removals);
+    } catch (error) {
+      console.error(`Failed to record removals for workflow ${workflowId}:`, error);
+      throw error;
+    }
+  },
+
+  // Get last review date for a workflow
+  getLastReviewDate: (workflowId: string): string | null => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT review_date 
+        FROM dream_team_reviews 
+        WHERE workflow_id = ? 
+        ORDER BY review_date DESC 
+        LIMIT 1
+      `);
+      
+      const result = stmt.get(workflowId) as { review_date: string } | undefined;
+      return result?.review_date || null;
+    } catch (error) {
+      console.error(`Failed to get last review date for workflow ${workflowId}:`, error);
+      return null;
+    }
+  },
+
+  getLastReviewInfo: (workflowId: string): { date: string; reviewer: string } | null => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT review_date, reviewer_name 
+        FROM dream_team_reviews 
+        WHERE workflow_id = ? 
+        ORDER BY review_date DESC 
+        LIMIT 1
+      `);
+      
+      const result = stmt.get(workflowId) as { review_date: string; reviewer_name: string } | undefined;
+      
+      return result ? { date: result.review_date, reviewer: result.reviewer_name } : null;
+    } catch (error) {
+      console.error(`Failed to get last review info for workflow ${workflowId}:`, error);
+      return null;
+    }
+  },
+
+  // Get pending removals for a workflow
+  getPendingRemovals: (workflowId: string): Array<{
+    id: number;
+    personId: string;
+    firstName: string;
+    lastName: string;
+    reason: string | null;
+    removalDate: string;
+  }> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT id, person_id as personId, person_first_name as firstName, 
+               person_last_name as lastName, removal_reason as reason, removal_date as removalDate
+        FROM dream_team_removals 
+        WHERE workflow_id = ? AND processed = 0
+        ORDER BY removal_date DESC, person_last_name ASC
+      `);
+      
+      return stmt.all(workflowId) as Array<{
+        id: number;
+        personId: string;
+        firstName: string;
+        lastName: string;
+        reason: string | null;
+        removalDate: string;
+      }>;
+    } catch (error) {
+      console.error(`Failed to get pending removals for workflow ${workflowId}:`, error);
+      return [];
+    }
+  },
+
+  // Get processed removals (past members) for a workflow
+  getPastMembers: (workflowId: string): Array<{
+    id: number;
+    personId: string;
+    firstName: string;
+    lastName: string;
+    reason: string | null;
+    removalDate: string;
+  }> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT id, person_id as personId, person_first_name as firstName, 
+               person_last_name as lastName, removal_reason as reason, removal_date as removalDate
+        FROM dream_team_removals 
+        WHERE workflow_id = ? AND processed = 1
+        ORDER BY removal_date DESC, person_last_name ASC
+      `);
+      
+      return stmt.all(workflowId) as Array<{
+        id: number;
+        personId: string;
+        firstName: string;
+        lastName: string;
+        reason: string | null;
+        removalDate: string;
+      }>;
+    } catch (error) {
+      console.error(`Failed to get past members for workflow ${workflowId}:`, error);
+      return [];
+    }
+  },
+
+  // Mark removals as processed
+  markRemovalsProcessed: (workflowId: string): void => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        UPDATE dream_team_removals 
+        SET processed = 1 
+        WHERE workflow_id = ? AND processed = 0
+      `);
+      
+      stmt.run(workflowId);
+    } catch (error) {
+      console.error(`Failed to mark removals as processed for workflow ${workflowId}:`, error);
+      throw error;
+    }
+  },
+
+  // Get all pending removals across all teams (for admin review)
+  // Note: This now returns ALL removals - the API will filter based on current PCO data
+  getAllPendingRemovals: (): Array<{
+    id: number;
+    workflowId: string;
+    workflowName: string;
+    personId: string;
+    firstName: string;
+    lastName: string;
+    reason: string | null;
+    removalDate: string;
+    reviewerName: string;
+  }> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT id, workflow_id as workflowId, workflow_name as workflowName,
+               person_id as personId, person_first_name as firstName, 
+               person_last_name as lastName, removal_reason as reason, 
+               removal_date as removalDate, reviewer_name as reviewerName
+        FROM dream_team_removals 
+        ORDER BY workflow_name ASC, person_last_name ASC, person_first_name ASC
+      `);
+      
+      return stmt.all() as Array<{
+        id: number;
+        workflowId: string;
+        workflowName: string;
+        personId: string;
+        firstName: string;
+        lastName: string;
+        reason: string | null;
+        removalDate: string;
+        reviewerName: string;
+      }>;
+    } catch (error) {
+      console.error('Failed to get all pending removals:', error);
+      return [];
+    }
+  },
+
+  // Mark a single removal as processed (for admin use)
+  markSingleRemovalProcessed: (removalId: number): void => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        UPDATE dream_team_removals 
+        SET processed = 1 
+        WHERE id = ?
+      `);
+      
+      stmt.run(removalId);
+    } catch (error) {
+      console.error(`Failed to mark removal ${removalId} as processed:`, error);
+      throw error;
+    }
+  },
+
+  // Undo a removal (delete the removal record)
+  undoRemoval: (workflowId: string, memberId: string): void => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        DELETE FROM dream_team_removals 
+        WHERE workflow_id = ? AND person_id = ?
+      `);
+      
+      const result = stmt.run(workflowId, memberId);
+      
+      if (result.changes === 0) {
+        console.warn(`No removal record found to undo for member ${memberId} in workflow ${workflowId}`);
+      } else {
+        console.log(`Successfully undid removal for member ${memberId} in workflow ${workflowId}`);
+      }
+    } catch (error) {
+      console.error(`Failed to undo removal for member ${memberId} in workflow ${workflowId}:`, error);
+      throw error;
     }
   }
 }; 

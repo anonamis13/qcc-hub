@@ -2,9 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import cron from 'node-cron';
-import { getPeopleGroups, getGroupAttendance, getGroup, getGroupMemberships } from './config/pco.js';
+import pcoClient, { getPeopleGroups, getGroupAttendance, getGroup, getGroupMemberships, getDreamTeamWorkflows, getWorkflowCards } from './config/pco.js';
 import { cache } from './config/cache.js';
-import { membershipSnapshots } from '../data/database.js';
+import { membershipSnapshots, dreamTeamsTracking } from '../data/database.js';
 
 dotenv.config();
 
@@ -14,6 +14,9 @@ const port = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Serve static files (for logo)
+app.use(express.static('.'));
 
 // Helper function to format date
 const formatDate = (dateString: string) => {
@@ -1001,13 +1004,484 @@ app.post('/api/request-attendance', async (req, res) => {
       error: 'Failed to request attendance', 
       details: error instanceof Error ? error.message : 'Unknown error' 
     };
-    console.log('Sending error response:', response);
+
     res.status(500).json(response);
   }
 });
 
+// Dream Teams API endpoints
+app.get('/api/dream-teams', async (req, res) => {
+  try {
+    const forceRefresh = req.query.forceRefresh === 'true';
+    const workflows = await getDreamTeamWorkflows(forceRefresh);
+    
+    // Get all removals from database to cross-reference with live PCO data
+    const allRemovals = dreamTeamsTracking.getAllPendingRemovals();
+    
+    // Add local tracking data (review dates, removal flags)
+    const workflowsWithTracking = workflows.map(workflow => {
+      const lastReviewed = dreamTeamsTracking.getLastReviewDate(workflow.id);
+      const lastReviewInfo = dreamTeamsTracking.getLastReviewInfo(workflow.id);
+      
+      // Filter database removals to only those still active in this workflow's PCO data
+      const workflowRemovals = allRemovals.filter(removal => removal.workflowId === workflow.id);
+      const actualPendingRemovals = workflowRemovals.filter(removal => {
+        // Check if this person is still in the current workflow roster
+        const currentMember = workflow.roster.find(member => member.personId === removal.personId);
+        if (!currentMember) {
+          return false; // Not in roster
+        }
+        
+        // Check if they rejoined after the removal date
+        const joinDate = new Date(currentMember.movedToStepAt || currentMember.joinedAt);
+        const removalDate = new Date(removal.removalDate);
+        
+        // Only consider it pending if they didn't rejoin after removal
+        return joinDate <= removalDate;
+      });
+      
+      // Calculate if review is needed (more than 30 days since last review)
+      let needsReview = true;
+      if (lastReviewed) {
+        const daysSinceReview = Math.floor((Date.now() - new Date(lastReviewed).getTime()) / (1000 * 60 * 60 * 24));
+        needsReview = daysSinceReview > 30;
+      }
+      
+      return {
+        ...workflow,
+        lastReviewed,
+        lastReviewer: lastReviewInfo?.reviewer || null,
+        needsReview,
+        pendingRemovals: actualPendingRemovals.length
+      };
+    });
+    
+    res.json({
+      success: true,
+      data: workflowsWithTracking
+    });
+  } catch (error) {
+    console.error('Dream Teams API Error:', error);
+    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+    
+    // More detailed error logging
+    if (error instanceof Error) {
+      console.error('Error name:', error.name);
+      console.error('Error message:', error.message);
+      if ('response' in error) {
+        console.error('HTTP response:', (error as any).response?.status, (error as any).response?.statusText);
+        console.error('Response data:', (error as any).response?.data);
+      }
+    }
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch dream teams data',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Get all pending removals across all teams (for admin review)
+app.get('/api/dream-teams/pending-removals', async (req, res) => {
+  try {
+    // Get all removals from database
+    const allRemovals = dreamTeamsTracking.getAllPendingRemovals();
+    
+    // Get current PCO data for all workflows to see who's still there
+    const currentWorkflows = await getDreamTeamWorkflows();
+    
+    // Create a set of current active members across all workflows
+    const currentActiveMembers = new Set();
+    currentWorkflows.forEach(workflow => {
+      workflow.roster.forEach(member => {
+        currentActiveMembers.add(`${workflow.id}-${member.personId}`);
+      });
+    });
+    
+    // Create a map of current members with their join dates for rejoin checking
+    const currentMemberDetails = new Map();
+    currentWorkflows.forEach(workflow => {
+      workflow.roster.forEach(member => {
+        const memberKey = `${workflow.id}-${member.personId}`;
+        currentMemberDetails.set(memberKey, {
+          joinDate: new Date(member.movedToStepAt || member.joinedAt),
+          workflowId: workflow.id,
+          personId: member.personId
+        });
+      });
+    });
+    
+    // Filter removals to only show people who are still in PCO workflows AND haven't rejoined
+    const actualPendingRemovals = allRemovals.filter(removal => {
+      const memberKey = `${removal.workflowId}-${removal.personId}`;
+      const memberDetails = currentMemberDetails.get(memberKey);
+      
+      if (!memberDetails) {
+        return false; // Not currently in any workflow
+      }
+      
+      // Check if they rejoined after the removal date
+      const removalDate = new Date(removal.removalDate);
+      return memberDetails.joinDate <= removalDate;
+    });
+    
+    res.json({
+      success: true,
+      data: {
+        pendingRemovals: actualPendingRemovals,
+        totalCount: actualPendingRemovals.length
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching all pending removals:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch pending removals'
+    });
+  }
+});
+
+app.get('/api/dream-teams/:workflowId', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    const forceRefresh = req.query.forceRefresh === 'true';
+    
+    // Get workflow cards and people data
+    const { cards, people } = await getWorkflowCards(workflowId, forceRefresh);
+    
+    // Get workflow details for the name
+    const workflowResponse = await pcoClient.get(`/people/v2/workflows/${workflowId}`);
+    const workflowName = workflowResponse.data.data.attributes.name;
+    
+    // Create person lookup map
+    const personMap = new Map();
+    people.forEach(person => {
+      personMap.set(person.id, person);
+    });
+    
+    // Filter to only current team members (not removed from team)
+    const currentMembers = cards.filter(card => 
+      // Include members who are in active workflow steps or completed
+      // Exclude members who have been "removed" from the workflow
+      card.attributes.stage !== 'removed'
+    );
+    
+    // Get tracking data first
+    const lastReviewed = dreamTeamsTracking.getLastReviewDate(workflowId);
+    const lastReviewInfo = dreamTeamsTracking.getLastReviewInfo(workflowId);
+    
+    // Get all removals for this workflow and filter based on current PCO data
+    const allRemovalsForWorkflow = dreamTeamsTracking.getAllPendingRemovals().filter(removal => removal.workflowId === workflowId);
+    const currentMemberIds = new Set(currentMembers.map(card => card.relationships.person.data.id));
+    
+    // Create a map of current members with their join dates for rejoin checking
+    const currentMemberJoinDates = new Map();
+    currentMembers.forEach(card => {
+      const personId = card.relationships.person.data.id;
+      // Use the more recent of created_at or moved_to_step_at as the effective join date
+      const joinDate = card.attributes.moved_to_step_at || card.attributes.created_at;
+      currentMemberJoinDates.set(personId, new Date(joinDate));
+    });
+    
+    // Split removals into categories
+    const pendingRemovals: Array<{
+      id: number;
+      workflowId: string;
+      workflowName: string;
+      personId: string;
+      firstName: string;
+      lastName: string;
+      reason: string | null;
+      removalDate: string;
+      reviewerName: string;
+    }> = [];
+    const pastMembers: Array<{
+      id: number;
+      workflowId: string;
+      workflowName: string;
+      personId: string;
+      firstName: string;
+      lastName: string;
+      reason: string | null;
+      removalDate: string;
+      reviewerName: string;
+    }> = [];
+    
+    allRemovalsForWorkflow.forEach(removal => {
+      const isCurrentlyInPCO = currentMemberIds.has(removal.personId);
+      
+      if (isCurrentlyInPCO) {
+        // Check if they rejoined after the removal date
+        const currentJoinDate = currentMemberJoinDates.get(removal.personId);
+        const removalDate = new Date(removal.removalDate);
+        
+        if (currentJoinDate && currentJoinDate > removalDate) {
+          // They rejoined after being removed - treat as past member (don't mark as pending)
+          pastMembers.push(removal);
+        } else {
+          // Still pending removal
+          pendingRemovals.push(removal);
+        }
+      } else {
+        // Not currently in PCO - definitely past member
+        pastMembers.push(removal);
+      }
+    });
+    
+    // Create a map of pending removals for quick lookup
+    const pendingRemovalMap = new Map();
+    pendingRemovals.forEach(removal => {
+      pendingRemovalMap.set(removal.personId, removal.reason);
+    });
+    
+    // Combine card and person data
+    const roster = currentMembers.map(card => {
+      const person = personMap.get(card.relationships.person.data.id);
+      const personId = card.relationships.person.data.id;
+      const isPendingRemoval = pendingRemovalMap.has(personId);
+      
+      return {
+        cardId: card.id,
+        personId: personId,
+        firstName: person?.attributes.first_name || 'Unknown',
+        lastName: person?.attributes.last_name || '',
+        nickname: person?.attributes.nickname,
+        joinedAt: card.attributes.created_at,
+        movedToStepAt: card.attributes.moved_to_step_at,
+        stage: card.attributes.stage,
+        markedForRemoval: isPendingRemoval,
+        removalReason: isPendingRemoval ? pendingRemovalMap.get(personId) : null
+      };
+    }).sort((a, b) => a.firstName.localeCompare(b.firstName));
+    
+    res.json({
+      success: true,
+      data: {
+        workflowId,
+        workflowName,
+        roster,
+        lastReviewed,
+        lastReviewer: lastReviewInfo?.reviewer || null,
+        pendingRemovals,
+        pendingRemovalsCount: pendingRemovals.length,
+        pastMembers
+      }
+    });
+  } catch (error) {
+    console.error(`Error fetching dream team roster for workflow ${req.params.workflowId}:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch team roster data'
+    });
+  }
+});
+
+// Dream Teams action endpoints
+app.post('/api/dream-teams/:workflowId/review', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    const { workflowName, reviewerName, notes } = req.body;
+    
+    if (!workflowName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Workflow name is required'
+      });
+    }
+    
+    if (!reviewerName || reviewerName.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Reviewer name is required'
+      });
+    }
+    
+    dreamTeamsTracking.recordReview(workflowId, workflowName, reviewerName.trim(), notes);
+    
+    res.json({
+      success: true,
+      message: 'Team review recorded successfully'
+    });
+  } catch (error) {
+    console.error(`Error recording team review for workflow ${req.params.workflowId}:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to record team review'
+    });
+  }
+});
+
+
+
+
+app.post('/api/dream-teams/:workflowId/removals', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    const { workflowName, reviewerName, removals } = req.body;
+    
+    if (!workflowName || !removals || !Array.isArray(removals)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Workflow name and removals array are required'
+      });
+    }
+    
+    if (!reviewerName || reviewerName.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Reviewer name is required'
+      });
+    }
+    
+    if (removals.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'At least one removal must be specified'
+      });
+    }
+    
+    dreamTeamsTracking.recordRemovals(workflowId, workflowName, reviewerName.trim(), removals);
+    
+    res.json({
+      success: true,
+      message: `Recorded ${removals.length} removal(s) successfully`
+    });
+  } catch (error) {
+    console.error(`Error recording team removals for workflow ${req.params.workflowId}:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to record team removals'
+    });
+  }
+});
+
+// Undo removal endpoint
+app.post('/api/dream-teams/:workflowId/undo-removal', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    const { memberId } = req.body;
+    
+    if (!memberId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Member ID is required'
+      });
+    }
+    
+    dreamTeamsTracking.undoRemoval(workflowId, memberId);
+    
+    res.json({
+      success: true,
+      message: 'Removal undone successfully'
+    });
+  } catch (error) {
+    console.error(`Error undoing removal for workflow ${req.params.workflowId}:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to undo removal'
+    });
+  }
+});
+
+// Cache clearing endpoint for Dream Teams testing (supports both GET and POST)
+app.all('/api/dream-teams-cache/clear', async (req, res) => {
+  try {
+    const clearDatabase = req.query.database === 'true' || req.body?.database === true;
+
+    const { cache } = await import('./config/cache.js');
+    
+    let result = {
+      success: true,
+      clearedCache: 0,
+      clearedDatabase: 0,
+      cacheKeys: [] as string[],
+      message: ''
+    };
+    
+    // Clear PCO API cache
+    const cacheStats = cache.getStats();
+    const dreamTeamKeys = cacheStats.keys.filter(key => 
+      key.includes('workflow') || 
+      key.includes('dream') ||
+      key.includes('Dream') ||
+      key === 'workflow_categories'
+    );
+    
+    for (const key of dreamTeamKeys) {
+      try {
+        cache.delete(key);
+        result.clearedCache++;
+      } catch (error) {
+        console.error(`Error clearing cache key ${key}:`, error);
+      }
+    }
+    result.cacheKeys = dreamTeamKeys;
+    
+    // Clear database tracking data if requested
+    if (clearDatabase) {
+      try {
+        // Import database functions
+        const { dreamTeamsTracking } = await import('../data/database.js');
+        
+        // Use database initialization from cache module
+        const Database = await import('better-sqlite3').then(m => m.default);
+        const path = await import('path');
+        const { fileURLToPath } = await import('url');
+        
+        // Get database path
+        const __filename = fileURLToPath(import.meta.url);
+        const __dirname = path.dirname(__filename);
+        const dbPath = process.env.RENDER 
+          ? '/data/cache.db'
+          : path.join(__dirname, '../data/cache.db');
+        
+        const dbInstance = new Database(dbPath);
+        
+        // Get counts before clearing
+        const reviewCount = (dbInstance.prepare('SELECT COUNT(*) as count FROM dream_team_reviews').get() as { count: number })?.count || 0;
+        const removalCount = (dbInstance.prepare('SELECT COUNT(*) as count FROM dream_team_removals').get() as { count: number })?.count || 0;
+        
+
+        
+        // Clear the tables
+        const reviewResult = dbInstance.prepare('DELETE FROM dream_team_reviews').run();
+        const removalResult = dbInstance.prepare('DELETE FROM dream_team_removals').run();
+        
+        result.clearedDatabase = reviewCount + removalCount;
+        dbInstance.close();
+      } catch (error) {
+        console.error('Error clearing database:', error);
+        console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
+        result.message += ' (Database clearing failed: ' + (error instanceof Error ? error.message : 'Unknown error') + ')';
+      }
+    }
+    
+    // Build response message
+    const parts = [];
+    if (result.clearedCache > 0) {
+      parts.push(`${result.clearedCache} cache keys`);
+    }
+    if (result.clearedDatabase > 0) {
+      parts.push(`${result.clearedDatabase} database records`);
+    }
+    
+    result.message = parts.length > 0 
+      ? `Cleared ${parts.join(' and ')}`
+      : 'Nothing to clear';
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Error clearing Dream Teams data:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to clear Dream Teams data'
+    });
+  }
+});
+
 //Membership Changes Page
-app.get('/membership-changes', async (req, res) => {
+app.get('/life-groups/membership-changes', async (req, res) => {
   try {
     const html = `
       <!DOCTYPE html>
@@ -1139,14 +1613,92 @@ app.get('/membership-changes', async (req, res) => {
               gap: 10px;
               margin-bottom: 20px;
             }
+            
+            
+            /* Dark Mode Styles */
+            body {
+              transition: background-color 0.3s ease;
+            }
+            
+            body.dark-mode {
+              background-color: #1a1a1a;
+              color: #ffffff;
+            }
+            
+            body.dark-mode .container {
+              background-color: #2d2d2d;
+              color: #ffffff;
+            }
+            
+            body.dark-mode h1 {
+              color: #ffffff;
+            }
+            
+            body.dark-mode .back-button {
+              background-color: #495057;
+              color: #ffffff;
+            }
+            
+            body.dark-mode .back-button:hover {
+              background-color: #6c757d;
+            }
+            
+            body.dark-mode .capture-button {
+              background-color: #0056b3;
+            }
+            
+            body.dark-mode .capture-button:hover {
+              background-color: #004085;
+            }
+            
+            body.dark-mode .loading-container {
+              color: #cccccc;
+            }
+            
+            body.dark-mode .no-data {
+              color: #aaaaaa;
+            }
+            
+            body.dark-mode .error-message {
+              background-color: #721c24;
+              color: #f8d7da;
+              border-color: #a94442;
+            }
+            
+            body.dark-mode .success-message {
+              background-color: #155724;
+              color: #d4edda;
+              border-color: #28a745;
+            }
+            
+            /* FOUC Prevention - Temporary loading styles */
+            html.dark-mode-loading {
+              background-color: #1a1a1a !important;
+            }
+            
+            html.dark-mode-loading body {
+              background-color: #1a1a1a !important;
+              color: #ffffff !important;
+            }
+            
+            html.dark-mode-loading .container {
+              background-color: #2d2d2d !important;
+              color: #ffffff !important;
+            }
           </style>
+          <script>
+            // Apply dark mode immediately to prevent flash
+            if (localStorage.getItem('darkMode') === 'true') {
+              document.documentElement.classList.add('dark-mode-loading');
+            }
+          </script>
         </head>
         <body>
           <div class="container">
             <div class="button-group">
-              <a href="/" class="back-button">
+              <a href="/life-groups" class="back-button">
                 <span>←</span>
-                <span>Back to Home</span>
+                <span>Back to Groups</span>
               </a>
               <button id="captureSnapshotBtn" class="capture-button">
                 <span>📸</span>
@@ -1177,6 +1729,18 @@ app.get('/membership-changes', async (req, res) => {
           <script>
             // Load membership changes when page loads
             document.addEventListener('DOMContentLoaded', function() {
+              // Remove temporary dark mode loading class
+              document.documentElement.classList.remove('dark-mode-loading');
+              
+              // Initialize dark mode
+              const body = document.body;
+              const isDarkMode = localStorage.getItem('darkMode') === 'true';
+              
+              if (isDarkMode) {
+                body.classList.add('dark-mode');
+              }
+              
+              
               loadMembershipChanges();
               
               // Setup capture snapshot button
@@ -1384,7 +1948,239 @@ app.get('/membership-changes', async (req, res) => {
 });
 
 //Home Page
-app.get('', async (req, res) => {
+// Root landing page - simple navigation to both apps
+app.get('/home-page', async (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>QCC Health Report</title>
+      <style>
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          margin: 0;
+          padding: 0;
+          background-color: #f8f9fa;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: center;
+          min-height: 100vh;
+          padding: 20px;
+          box-sizing: border-box;
+          transition: background-color 0.3s ease;
+        }
+        
+        /* Dark mode styles */
+        body.dark-mode {
+          background-color: #1a1a1a;
+        }
+        
+        body.dark-mode .container {
+          background-color: #2d2d2d;
+          color: #ffffff;
+        }
+        
+        body.dark-mode h1 {
+          color: #ffffff;
+        }
+        
+        body.dark-mode .subtitle {
+          color: #cccccc;
+        }
+        
+        body.dark-mode .description {
+          color: #aaaaaa;
+        }
+        .logo-container {
+          background-color: #1a1a1a;
+          padding: 30px;
+          border-radius: 12px;
+          margin-bottom: 20px;
+          width: 100%;
+          max-width: 400px;
+          box-sizing: border-box;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+        }
+        .logo {
+          max-width: 100%;
+          height: auto;
+          max-height: 150px;
+          object-fit: contain;
+        }
+        .container {
+          text-align: center;
+          background: white;
+          padding: 40px;
+          border-radius: 12px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+          max-width: 400px;
+          width: 100%;
+          box-sizing: border-box;
+        }
+        h1 {
+          color: #333;
+          margin-bottom: 10px;
+          font-size: 2.2em;
+        }
+        .subtitle {
+          color: #666;
+          margin-bottom: 40px;
+          font-size: 1.1em;
+        }
+        .app-button {
+          display: block;
+          width: 100%;
+          padding: 16px 24px;
+          margin: 12px auto;
+          background-color: #007bff;
+          color: white;
+          text-decoration: none;
+          border-radius: 8px;
+          font-size: 16px;
+          font-weight: 500;
+          transition: background-color 0.3s ease, transform 0.1s ease;
+          border: none;
+          cursor: pointer;
+          text-align: center;
+          box-sizing: border-box;
+        }
+        .app-button:hover {
+          background-color: #0056b3;
+          transform: translateY(-1px);
+        }
+        .app-button.dream-teams {
+          background-color: #28a745;
+        }
+        .app-button.dream-teams:hover {
+          background-color: #1e7e34;
+        }
+        .description {
+          color: #888;
+          font-size: 14px;
+          margin-top: 8px;
+          margin-bottom: 20px;
+        }
+        
+        .dark-mode-toggle {
+          position: absolute;
+          top: 20px;
+          right: 20px;
+          background-color: #007bff;
+          color: white;
+          border: none;
+          border-radius: 50px;
+          padding: 8px 16px;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+          z-index: 1000;
+        }
+        
+        .dark-mode-toggle:hover {
+          background-color: #0056b3;
+          transform: translateY(-1px);
+          box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        body.dark-mode .dark-mode-toggle {
+          background-color: #ffc107;
+          color: #212529;
+        }
+        
+        body.dark-mode .dark-mode-toggle:hover {
+          background-color: #e0a800;
+        }
+      </style>
+      <script>
+        // Apply dark mode immediately to prevent flash
+        if (localStorage.getItem('darkMode') === 'true') {
+          document.documentElement.classList.add('dark-mode-loading');
+        }
+      </script>
+      <style>
+        /* Temporary class to apply dark mode before body loads */
+        html.dark-mode-loading body {
+          background-color: #1a1a1a !important;
+        }
+        html.dark-mode-loading .container {
+          background-color: #2d2d2d !important;
+          color: #ffffff !important;
+        }
+        html.dark-mode-loading h1 {
+          color: #ffffff !important;
+        }
+        html.dark-mode-loading .subtitle {
+          color: #cccccc !important;
+        }
+        html.dark-mode-loading .description {
+          color: #aaaaaa !important;
+        }
+      </style>
+    </head>
+    <body>
+      <button class="dark-mode-toggle" id="darkModeToggle">🌙 Dark Mode</button>
+      <div class="logo-container">
+        <img src="/QC_Mark_White_translu.webp" alt="Queen City Church Logo" class="logo">
+      </div>
+      <div class="container">
+        <h1>QCC Health Reports</h1>
+        <p class="subtitle">Choose an application</p>
+        
+        <a href="/life-groups" class="app-button">
+          Life Groups Health Report
+        </a>
+        <p class="description">View groups attendance, membership changes, and health report metrics</p>
+        
+        <a href="/dream-teams" class="app-button dream-teams">
+          Dream Team Health Report
+        </a>
+        <p class="description">Manage Dream Team rosters and review member status</p>
+      </div>
+      
+      <script>
+        // Dark mode toggle functionality
+        const darkModeToggle = document.getElementById('darkModeToggle');
+        const body = document.body;
+        
+        // Check for saved dark mode preference or default to light mode
+        const isDarkMode = localStorage.getItem('darkMode') === 'true';
+        
+        // Clean up temporary loading class and apply proper dark mode
+        document.documentElement.classList.remove('dark-mode-loading');
+        if (isDarkMode) {
+          body.classList.add('dark-mode');
+          darkModeToggle.innerHTML = '☀️ Light Mode';
+        }
+        
+        // Toggle dark mode
+        darkModeToggle.addEventListener('click', function() {
+          body.classList.toggle('dark-mode');
+          const isCurrentlyDark = body.classList.contains('dark-mode');
+          
+          // Update button text and icon
+          if (isCurrentlyDark) {
+            darkModeToggle.innerHTML = '☀️ Light Mode';
+            localStorage.setItem('darkMode', 'true');
+          } else {
+            darkModeToggle.innerHTML = '🌙 Dark Mode';
+            localStorage.setItem('darkMode', 'false');
+          }
+        });
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+// Life Groups Health Report - Main dashboard
+app.get('/life-groups', async (req, res) => {
   try {
     const html = `
       <!DOCTYPE html>
@@ -1414,6 +2210,302 @@ app.get('', async (req, res) => {
               font-family: Arial, sans-serif;
               margin: 20px;
               background-color: #f5f5f5;
+              transition: background-color 0.3s ease;
+            }
+            
+            /* Dark mode styles */
+            body.dark-mode {
+              background-color: #1a1a1a;
+            }
+            
+            body.dark-mode .container {
+              background-color: #2d2d2d;
+              color: #ffffff;
+            }
+            
+            body.dark-mode h1 {
+              color: #ffffff;
+            }
+            
+            body.dark-mode .group-item {
+              background-color: #3d3d3d;
+              color: #ffffff;
+            }
+            
+            body.dark-mode .group-item.not-selected {
+              background-color: #2a2a2a;
+            }
+            
+            body.dark-mode .group-item.selection-mode:hover {
+              background-color: #0d47a1;
+            }
+            
+            body.dark-mode .group-item a {
+              color: #4fc3f7;
+            }
+            
+            body.dark-mode .stats-container {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode .stat-value {
+              color: #ffffff;
+            }
+            
+            body.dark-mode .stat-value.attendance-good {
+              color: #4caf50;
+            }
+            
+            body.dark-mode .stat-value.attendance-warning {
+              color: #ff9800;
+            }
+            
+            body.dark-mode .stat-value.attendance-poor {
+              color: #f44336;
+            }
+            
+            body.dark-mode .stat-label {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode .chart-container {
+              background-color: #2d2d2d;
+            }
+            
+            body.dark-mode .toggle-container {
+              background-color: #3d3d3d;
+            }
+            
+            body.dark-mode .sort-filter-container button {
+              background-color: #3d3d3d !important;
+              color: #ffffff !important;
+              border-color: #555 !important;
+            }
+            
+            body.dark-mode .sort-filter-container button:hover {
+              background-color: #4d4d4d !important;
+              border-color: #4fc3f7 !important;
+            }
+            
+            body.dark-mode #sortFilterToggleBtn {
+              background-color: #3d3d3d !important;
+              color: #ffffff !important;
+              border-color: #555 !important;
+            }
+            
+            body.dark-mode #sortFilterToggleBtn:hover {
+              background-color: #4d4d4d !important;
+              border-color: #4fc3f7 !important;
+            }
+            
+            body.dark-mode #sortFilterToggleBtn h3 {
+              color: #ffffff !important;
+            }
+            
+            body.dark-mode #sortFilterSummary {
+              color: #e0e0e0 !important;
+            }
+            
+            body.dark-mode #sortFilterSummary span {
+              color: #e0e0e0 !important;
+            }
+            
+            body.dark-mode #sortFilterToggleIcon {
+              color: #e0e0e0 !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent {
+              background-color: #3d3d3d !important;
+              color: #ffffff !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent > div {
+              background-color: #4d4d4d !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent > div > div {
+              background-color: #4d4d4d !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent h4 {
+              color: #4fc3f7 !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent div[style*="background-color: #f8f9fa"] {
+              background-color: #4d4d4d !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent div[style*="border-left: 4px solid #007bff"] {
+              border-left-color: #4fc3f7 !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent div[style*="border-left: 4px solid #28a745"] {
+              border-left-color: #28a745 !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent select {
+              background-color: #2d2d2d !important;
+              color: #ffffff !important;
+              border-color: #555 !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent select option {
+              background-color: #2d2d2d !important;
+              color: #ffffff !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent input[type="checkbox"] {
+              accent-color: #4fc3f7;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent label {
+              color: #e0e0e0 !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent div[style*="color: #333"] {
+              color: #ffffff !important;
+            }
+            
+            body.dark-mode #sortFilterExpandedContent label[style*="font-weight: 500"] {
+              color: #ffffff !important;
+            }
+            
+            body.dark-mode #clearFiltersBtn {
+              background-color: #dc3545;
+              color: #ffffff;
+            }
+            
+            body.dark-mode #clearFiltersBtn:hover {
+              background-color: #c82333;
+            }
+            
+            body.dark-mode .group-selection-controls {
+              background-color: #3d3d3d !important;
+              border-color: #4fc3f7 !important;
+            }
+            
+            body.dark-mode .group-selection-controls strong {
+              color: #ffffff !important;
+            }
+            
+            body.dark-mode .group-selection-controls span:not(#selectedGroupsCount) {
+              color: #e0e0e0 !important;
+            }
+            
+            body.dark-mode #chartSelectionModeBtn {
+              background-color: #2d2d2d;
+              color: #4fc3f7;
+              border-color: #4fc3f7;
+            }
+            
+            body.dark-mode #chartSelectionModeBtn:hover {
+              background-color: #4fc3f7;
+              color: #ffffff;
+            }
+            
+            body.dark-mode #individualMetricSelect {
+              background-color: #2d2d2d;
+              color: #ffffff;
+              border-color: #555;
+            }
+            
+            body.dark-mode #selectAllGroupsBtn {
+              background-color: #2d2d2d;
+              color: #28a745;
+              border-color: #28a745;
+            }
+            
+            body.dark-mode #selectAllGroupsBtn:hover {
+              background-color: #28a745;
+              color: #ffffff;
+            }
+            
+            body.dark-mode #deselectAllGroupsBtn {
+              background-color: #2d2d2d;
+              color: #dc3545;
+              border-color: #dc3545;
+            }
+            
+            body.dark-mode #deselectAllGroupsBtn:hover {
+              background-color: #dc3545;
+              color: #ffffff;
+            }
+            
+            body.dark-mode #confirmSelectionBtn {
+              background-color: #4fc3f7;
+              color: #ffffff;
+              border-color: #4fc3f7;
+            }
+            
+            body.dark-mode #confirmSelectionBtn:hover {
+              background-color: #29b6f6;
+            }
+            
+            body.dark-mode #chartDisplayModeToggle span {
+              color: #e0e0e0 !important;
+            }
+            
+            body.dark-mode #chartDisplayModeToggle label {
+              color: #e0e0e0 !important;
+            }
+            
+            body.dark-mode input[type="radio"] {
+              accent-color: #4fc3f7;
+            }
+            
+            body.dark-mode #individualMetricSelector span {
+              color: #e0e0e0 !important;
+            }
+            
+            body.dark-mode .initial-message {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode #lastUpdate {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode .toggle-label {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode .date-range {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode #chartToggleLoadingMessage {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode .elapsed-time {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode .sort-filter-container span {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode .group-selection-controls span {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode #selectedGroupsCount {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode #individualModeNote {
+              color: #e0e0e0;
+            }
+            
+            body.dark-mode #chartGroupCount {
+              background-color: #0d47a1;
+              color: #ffffff;
+              border-color: #1976d2;
+            }
+            
+            /* Chart.js text colors for dark mode */
+            body.dark-mode canvas {
+              filter: brightness(1.3) contrast(1.1);
             }
             .container {
               max-width: 1200px;
@@ -1750,9 +2842,98 @@ app.get('', async (req, res) => {
               color: #666;
               border: 1px solid #ddd;
             }
+            
+            .dark-mode-toggle {
+              position: absolute;
+              top: 20px;
+              right: 20px;
+              background-color: #007bff;
+              color: white;
+              border: none;
+              border-radius: 50px;
+              padding: 8px 16px;
+              font-size: 12px;
+              font-weight: 500;
+              cursor: pointer;
+              transition: all 0.3s ease;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+              z-index: 1000;
+            }
+            
+            .dark-mode-toggle:hover {
+              background-color: #0056b3;
+              transform: translateY(-1px);
+              box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            }
+            
+            body.dark-mode .dark-mode-toggle {
+              background-color: #ffc107;
+              color: #212529;
+            }
+            
+            body.dark-mode .dark-mode-toggle:hover {
+              background-color: #e0a800;
+            }
+          </style>
+          <script>
+            // Apply dark mode immediately to prevent flash
+            if (localStorage.getItem('darkMode') === 'true') {
+              document.documentElement.classList.add('dark-mode-loading');
+            }
+          </script>
+          <style>
+            /* Temporary class to apply dark mode before body loads */
+            html.dark-mode-loading body {
+              background-color: #1a1a1a !important;
+            }
+            html.dark-mode-loading .container {
+              background-color: #2d2d2d !important;
+              color: #ffffff !important;
+            }
+            html.dark-mode-loading h1 {
+              color: #ffffff !important;
+            }
+            html.dark-mode-loading .group-item {
+              background-color: #3d3d3d !important;
+              color: #ffffff !important;
+            }
+            html.dark-mode-loading .stats-container {
+              color: #e0e0e0 !important;
+            }
+            html.dark-mode-loading .stat-value {
+              color: #ffffff !important;
+            }
+            html.dark-mode-loading .stat-value.attendance-good {
+              color: #4caf50 !important;
+            }
+            html.dark-mode-loading .stat-value.attendance-warning {
+              color: #ff9800 !important;
+            }
+            html.dark-mode-loading .stat-value.attendance-poor {
+              color: #f44336 !important;
+            }
+            html.dark-mode-loading .stat-label {
+              color: #e0e0e0 !important;
+            }
+            html.dark-mode-loading #lastUpdate {
+              color: #e0e0e0 !important;
+            }
+            html.dark-mode-loading .toggle-label {
+              color: #e0e0e0 !important;
+            }
+            html.dark-mode-loading .date-range {
+              color: #e0e0e0 !important;
+            }
+            html.dark-mode-loading .initial-message {
+              color: #e0e0e0 !important;
+            }
+            html.dark-mode-loading canvas {
+              filter: brightness(1.3) contrast(1.1) !important;
+            }
           </style>
         </head>
         <body>
+          <button class="dark-mode-toggle" id="darkModeToggle">🌙 Dark Mode</button>
           <div class="container">
             <h1>Queen City Church - Life Groups Health Report</h1>
             <div style="display: flex; gap: 15px; align-items: center; margin-bottom: -10px;">
@@ -2227,7 +3408,7 @@ app.get('', async (req, res) => {
 
                   return '<li class="' + groupItemClasses + '" id="group-' + group.id + '" data-group-id="' + group.id + '"' +
                          (group.stats?.needsAttention ? ' title="Recent event missing attendance data - Click exclamation mark to open Planning Center"' : '') + '>' +
-                    '<a href="/groups/' + group.id + '/attendance" style="color: #007bff; text-decoration: none; font-size: 18px; font-weight: 500;" onmouseover="this.style.textDecoration=&quot;underline&quot;;" onmouseout="this.style.textDecoration=&quot;none&quot;;">' +
+                    '<a href="/life-groups/groups/' + group.id + '/attendance" style="color: #007bff; text-decoration: none; font-size: 18px; font-weight: 500;" onmouseover="this.style.textDecoration=&quot;underline&quot;;" onmouseout="this.style.textDecoration=&quot;none&quot;;">' +
                       group.attributes.name +
                     '</a>' +
                     '<div class="stats-container" id="stats-' + group.id + '">' +
@@ -2658,7 +3839,7 @@ app.get('', async (req, res) => {
               const viewMembershipChangesBtn = document.getElementById('viewMembershipChangesBtn');
               if (viewMembershipChangesBtn) {
                 viewMembershipChangesBtn.addEventListener('click', function() {
-                  window.location.href = '/membership-changes';
+                  window.location.href = '/life-groups/membership-changes';
                 });
               }
               
@@ -2841,7 +4022,7 @@ app.get('', async (req, res) => {
                     // For historical refresh, we need to fetch both current year and all historical data
                     if (isHistoricalRefresh) {
                       // First fetch all historical attendance data to populate cache
-                      const historicalResponse = await fetch(\`/groups/\${group.id}/attendance?showAll=true&forceRefresh=true\`);
+                      const historicalResponse = await fetch(\`/life-groups/groups/\${group.id}/attendance?showAll=true&forceRefresh=true\`);
                       if (!historicalResponse.ok) {
                         console.warn(\`Failed to fetch historical data for group \${group.id}\`);
                       }
@@ -2980,7 +4161,7 @@ app.get('', async (req, res) => {
                     }
 
                     return '<li class="group-item' + (group.isFamilyGroup ? ' family-group' : '') + '" id="group-' + group.id + '">' +
-                      '<a href="/groups/' + group.id + '/attendance">' +
+                      '<a href="/life-groups/groups/' + group.id + '/attendance">' +
                         group.attributes.name +
                       '</a>' +
                       '<div class="stats-container" id="stats-' + group.id + '">' +
@@ -4291,6 +5472,35 @@ app.get('', async (req, res) => {
 
             // Check cache and load data when page loads
             checkCacheAndLoad();
+            
+            // Dark mode toggle functionality
+            const darkModeToggle = document.getElementById('darkModeToggle');
+            const body = document.body;
+            
+            // Check for saved dark mode preference or default to light mode
+            const isDarkMode = localStorage.getItem('darkMode') === 'true';
+            
+            // Clean up temporary loading class and apply proper dark mode
+            document.documentElement.classList.remove('dark-mode-loading');
+            if (isDarkMode) {
+              body.classList.add('dark-mode');
+              darkModeToggle.innerHTML = '☀️ Light Mode';
+            }
+            
+            // Toggle dark mode
+            darkModeToggle.addEventListener('click', function() {
+              body.classList.toggle('dark-mode');
+              const isCurrentlyDark = body.classList.contains('dark-mode');
+              
+              // Update button text and icon
+              if (isCurrentlyDark) {
+                darkModeToggle.innerHTML = '☀️ Light Mode';
+                localStorage.setItem('darkMode', 'true');
+              } else {
+                darkModeToggle.innerHTML = '🌙 Dark Mode';
+                localStorage.setItem('darkMode', 'false');
+              }
+            });
           </script>
         </body>
       </html>
@@ -4302,7 +5512,2012 @@ app.get('', async (req, res) => {
   }
 });
 
-app.get('/groups/:groupId/attendance', async (req, res) => {
+// Dream Teams Roster Manager - Main dashboard
+app.get('/dream-teams', async (req, res) => {
+  try {
+    const html = `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Queen City Church - Dream Teams Roster Manager</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+            transition: background-color 0.3s ease;
+          }
+          
+          /* Dark mode styles */
+          body.dark-mode {
+            background-color: #1a1a1a;
+          }
+          
+          body.dark-mode .container {
+            background-color: #2d2d2d;
+            color: #ffffff;
+          }
+          
+          body.dark-mode h1 {
+            color: #ffffff;
+          }
+          
+          body.dark-mode .header {
+            border-bottom-color: #555;
+          }
+          
+          body.dark-mode .team-card {
+            background-color: #3d3d3d;
+            color: #ffffff;
+            border-color: #555;
+          }
+          
+          body.dark-mode .team-card.needs-review {
+            border-left: 4px solid #ffc107;
+          }
+          
+          body.dark-mode .team-card.old {
+            border-left: 4px solid #dc3545;
+          }
+          
+          body.dark-mode .team-card.fresh {
+            border-left: 4px solid #28a745;
+          }
+          
+          body.dark-mode .team-name {
+            color: #ffffff;
+          }
+          
+          body.dark-mode .stat-value {
+            color: #4fc3f7;
+          }
+          
+          body.dark-mode .stat-label {
+            color: #cccccc;
+          }
+          
+          body.dark-mode .last-updated {
+            color: #cccccc;
+            border-top-color: #555;
+          }
+          
+          body.dark-mode .loading {
+            color: #cccccc;
+          }
+          
+          body.dark-mode .error {
+            background-color: #4a2c2a;
+            border-color: #6a3634;
+            color: #f5c6cb;
+          }
+          .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          }
+          .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 20px;
+          }
+          h1 {
+            color: #333;
+            margin-bottom: 20px;
+          }
+          .back-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background-color: #6c757d;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: background-color 0.3s ease;
+          }
+          .back-button:hover {
+            background-color: #5a6268;
+          }
+          .refresh-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+          }
+          .refresh-button:hover {
+            background-color: #0056b3;
+          }
+          .refresh-button:disabled {
+            background-color: #007bff !important;
+            cursor: not-allowed;
+            opacity: 0.7;
+          }
+          .pending-removals-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background-color: #ffc107;
+            color: #212529;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            text-decoration: none;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            font-weight: 500;
+          }
+          .pending-removals-button:hover {
+            background-color: #e0a800;
+            color: #212529;
+            text-decoration: none;
+          }
+          .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+          }
+          .error {
+            text-align: center;
+            padding: 40px;
+            color: #dc3545;
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 8px;
+            margin: 20px 0;
+          }
+          .teams-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+          }
+          .team-card {
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            background: white;
+            transition: box-shadow 0.2s ease;
+            cursor: pointer;
+          }
+          .team-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+          }
+          .team-card.needs-review {
+            border-left: 4px solid #ffc107;
+          }
+          .team-card.old {
+            border-left: 4px solid #dc3545;
+          }
+          .team-card.fresh {
+            border-left: 4px solid #28a745;
+          }
+          .team-name {
+            font-size: 1.3em;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+          }
+          .team-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin: 15px 0;
+          }
+          .stat {
+            text-align: center;
+          }
+          .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #007bff;
+          }
+          .stat-label {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+          }
+          .last-updated {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #e9ecef;
+          }
+          .status-indicator {
+            display: inline-block;
+            font-size: 22px;
+            margin-right: 8px;
+            font-weight: bold;
+          }
+          .status-fresh { color: #28a745; }
+          .status-fresh::before { content: '✓'; }
+          .status-needs-review { color: #ffc107; }
+          .status-needs-review::before { content: '‼'; }
+          .status-old { color: #dc3545; }
+          .status-old::before { content: '✗'; }
+          
+          .dark-mode-toggle {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            padding: 8px 16px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            z-index: 1000;
+          }
+          
+          .dark-mode-toggle:hover {
+            background-color: #0056b3;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+          }
+          
+          body.dark-mode .dark-mode-toggle {
+            background-color: #ffc107;
+            color: #212529;
+          }
+          
+          body.dark-mode .dark-mode-toggle:hover {
+            background-color: #e0a800;
+          }
+        </style>
+        <script>
+          // Apply dark mode immediately to prevent flash
+          if (localStorage.getItem('darkMode') === 'true') {
+            document.documentElement.classList.add('dark-mode-loading');
+          }
+        </script>
+        <style>
+          /* Temporary class to apply dark mode before body loads */
+          html.dark-mode-loading body {
+            background-color: #1a1a1a !important;
+          }
+          html.dark-mode-loading .container {
+            background-color: #2d2d2d !important;
+            color: #ffffff !important;
+          }
+          html.dark-mode-loading h1 {
+            color: #ffffff !important;
+          }
+          html.dark-mode-loading .team-card {
+            background-color: #3d3d3d !important;
+            color: #ffffff !important;
+          }
+          html.dark-mode-loading .team-card.needs-review {
+            border-left: 4px solid #ffc107 !important;
+          }
+          html.dark-mode-loading .team-card.old {
+            border-left: 4px solid #dc3545 !important;
+          }
+          html.dark-mode-loading .team-card.fresh {
+            border-left: 4px solid #28a745 !important;
+          }
+          html.dark-mode-loading .team-name {
+            color: #ffffff !important;
+          }
+          html.dark-mode-loading .stat-value {
+            color: #4fc3f7 !important;
+          }
+          html.dark-mode-loading .stat-label {
+            color: #cccccc !important;
+          }
+        </style>
+      </head>
+      <body>
+        <button class="dark-mode-toggle" id="darkModeToggle">🌙 Dark Mode</button>
+        <div class="container">
+          <div class="header">
+            <h1>Queen City Church - Dream Team Health Report</h1>
+            <div class="header-buttons">
+              <a href="/dream-teams/pending-removals" class="pending-removals-button">
+                <span>View Pending Removals</span>
+              </a>
+              <button id="refreshButton" class="refresh-button">
+                <span>Refresh Data</span>
+              </button>
+            </div>
+          </div>
+          
+          <div id="loadingContainer" class="loading">
+            <p>Loading dream teams data...</p>
+          </div>
+          
+          <div id="errorContainer" class="error" style="display: none;">
+            <p id="errorMessage">Failed to load teams data</p>
+          </div>
+          
+          <div id="teamsContainer" class="teams-grid" style="display: none;">
+            <!-- Teams will be loaded here -->
+          </div>
+        </div>
+
+        <script>
+          let teamsData = [];
+
+          async function loadTeams(forceRefresh = false) {
+            const loadingContainer = document.getElementById('loadingContainer');
+            const errorContainer = document.getElementById('errorContainer');
+            const teamsContainer = document.getElementById('teamsContainer');
+            const refreshButton = document.getElementById('refreshButton');
+
+            // Show loading state
+            loadingContainer.style.display = 'block';
+            errorContainer.style.display = 'none';
+            teamsContainer.style.display = 'none';
+            refreshButton.disabled = true;
+
+            try {
+              const response = await fetch(\`/api/dream-teams?forceRefresh=\${forceRefresh}\`);
+              const result = await response.json();
+
+              if (!result.success) {
+                throw new Error(result.error || 'Failed to fetch teams');
+              }
+
+              teamsData = result.data;
+              displayTeams();
+
+              // Hide loading, show teams
+              loadingContainer.style.display = 'none';
+              teamsContainer.style.display = 'grid';
+
+            } catch (error) {
+              console.error('Error loading teams:', error);
+              document.getElementById('errorMessage').textContent = error.message;
+              loadingContainer.style.display = 'none';
+              errorContainer.style.display = 'block';
+            } finally {
+              refreshButton.disabled = false;
+            }
+          }
+
+          function displayTeams() {
+            const container = document.getElementById('teamsContainer');
+            
+            if (teamsData.length === 0) {
+              container.innerHTML = '<p style="text-align: center; color: #666; grid-column: 1 / -1;">No dream teams found</p>';
+              return;
+            }
+
+            container.innerHTML = teamsData.map(team => {
+              // Determine status based on actual review data
+              let statusClass = 'old';
+              let statusText = 'Needs review';
+              
+              if (team.lastReviewed) {
+                const lastReviewed = new Date(team.lastReviewed);
+                const now = new Date();
+                const daysSince = Math.floor((now - lastReviewed) / (1000 * 60 * 60 * 24));
+                
+                if (daysSince <= 14) {
+                  statusClass = 'fresh';
+                  statusText = 'Recently reviewed';
+                } else if (daysSince <= 30) {
+                  statusClass = 'needs-review';
+                  statusText = 'Review soon';
+                } else {
+                  statusClass = 'old';
+                  statusText = 'Needs attention';
+                }
+              }
+              
+              // Show pending removals if any
+              if (team.pendingRemovals > 0) {
+                statusText += ' (' + team.pendingRemovals + ' pending)';
+              }
+
+              return \`
+                <div class="team-card \${statusClass}" onclick="openTeam('\${team.id}', '\${team.name}')">
+                  <div class="team-name">
+                    <span class="status-indicator status-\${statusClass}"></span>
+                    \${team.name}
+                  </div>
+                  
+                  <div class="team-stats">
+                    <div class="stat">
+                      <div class="stat-value">\${team.readyCards}</div>
+                      <div class="stat-label">Active Members</div>
+                    </div>
+                    <div class="stat">
+                      <div class="stat-value">\${team.completedCards}</div>
+                      <div class="stat-label">Completed</div>
+                    </div>
+                  </div>
+                  
+                  <div class="last-updated">
+                    <strong>Status:</strong> \${statusText}<br>
+                    <strong>Last Reviewed:</strong> \${team.lastReviewed ? (() => {
+                      const dateParts = team.lastReviewed.split('-');
+                      const localDate = new Date(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]));
+                      return localDate.toLocaleDateString();
+                    })() : 'Never'}
+                    \${team.lastReviewer ? '<br><strong>Reviewed by:</strong> ' + team.lastReviewer : ''}
+                  </div>
+                </div>
+              \`;
+            }).join('');
+          }
+
+          function openTeam(teamId, teamName) {
+            window.location.href = \`/dream-teams/\${teamId}\`;
+          }
+
+          // Event listeners
+          document.getElementById('refreshButton').addEventListener('click', () => {
+            loadTeams(true);
+          });
+
+          // Load teams on page load
+          loadTeams();
+          
+          // Dark mode toggle functionality
+          const darkModeToggle = document.getElementById('darkModeToggle');
+          const body = document.body;
+          
+          // Check for saved dark mode preference or default to light mode
+          const isDarkMode = localStorage.getItem('darkMode') === 'true';
+          
+          // Clean up temporary loading class and apply proper dark mode
+          document.documentElement.classList.remove('dark-mode-loading');
+          if (isDarkMode) {
+            body.classList.add('dark-mode');
+            darkModeToggle.innerHTML = '☀️ Light Mode';
+          }
+          
+          // Toggle dark mode
+          darkModeToggle.addEventListener('click', function() {
+            body.classList.toggle('dark-mode');
+            const isCurrentlyDark = body.classList.contains('dark-mode');
+            
+            // Update button text and icon
+            if (isCurrentlyDark) {
+              darkModeToggle.innerHTML = '☀️ Light Mode';
+              localStorage.setItem('darkMode', 'true');
+            } else {
+              darkModeToggle.innerHTML = '🌙 Dark Mode';
+              localStorage.setItem('darkMode', 'false');
+            }
+          });
+        </script>
+      </body>
+      </html>
+    `;
+    
+    res.send(html);
+  } catch (error) {
+    console.error('Error rendering dream teams page:', error);
+    res.status(500).send('Error loading page');
+  }
+});
+
+// Individual Dream Team roster management page
+// Pending removals page (for admin review)
+app.get('/dream-teams/pending-removals', async (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Queen City Church - Pending Dream Team Removals</title>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          margin: 20px;
+          background-color: #f5f5f5;
+          transition: background-color 0.3s ease;
+        }
+        
+        /* Dark mode styles */
+        body.dark-mode {
+          background-color: #1a1a1a;
+          color: #ffffff;
+        }
+        
+        body.dark-mode .container {
+          background-color: #2d2d2d;
+          color: #ffffff;
+        }
+        
+        body.dark-mode h1 {
+          color: #ffffff;
+        }
+        
+        body.dark-mode .header {
+          border-bottom-color: #555;
+        }
+        
+        body.dark-mode .back-button {
+          background-color: #495057;
+          color: #ffffff;
+        }
+        
+        body.dark-mode .back-button:hover {
+          background-color: #6c757d;
+        }
+        
+        body.dark-mode .summary {
+          background-color: #0c3544;
+          border-color: #1d6f7e;
+          color: #b8daff;
+        }
+        
+        body.dark-mode .summary h3 {
+          color: #b8daff;
+        }
+        
+        body.dark-mode .summary p {
+          color: #b8daff;
+        }
+        
+        body.dark-mode .team-section {
+          border-color: #555;
+        }
+        
+        body.dark-mode .team-header {
+          background-color: #3d3d3d;
+          color: #ffffff;
+          border-color: #ffc107;
+        }
+        
+        body.dark-mode .removal-item {
+          border-bottom-color: #555;
+        }
+        
+        body.dark-mode .member-name {
+          color: #ffffff;
+        }
+        
+        body.dark-mode .removal-details {
+          color: #cccccc;
+        }
+        
+        body.dark-mode .removal-date {
+          color: #aaaaaa;
+        }
+        
+        body.dark-mode .reviewer-name {
+          color: #cccccc;
+        }
+        
+        body.dark-mode .removal-status {
+          background-color: #495057;
+          color: #ffffff;
+        }
+        
+        body.dark-mode .empty-state {
+          color: #cccccc;
+        }
+        
+        body.dark-mode .empty-state h3 {
+          color: #4caf50;
+        }
+        
+        body.dark-mode .loading {
+          color: #cccccc;
+        }
+        
+        body.dark-mode .error {
+          background-color: #721c24;
+          border-color: #a94442;
+          color: #f8d7da;
+        }
+        
+        /* FOUC Prevention - Temporary loading styles */
+        html.dark-mode-loading {
+          background-color: #1a1a1a !important;
+        }
+        
+        html.dark-mode-loading body {
+          background-color: #1a1a1a !important;
+          color: #ffffff !important;
+        }
+        
+        html.dark-mode-loading .container {
+          background-color: #2d2d2d !important;
+          color: #ffffff !important;
+        }
+        
+        html.dark-mode-loading h1 {
+          color: #ffffff !important;
+        }
+        .container {
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 20px;
+          background-color: white;
+          border-radius: 10px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 30px;
+          padding-bottom: 20px;
+          border-bottom: 2px solid #e9ecef;
+        }
+        .header-buttons {
+          display: flex;
+          gap: 15px;
+          align-items: center;
+        }
+        h1 {
+          color: #333;
+          margin: 0;
+          font-size: 1.8em;
+        }
+        .back-button {
+          background-color: #6c757d;
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 6px;
+          text-decoration: none;
+          font-size: 14px;
+          cursor: pointer;
+          transition: background-color 0.3s ease;
+        }
+        .back-button:hover {
+          background-color: #5a6268;
+        }
+        .summary {
+          background-color: #d1ecf1;
+          border: 1px solid #bee5eb;
+          border-radius: 6px;
+          padding: 15px;
+          margin-bottom: 30px;
+        }
+        .summary h3 {
+          margin: 0 0 10px 0;
+          color: #0c5460;
+        }
+        .summary p {
+          margin: 0;
+          color: #0c5460;
+        }
+        .removals-list {
+          display: grid;
+          gap: 20px;
+        }
+        .team-section {
+          border: 1px solid #dee2e6;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .team-header {
+          background-color: transparent;
+          color: #333;
+          border: 5px solid #ffc107;
+          padding: 15px 20px;
+          font-weight: 600;
+          font-size: 1.1em;
+        }
+        .removal-item {
+          padding: 15px 20px;
+          border-bottom: 1px solid #f1f1f1;
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 20px;
+        }
+        .removal-item:last-child {
+          border-bottom: none;
+        }
+        .member-info {
+          flex: 1;
+        }
+        .member-name {
+          font-weight: 600;
+          color: #333;
+          margin-bottom: 5px;
+        }
+        .removal-details {
+          color: #666;
+          font-size: 0.9em;
+          line-height: 1.4;
+        }
+        .removal-date {
+          color: #999;
+          font-size: 0.85em;
+        }
+        .reviewer-name {
+          color: #666;
+          font-size: 0.85em;
+          font-weight: 500;
+          margin-top: 4px;
+        }
+        .removal-status {
+          background-color: #e9ecef;
+          color: #6c757d;
+          padding: 8px 16px;
+          border-radius: 4px;
+          font-size: 0.85em;
+          text-align: center;
+          font-style: italic;
+          white-space: nowrap;
+        }
+
+        .empty-state {
+          text-align: center;
+          padding: 60px 20px;
+          color: #666;
+        }
+        .empty-state h3 {
+          color: #28a745;
+          margin-bottom: 10px;
+        }
+        .loading {
+          text-align: center;
+          padding: 40px;
+          color: #666;
+        }
+        .error {
+          background-color: #f8d7da;
+          border: 1px solid #f5c6cb;
+          color: #721c24;
+          padding: 15px;
+          border-radius: 6px;
+          margin-bottom: 20px;
+        }
+      </style>
+      <script>
+        // Apply dark mode immediately to prevent flash
+        if (localStorage.getItem('darkMode') === 'true') {
+          document.documentElement.classList.add('dark-mode-loading');
+        }
+      </script>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>Pending Dream Team Removals</h1>
+          <a href="/dream-teams" class="back-button">
+            <span>←</span>
+            <span>Back to Teams</span>
+          </a>
+        </div>
+        
+        <div id="summary" class="summary" style="display: none;">
+          <h3>Removal Summary</h3>
+          <p id="summaryText">Loading...</p>
+        </div>
+        
+        <div id="errorMessage" class="error" style="display: none;"></div>
+        <div id="loadingMessage" class="loading">Loading pending removals...</div>
+        <div id="removalsList" class="removals-list"></div>
+      </div>
+
+      <script>
+        let pendingRemovalsData = [];
+
+        // Dark mode functionality
+        document.addEventListener('DOMContentLoaded', function() {
+          // Remove temporary dark mode loading class
+          document.documentElement.classList.remove('dark-mode-loading');
+          
+          // Initialize dark mode state from localStorage
+          const isDarkMode = localStorage.getItem('darkMode') === 'true';
+          
+          if (isDarkMode) {
+            document.body.classList.add('dark-mode');
+          }
+        });
+
+        async function loadPendingRemovals() {
+          try {
+            const response = await fetch('/api/dream-teams/pending-removals');
+            const result = await response.json();
+            
+            if (result.success) {
+              pendingRemovalsData = result.data.pendingRemovals;
+              displayPendingRemovals(pendingRemovalsData);
+              updateSummary(result.data.totalCount);
+            } else {
+              showError('Failed to load pending removals: ' + result.error);
+            }
+          } catch (error) {
+            console.error('Error loading pending removals:', error);
+            showError('Failed to load pending removals. Please try again.');
+          } finally {
+            document.getElementById('loadingMessage').style.display = 'none';
+          }
+        }
+
+        function displayPendingRemovals(removals) {
+          const removalsList = document.getElementById('removalsList');
+          
+          if (removals.length === 0) {
+            removalsList.innerHTML = 
+              '<div class="empty-state">' +
+                '<h3>🎉 All caught up!</h3>' +
+                '<p>No pending removals at this time.</p>' +
+              '</div>';
+            return;
+          }
+
+          // Group removals by team
+          const groupedRemovals = {};
+          removals.forEach(function(removal) {
+            if (!groupedRemovals[removal.workflowName]) {
+              groupedRemovals[removal.workflowName] = [];
+            }
+            groupedRemovals[removal.workflowName].push(removal);
+          });
+
+          // Build HTML
+          let html = '';
+          Object.keys(groupedRemovals).sort().forEach(function(teamName) {
+            const teamRemovals = groupedRemovals[teamName];
+            html += '<div class="team-section">';
+            html += '<div class="team-header">' + teamName + ' (' + teamRemovals.length + ' removal' + (teamRemovals.length === 1 ? '' : 's') + ')</div>';
+            
+            teamRemovals.forEach(function(removal) {
+              const removalDate = new Date(removal.removalDate).toLocaleDateString();
+              const reason = removal.reason || 'No reason provided';
+              const reviewerName = removal.reviewerName || 'Unknown';
+              
+              html += '<div class="removal-item">';
+              html += '<div class="member-info">';
+              html += '<div class="member-name">' + removal.firstName + ' ' + removal.lastName + '</div>';
+              html += '<div class="removal-details">Reason: ' + reason + '</div>';
+              html += '<div class="removal-date">Marked for removal: ' + removalDate + '</div>';
+              html += '<div class="reviewer-name">Requested by: ' + reviewerName + '</div>';
+              html += '</div>';
+              html += '<div class="removal-status">Remove from PCO to clear</div>';
+              html += '</div>';
+            });
+            
+            html += '</div>';
+          });
+
+          removalsList.innerHTML = html;
+        }
+
+        function updateSummary(totalCount) {
+          const summary = document.getElementById('summary');
+          const summaryText = document.getElementById('summaryText');
+          
+          if (totalCount > 0) {
+            summaryText.textContent = 'There ' + (totalCount === 1 ? 'is' : 'are') + ' ' + totalCount + ' member' + (totalCount === 1 ? '' : 's') + ' marked for removal who ' + (totalCount === 1 ? 'is' : 'are') + ' still active in PCO. Remove ' + (totalCount === 1 ? 'them' : 'them') + ' from the workflow in Planning Center Online, then refresh this page.';
+            summary.style.display = 'block';
+          } else {
+            summary.style.display = 'none';
+          }
+        }
+
+
+
+        function showError(message) {
+          const errorDiv = document.getElementById('errorMessage');
+          errorDiv.textContent = message;
+          errorDiv.style.display = 'block';
+        }
+
+        // Load data on page load
+        loadPendingRemovals();
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+app.get('/dream-teams/:workflowId', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    
+    const html = `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Queen City Church - Team Roster Management</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+            transition: background-color 0.3s ease;
+          }
+          
+          /* Dark mode styles */
+          body.dark-mode {
+            background-color: #1a1a1a;
+            color: #ffffff;
+          }
+          
+          body.dark-mode .container {
+            background-color: #2d2d2d;
+            color: #ffffff;
+          }
+          
+          body.dark-mode h1 {
+            color: #ffffff;
+          }
+          
+          body.dark-mode .team-info h1 {
+            color: #ffffff;
+          }
+          
+          body.dark-mode .pending-count {
+            background-color: #856404;
+            color: #fff3cd;
+            border-color: #ffeaa7;
+          }
+          
+          body.dark-mode .last-updated {
+            color: #cccccc;
+          }
+          
+          body.dark-mode .back-button {
+            background-color: #495057;
+            color: #ffffff;
+          }
+          
+          body.dark-mode .back-button:hover {
+            background-color: #6c757d;
+          }
+          
+          body.dark-mode .loading {
+            color: #cccccc;
+          }
+          
+          body.dark-mode .error {
+            background-color: #721c24;
+            color: #f8d7da;
+            border-color: #a94442;
+          }
+          
+          body.dark-mode .roster-section h2 {
+            color: #ffffff;
+          }
+          
+          body.dark-mode .sort-controls label {
+            color: #cccccc;
+          }
+          
+          body.dark-mode .sort-controls select {
+            background-color: #2d2d2d;
+            color: #ffffff;
+            border-color: #555;
+          }
+          
+          body.dark-mode .member-count {
+            background-color: #0056b3;
+          }
+          
+          body.dark-mode .member-item {
+            background-color: #3d3d3d;
+            border-color: #555;
+          }
+          
+          body.dark-mode .member-item:hover {
+            background-color: #4d4d4d;
+          }
+          
+          body.dark-mode .member-name {
+            color: #ffffff;
+          }
+          
+          body.dark-mode .pending-removal-indicator {
+            background-color: #856404;
+            color: #fff3cd;
+            border-color: #ffeaa7;
+          }
+          
+          body.dark-mode .join-date {
+            color: #cccccc;
+          }
+          
+          body.dark-mode .past-members h3 {
+            color: #cccccc;
+          }
+          
+          body.dark-mode .past-member-item {
+            background-color: #3d3d3d;
+            color: #cccccc;
+          }
+          
+          body.dark-mode .modal-content {
+            background-color: #2d2d2d;
+            color: #ffffff;
+          }
+          
+          body.dark-mode .modal h3 {
+            color: #ffffff;
+          }
+          
+          body.dark-mode .modal textarea {
+            background-color: #3d3d3d;
+            color: #ffffff;
+            border-color: #555;
+          }
+          
+          body.dark-mode .reviewer-input label {
+            color: #ffffff;
+          }
+          
+          body.dark-mode .reviewer-input input {
+            background-color: #3d3d3d;
+            color: #ffffff;
+            border-color: #555;
+          }
+          
+          /* FOUC Prevention - Temporary loading styles */
+          html.dark-mode-loading {
+            background-color: #1a1a1a !important;
+          }
+          
+          html.dark-mode-loading body {
+            background-color: #1a1a1a !important;
+            color: #ffffff !important;
+          }
+          
+          html.dark-mode-loading .container {
+            background-color: #2d2d2d !important;
+            color: #ffffff !important;
+          }
+          
+          html.dark-mode-loading h1 {
+            color: #ffffff !important;
+          }
+          .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          }
+          .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 20px;
+          }
+          .team-info h1 {
+            color: #333;
+            margin-bottom: 8px;
+          }
+          .pending-count {
+            color: #856404;
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 500;
+            margin-bottom: 12px;
+            display: inline-block;
+          }
+          .last-updated {
+            color: #666;
+            font-size: 0.9em;
+          }
+          .back-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background-color: #6c757d;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: background-color 0.3s ease;
+          }
+          .back-button:hover {
+            background-color: #5a6268;
+          }
+          .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+          }
+          .error {
+            text-align: center;
+            padding: 40px;
+            color: #dc3545;
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 8px;
+            margin: 20px 0;
+          }
+          .roster-section {
+            margin-bottom: 40px;
+          }
+          .roster-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
+          }
+          .roster-section h2 {
+            color: #333;
+            margin: 0;
+            font-size: 1.4em;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+          }
+          .sort-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          .sort-controls label {
+            font-size: 14px;
+            color: #666;
+            font-weight: 500;
+          }
+          .sort-controls select {
+            padding: 6px 10px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+            background-color: white;
+            cursor: pointer;
+          }
+          .sort-controls select:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+          }
+          .member-count {
+            background-color: #007bff;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: normal;
+          }
+          .member-list {
+            display: grid;
+            gap: 10px;
+          }
+          .member-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            transition: background-color 0.2s ease;
+          }
+          .member-item:hover {
+            background-color: #f8f9fa;
+          }
+          .member-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+          }
+          .member-name {
+            font-weight: 500;
+            color: #333;
+          }
+          .pending-removal-indicator {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.75em;
+            font-weight: 600;
+            margin-left: 8px;
+            cursor: help;
+          }
+          .join-date {
+            color: #666;
+            font-size: 0.9em;
+          }
+          .remove-checkbox {
+            width: 24px;
+            height: 24px;
+            background-color: #dc3545;
+            color: white;
+            border: 2px solid #dc3545;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            transition: all 0.2s ease;
+          }
+          .remove-checkbox:hover {
+            background-color: #c82333;
+            border-color: #c82333;
+          }
+          .remove-checkbox.selected {
+            background-color: white;
+            border-color: #dc3545;
+            color: #dc3545;
+          }
+          .remove-checkbox.disabled {
+            background-color: #6c757d;
+            border-color: #6c757d;
+            color: white;
+            cursor: not-allowed;
+            opacity: 0.7;
+          }
+          .remove-checkbox.disabled:hover {
+            background-color: #6c757d;
+            border-color: #6c757d;
+          }
+          .undo-button {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-width: 50px;
+            text-align: center;
+          }
+          .undo-button:hover {
+            background-color: #218838;
+            transform: translateY(-1px);
+          }
+          .undo-button:active {
+            transform: translateY(0);
+          }
+          .remove-checkbox.selected + .member-item {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+          }
+          .action-section {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 2px solid #e9ecef;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+          }
+          .reviewer-input {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          .reviewer-input label {
+            font-weight: 500;
+            color: #333;
+            white-space: nowrap;
+          }
+          .reviewer-input input {
+            width: 200px;
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+          }
+          .reviewer-input input:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+          }
+          .action-buttons {
+            display: flex;
+            gap: 15px;
+          }
+          .action-button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+          }
+          .no-changes-btn {
+            background-color: #28a745;
+            color: white;
+          }
+          .no-changes-btn:hover {
+            background-color: #218838;
+          }
+          .confirm-changes-btn {
+            background-color: #dc3545;
+            color: white;
+            display: none;
+          }
+          .confirm-changes-btn:hover {
+            background-color: #c82333;
+          }
+          .confirm-changes-btn.visible {
+            display: inline-block;
+          }
+          .past-members {
+            margin-top: 40px;
+            padding-top: 30px;
+            border-top: 2px solid #e9ecef;
+          }
+          .past-members h3 {
+            color: #666;
+            font-size: 1.2em;
+            margin-bottom: 15px;
+          }
+          .past-member-item {
+            padding: 10px 15px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            color: #666;
+          }
+          
+          /* Reason popup modal */
+          .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+          }
+          .modal-content {
+            background-color: white;
+            margin: 10% auto;
+            padding: 20px;
+            border-radius: 8px;
+            width: 95%;
+            max-width: 450px;
+            box-sizing: border-box;
+            max-height: 80vh;
+            overflow-y: auto;
+          }
+          .modal h3 {
+            margin-top: 0;
+            color: #333;
+          }
+          .modal textarea {
+            width: 100%;
+            height: 100px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            resize: vertical;
+            font-family: inherit;
+            box-sizing: border-box;
+          }
+          .modal-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 15px;
+          }
+          .modal-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+          }
+          .modal-btn.cancel {
+            background-color: #6c757d;
+            color: white;
+          }
+          .modal-btn.confirm {
+            background-color: #dc3545;
+            color: white;
+          }
+          .modal-btn.undo-confirm {
+            background-color: #28a745;
+            color: white;
+          }
+          .modal-btn.undo-confirm:hover {
+            background-color: #218838;
+          }
+        </style>
+        <script>
+          // Apply dark mode immediately to prevent flash
+          if (localStorage.getItem('darkMode') === 'true') {
+            document.documentElement.classList.add('dark-mode-loading');
+          }
+        </script>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <div class="team-info">
+              <h1 id="teamName">Loading...</h1>
+              <div id="pendingCount" class="pending-count" style="display: none;"></div>
+              <div class="last-updated" id="lastUpdated">Last Updated: Loading...</div>
+            </div>
+            <a href="/dream-teams" class="back-button">
+              <span>←</span>
+              <span>Back to Teams</span>
+            </a>
+          </div>
+          
+          <div id="loadingContainer" class="loading">
+            <p>Loading team roster...</p>
+          </div>
+          
+          <div id="errorContainer" class="error" style="display: none;">
+            <p id="errorMessage">Failed to load team roster</p>
+          </div>
+          
+          <div id="rosterContainer" style="display: none;">
+            <div class="roster-section">
+              <div class="roster-header">
+                <h2>Current Members <span class="member-count" id="memberCount">0</span></h2>
+                <div class="sort-controls">
+                  <label for="sortSelect">Sort by:</label>
+                  <select id="sortSelect">
+                    <option value="name-asc">Name (A-Z)</option>
+                    <option value="name-desc">Name (Z-A)</option>
+                    <option value="date-asc">Date (Oldest First)</option>
+                    <option value="date-desc">Date (Newest First)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="member-list" id="memberList">
+                <!-- Members will be loaded here -->
+              </div>
+            </div>
+            
+            <div class="action-section">
+              <div class="reviewer-input">
+                <label for="reviewerName">Your Name:</label>
+                <input type="text" id="reviewerName" placeholder="Enter your name" required>
+              </div>
+              <div class="action-buttons">
+                <button class="action-button no-changes-btn" id="noChangesBtn">No Changes</button>
+                <button class="action-button confirm-changes-btn" id="confirmChangesBtn">Confirm Changes</button>
+              </div>
+            </div>
+            
+            <div class="past-members">
+              <h3>Past Members</h3>
+              <div id="pastMembersList">
+                <!-- Past members will be loaded here -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reason Modal -->
+        <div id="reasonModal" class="modal">
+          <div class="modal-content">
+            <h3>Reason for Removal</h3>
+            <p>Please provide a reason for removing this member (optional):</p>
+            <textarea id="removalReason" placeholder="e.g., Moved to different team, No longer attending, etc."></textarea>
+            <div class="modal-buttons">
+              <button class="modal-btn cancel" id="cancelRemoval">Cancel</button>
+              <button class="modal-btn confirm" id="confirmRemoval">Confirm Removal</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Undo Confirmation Modal -->
+        <div id="undoModal" class="modal">
+          <div class="modal-content">
+            <h3>Undo Removal</h3>
+            <p id="undoMessage">Are you sure you want to undo the removal of this member?</p>
+            <div class="modal-buttons">
+              <button class="modal-btn cancel" id="cancelUndo">Cancel</button>
+              <button class="modal-btn confirm undo-confirm" id="confirmUndo">Yes, Undo Removal</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Generic Alert Modal -->
+        <div id="alertModal" class="modal">
+          <div class="modal-content">
+            <h3 id="alertTitle">Alert</h3>
+            <p id="alertMessage">Message goes here</p>
+            <div class="modal-buttons">
+              <button class="modal-btn confirm" id="alertOk">OK</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Generic Confirmation Modal -->
+        <div id="confirmModal" class="modal">
+          <div class="modal-content">
+            <h3 id="confirmTitle">Confirm</h3>
+            <p id="confirmMessage">Are you sure?</p>
+            <div class="modal-buttons">
+              <button class="modal-btn cancel" id="confirmCancel">Cancel</button>
+              <button class="modal-btn confirm" id="confirmOk">OK</button>
+            </div>
+          </div>
+        </div>
+
+        <script>
+          const workflowId = '${workflowId}';
+          let teamData = null;
+          let pendingRemovals = [];
+          let currentMemberForRemoval = null;
+          let currentMemberForUndo = null;
+          let currentConfirmCallback = null;
+
+          // Dark mode functionality
+          document.addEventListener('DOMContentLoaded', function() {
+            // Remove temporary dark mode loading class
+            document.documentElement.classList.remove('dark-mode-loading');
+            
+            // Initialize dark mode state from localStorage
+            const isDarkMode = localStorage.getItem('darkMode') === 'true';
+            
+            if (isDarkMode) {
+              document.body.classList.add('dark-mode');
+            }
+          });
+
+          // Custom modal functions to replace native browser dialogs
+          function showAlert(title, message) {
+            document.getElementById('alertTitle').textContent = title;
+            document.getElementById('alertMessage').textContent = message;
+            document.getElementById('alertModal').style.display = 'block';
+          }
+
+          function showConfirm(title, message, callback) {
+            document.getElementById('confirmTitle').textContent = title;
+            document.getElementById('confirmMessage').textContent = message;
+            currentConfirmCallback = callback;
+            document.getElementById('confirmModal').style.display = 'block';
+          }
+
+          async function loadTeamRoster() {
+            const loadingContainer = document.getElementById('loadingContainer');
+            const errorContainer = document.getElementById('errorContainer');
+            const rosterContainer = document.getElementById('rosterContainer');
+
+            try {
+              loadingContainer.style.display = 'block';
+              errorContainer.style.display = 'none';
+              rosterContainer.style.display = 'none';
+
+              const response = await fetch('/api/dream-teams/' + workflowId);
+              const result = await response.json();
+
+              if (!result.success) {
+                throw new Error(result.error || 'Failed to fetch team roster');
+              }
+
+              teamData = result.data;
+              displayTeamRoster();
+
+              loadingContainer.style.display = 'none';
+              rosterContainer.style.display = 'block';
+
+            } catch (error) {
+              console.error('Error loading team roster:', error);
+              document.getElementById('errorMessage').textContent = error.message;
+              loadingContainer.style.display = 'none';
+              errorContainer.style.display = 'block';
+            }
+          }
+
+          function sortMembers(members, sortBy) {
+            const sorted = [...members]; // Create a copy to avoid mutating original
+            
+            switch(sortBy) {
+              case 'name-asc':
+                return sorted.sort(function(a, b) {
+                  return a.firstName.localeCompare(b.firstName);
+                });
+              case 'name-desc':
+                return sorted.sort(function(a, b) {
+                  return b.firstName.localeCompare(a.firstName);
+                });
+              case 'date-asc':
+                return sorted.sort(function(a, b) {
+                  return new Date(a.joinedAt) - new Date(b.joinedAt);
+                });
+              case 'date-desc':
+                return sorted.sort(function(a, b) {
+                  return new Date(b.joinedAt) - new Date(a.joinedAt);
+                });
+              default:
+                return sorted.sort(function(a, b) {
+                  return a.firstName.localeCompare(b.firstName);
+                });
+            }
+          }
+
+          function displaySortedMembers() {
+            const sortSelect = document.getElementById('sortSelect');
+            const sortBy = sortSelect.value;
+            const sortedMembers = sortMembers(teamData.roster, sortBy);
+            
+            const memberList = document.getElementById('memberList');
+            memberList.innerHTML = sortedMembers.map(function(member) {
+              const joinDate = new Date(member.joinedAt).toLocaleDateString('en-US', {
+                month: 'numeric',
+                day: 'numeric',
+                year: 'numeric'
+              });
+              
+              const pendingIndicator = member.markedForRemoval ? 
+                '<span class="pending-removal-indicator" title="Pending removal: ' + (member.removalReason || 'No reason provided') + '">Pending Removal</span>' : '';
+              
+              const removeButton = member.markedForRemoval ? 
+                '<div class="undo-button" data-member-id="' + member.personId + '" data-member-name="' + member.firstName + ' ' + member.lastName + '" title="Click to undo removal">Undo</div>' :
+                '<div class="remove-checkbox" data-member-id="' + member.personId + '" data-member-name="' + member.firstName + ' ' + member.lastName + '">✗</div>';
+              
+              return '<div class="member-item" data-member-id="' + member.personId + '">' +
+                       '<div class="member-info">' +
+                         '<div class="member-name">' + member.firstName + ' ' + member.lastName + '</div>' +
+                         '<div class="join-date">' + joinDate + ' ' + pendingIndicator + '</div>' +
+                       '</div>' +
+                       removeButton +
+                     '</div>';
+            }).join('');
+            
+            // Re-setup checkbox listeners after updating the HTML
+            setupCheckboxListeners();
+          }
+
+          function displayTeamRoster() {
+            // Update team header info
+            document.getElementById('teamName').textContent = teamData.workflowName + ' Team Roster';
+            
+            // Update pending removal count in separate div
+            const pendingCountDiv = document.getElementById('pendingCount');
+            if (teamData.pendingRemovalsCount > 0) {
+              pendingCountDiv.textContent = '(' + teamData.pendingRemovalsCount + ' pending removal' + (teamData.pendingRemovalsCount === 1 ? '' : 's') + ')';
+              pendingCountDiv.style.display = 'block';
+            } else {
+              pendingCountDiv.style.display = 'none';
+            }
+            
+            let lastReviewedText;
+            if (teamData.lastReviewed) {
+              // Fix: Parse date as local time, not UTC
+              // "2025-08-14" -> treat as local date, not UTC midnight
+              const dateParts = teamData.lastReviewed.split('-');
+              const localDate = new Date(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]));
+              lastReviewedText = 'Last Reviewed: ' + localDate.toLocaleDateString();
+            } else {
+              lastReviewedText = 'Last Reviewed: Never';
+            }
+            
+            if (teamData.lastReviewer) {
+              lastReviewedText += ' by ' + teamData.lastReviewer;
+            }
+            
+            document.getElementById('lastUpdated').textContent = lastReviewedText;
+            
+            // Update member count
+            document.getElementById('memberCount').textContent = teamData.roster.length;
+            
+            // Display current members
+            displaySortedMembers();
+            
+            // Setup sort change listener
+            document.getElementById('sortSelect').addEventListener('change', function() {
+              displaySortedMembers();
+            });
+            
+            // Display past members
+            displayPastMembers();
+          }
+          
+          function displayPastMembers() {
+            const pastMembersList = document.getElementById('pastMembersList');
+            
+            if (teamData.pastMembers && teamData.pastMembers.length > 0) {
+              pastMembersList.innerHTML = teamData.pastMembers.map(function(member) {
+                const removalDate = new Date(member.removalDate).toLocaleDateString('en-US', {
+                  month: 'numeric',
+                  day: 'numeric',
+                  year: 'numeric'
+                });
+                
+                return '<div class="past-member-item">' +
+                         member.firstName + ' ' + member.lastName + ' - Removed ' + removalDate +
+                         ' by ' + member.reviewerName + 
+                         (member.reason ? ' (' + member.reason + ')' : '') +
+                       '</div>';
+              }).join('');
+            } else {
+              pastMembersList.innerHTML = '<div class="past-member-item">No past members</div>';
+            }
+          }
+
+          function setupCheckboxListeners() {
+            const checkboxes = document.querySelectorAll('.remove-checkbox');
+            checkboxes.forEach(function(checkbox) {
+              checkbox.addEventListener('click', function() {
+                // Ignore clicks on disabled buttons
+                if (this.classList.contains('disabled')) {
+                  return;
+                }
+                
+                if (this.classList.contains('selected')) {
+                  // Already selected, unselect it
+                  this.classList.remove('selected');
+                  // Remove from pending removals
+                  pendingRemovals = pendingRemovals.filter(function(removal) {
+                    return removal.memberId !== checkbox.dataset.memberId;
+                  });
+                  updateActionButtons();
+                } else {
+                  // Not selected, show reason modal
+                  currentMemberForRemoval = {
+                    id: this.dataset.memberId,
+                    name: this.dataset.memberName,
+                    checkbox: this
+                  };
+                  document.getElementById('reasonModal').style.display = 'block';
+                }
+              });
+            });
+            
+            // Setup undo button listeners
+            const undoButtons = document.querySelectorAll('.undo-button');
+            undoButtons.forEach(function(undoButton) {
+              undoButton.addEventListener('click', function() {
+                const memberId = this.dataset.memberId;
+                const memberName = this.dataset.memberName;
+                
+                // Store current member for undo and show custom modal
+                currentMemberForUndo = {
+                  id: memberId,
+                  name: memberName
+                };
+                
+                document.getElementById('undoMessage').textContent = 
+                  'Are you sure you want to undo the removal of ' + memberName + '?';
+                document.getElementById('undoModal').style.display = 'block';
+              });
+            });
+          }
+
+          function updateActionButtons() {
+            const noChangesBtn = document.getElementById('noChangesBtn');
+            const confirmChangesBtn = document.getElementById('confirmChangesBtn');
+            
+            if (pendingRemovals.length > 0) {
+              noChangesBtn.style.display = 'none';
+              confirmChangesBtn.classList.add('visible');
+              confirmChangesBtn.textContent = 'Confirm Changes (' + pendingRemovals.length + ' removal' + 
+                                              (pendingRemovals.length > 1 ? 's' : '') + ')';
+            } else {
+              noChangesBtn.style.display = 'inline-block';
+              confirmChangesBtn.classList.remove('visible');
+            }
+          }
+
+          function undoRemoval(memberId, memberName) {
+            fetch('/api/dream-teams/' + workflowId + '/undo-removal', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                memberId: memberId
+              })
+            })
+            .then(function(response) {
+              return response.json();
+            })
+            .then(function(result) {
+              if (result.success) {
+                // Refresh the team roster to show updated state
+                loadTeamRoster();
+              } else {
+                showAlert('Error', 'Failed to undo removal: ' + (result.error || 'Unknown error'));
+              }
+            })
+            .catch(function(error) {
+              console.error('Error undoing removal:', error);
+              showAlert('Error', 'Failed to undo removal. Please try again.');
+            });
+          }
+
+          // Modal event listeners
+          document.getElementById('cancelRemoval').addEventListener('click', function() {
+            if (currentMemberForRemoval) {
+              currentMemberForRemoval.checkbox.classList.remove('selected');
+              currentMemberForRemoval = null;
+            }
+            document.getElementById('reasonModal').style.display = 'none';
+            document.getElementById('removalReason').value = '';
+          });
+
+          document.getElementById('confirmRemoval').addEventListener('click', function() {
+            if (currentMemberForRemoval) {
+              const reason = document.getElementById('removalReason').value.trim();
+              
+              pendingRemovals.push({
+                memberId: currentMemberForRemoval.id,
+                memberName: currentMemberForRemoval.name,
+                reason: reason
+              });
+              
+              // Mark the checkbox as selected
+              currentMemberForRemoval.checkbox.classList.add('selected');
+              
+              updateActionButtons();
+              currentMemberForRemoval = null;
+            }
+            document.getElementById('reasonModal').style.display = 'none';
+            document.getElementById('removalReason').value = '';
+          });
+
+          // Undo modal event listeners
+          document.getElementById('cancelUndo').addEventListener('click', function() {
+            currentMemberForUndo = null;
+            document.getElementById('undoModal').style.display = 'none';
+          });
+
+          document.getElementById('confirmUndo').addEventListener('click', function() {
+            if (currentMemberForUndo) {
+              undoRemoval(currentMemberForUndo.id, currentMemberForUndo.name);
+              currentMemberForUndo = null;
+            }
+            document.getElementById('undoModal').style.display = 'none';
+          });
+
+          // Generic alert modal event listeners
+          document.getElementById('alertOk').addEventListener('click', function() {
+            document.getElementById('alertModal').style.display = 'none';
+          });
+
+          // Generic confirmation modal event listeners
+          document.getElementById('confirmCancel').addEventListener('click', function() {
+            currentConfirmCallback = null;
+            document.getElementById('confirmModal').style.display = 'none';
+          });
+
+          document.getElementById('confirmOk').addEventListener('click', function() {
+            if (currentConfirmCallback) {
+              currentConfirmCallback();
+              currentConfirmCallback = null;
+            }
+            document.getElementById('confirmModal').style.display = 'none';
+          });
+
+          // Action button listeners
+          document.getElementById('noChangesBtn').addEventListener('click', async function() {
+            try {
+              const reviewerName = document.getElementById('reviewerName').value.trim();
+              
+              if (!reviewerName) {
+                showAlert('Required Field', 'Please enter your name before proceeding.');
+                return;
+              }
+              
+              this.disabled = true;
+              this.textContent = 'Recording...';
+              
+              const response = await fetch('/api/dream-teams/' + workflowId + '/review', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  workflowName: teamData.workflowName,
+                  reviewerName: reviewerName,
+                  notes: 'No changes needed'
+                })
+              });
+              
+              const result = await response.json();
+              
+              if (result.success) {
+                // Refresh the page to show updated last reviewed date
+                window.location.reload();
+              } else {
+                showAlert('Error', result.error);
+              }
+            } catch (error) {
+              console.error('Error recording review:', error);
+              showAlert('Error', 'Failed to record review');
+            } finally {
+              this.disabled = false;
+              this.textContent = 'No Changes';
+            }
+          });
+
+          document.getElementById('confirmChangesBtn').addEventListener('click', async function() {
+            try {
+              const reviewerName = document.getElementById('reviewerName').value.trim();
+              
+              if (!reviewerName) {
+                showAlert('Required Field', 'Please enter your name before proceeding.');
+                return;
+              }
+              
+              if (pendingRemovals.length === 0) {
+                showAlert('No Selection', 'No removals selected. Please select members to remove or click "No Changes".');
+                return;
+              }
+              
+              this.disabled = true;
+              this.textContent = 'Processing...';
+              
+              const response = await fetch('/api/dream-teams/' + workflowId + '/removals', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  workflowName: teamData.workflowName,
+                  reviewerName: reviewerName,
+                  removals: pendingRemovals.map(function(r) {
+                    return {
+                      personId: r.memberId,
+                      firstName: r.memberName.split(' ')[0],
+                      lastName: r.memberName.split(' ').slice(1).join(' '),
+                      reason: r.reason
+                    };
+                  })
+                })
+              });
+              
+              const result = await response.json();
+              
+              if (result.success) {
+                // Refresh the page to show updated data
+                window.location.reload();
+              } else {
+                showAlert('Error', result.error);
+              }
+            } catch (error) {
+              console.error('Error recording removals:', error);
+              showAlert('Error', 'Failed to record removals');
+            } finally {
+              this.disabled = false;
+              this.textContent = 'Confirm Changes';
+            }
+          });
+
+          // Load team roster on page load
+          loadTeamRoster();
+        </script>
+      </body>
+      </html>
+    `;
+    
+    res.send(html);
+  } catch (error) {
+    console.error('Error rendering team roster page:', error);
+    res.status(500).send('Error loading page');
+  }
+});
+
+app.get('/life-groups/groups/:groupId/attendance', async (req, res) => {
   try {
     const { groupId } = req.params;
     const showAllEvents = req.query.showAll === 'true';
@@ -4342,6 +7557,193 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
               font-family: Arial, sans-serif;
               margin: 20px;
               background-color: #f5f5f5;
+              transition: background-color 0.3s ease;
+            }
+            
+            /* Dark mode styles */
+            body.dark-mode {
+              background-color: #1a1a1a;
+              color: #ffffff;
+            }
+            
+            body.dark-mode .container {
+              background-color: #2d2d2d;
+              color: #ffffff;
+            }
+            
+            body.dark-mode h1,
+            body.dark-mode h2 {
+              color: #ffffff;
+            }
+            
+            body.dark-mode .stats-card {
+              background-color: #3d3d3d;
+              color: #ffffff;
+            }
+            
+            body.dark-mode .stats-note {
+              color: #cccccc;
+            }
+            
+            body.dark-mode .stat-item {
+              background-color: #2d2d2d;
+              color: #ffffff;
+            }
+            
+            body.dark-mode .stat-value {
+              color: #ffffff;
+            }
+            
+            body.dark-mode .stat-label {
+              color: #cccccc;
+            }
+            
+            body.dark-mode .chart-container {
+              background-color: #2d2d2d;
+            }
+            
+            body.dark-mode .chart-loading {
+              color: #cccccc;
+            }
+            
+            body.dark-mode .back-button {
+              background-color: #495057;
+              color: #ffffff;
+            }
+            
+            body.dark-mode .back-button:hover {
+              background-color: #6c757d;
+            }
+            
+            body.dark-mode .toggle-container {
+              background-color: #3d3d3d;
+            }
+            
+            body.dark-mode .toggle-label {
+              color: #cccccc;
+            }
+            
+            body.dark-mode .date-range {
+              color: #cccccc;
+            }
+            
+            body.dark-mode .event-item {
+              background-color: #3d3d3d;
+              color: #ffffff;
+            }
+            
+            body.dark-mode .event-date {
+              color: #cccccc;
+            }
+            
+            body.dark-mode .event-stats {
+              color: #cccccc;
+            }
+            
+            body.dark-mode .attendance-good {
+              color: #4caf50;
+            }
+            
+            body.dark-mode .attendance-warning {
+              color: #ff9800;
+            }
+            
+            body.dark-mode .attendance-poor {
+              color: #f44336;
+            }
+            
+            
+            /* Chart.js text colors for dark mode */
+            body.dark-mode canvas {
+              filter: brightness(1.3) contrast(1.1);
+            }
+            
+            /* Table styling for dark mode */
+            body.dark-mode table {
+              color: #ffffff;
+            }
+            
+            body.dark-mode th {
+              background-color: #3d3d3d;
+              color: #ffffff;
+            }
+            
+            body.dark-mode td {
+              border-bottom-color: #555;
+            }
+            
+            body.dark-mode tr:hover {
+              background-color: #3d3d3d;
+            }
+            
+            body.dark-mode .canceled-event {
+              color: #aaaaaa;
+            }
+            
+            body.dark-mode .canceled-label {
+              color: #f44336;
+            }
+            
+            /* Back button should always use button styling, not link styling */
+            body.dark-mode .back-button {
+              background-color: #495057 !important;
+              color: #ffffff !important;
+              text-decoration: none !important;
+            }
+            
+            body.dark-mode .back-button:hover {
+              background-color: #6c757d !important;
+              color: #ffffff !important;
+              text-decoration: none !important;
+            }
+            
+            body.dark-mode .back-button:visited {
+              background-color: #495057 !important;
+              color: #ffffff !important;
+              text-decoration: none !important;
+            }
+            
+            /* Softer link colors for better readability - but not for buttons */
+            body.dark-mode a:not(.back-button) {
+              color: #87ceeb !important; /* Soft sky blue */
+            }
+            
+            body.dark-mode a:not(.back-button):visited {
+              color: #dda0dd !important; /* Soft purple for visited links */
+            }
+            
+            body.dark-mode a:not(.back-button):hover {
+              color: #b0e0e6 !important; /* Lighter blue on hover */
+              text-decoration: underline;
+            }
+            
+            /* FOUC Prevention - Temporary loading styles */
+            html.dark-mode-loading {
+              background-color: #1a1a1a !important;
+            }
+            
+            html.dark-mode-loading body {
+              background-color: #1a1a1a !important;
+              color: #ffffff !important;
+            }
+            
+            html.dark-mode-loading .container {
+              background-color: #2d2d2d !important;
+              color: #ffffff !important;
+            }
+            
+            html.dark-mode-loading h1,
+            html.dark-mode-loading h2 {
+              color: #ffffff !important;
+            }
+            
+            html.dark-mode-loading canvas {
+              filter: brightness(1.3) contrast(1.1) !important;
+            }
+            
+            html.dark-mode-loading .back-button {
+              background-color: #495057 !important;
+              color: #ffffff !important;
             }
             .container {
               max-width: 1200px;
@@ -4447,7 +7849,7 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
             .attendance-poor {
               color: #dc3545;
             }
-            .back-link {
+            .back-button {
               display: inline-flex;
               align-items: center;
               gap: 8px;
@@ -4460,7 +7862,7 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
               margin-bottom: 20px;
               transition: background-color 0.3s ease;
             }
-            .back-link:hover {
+            .back-button:hover {
               background-color: #5a6268;
             }
             .visitor-count {
@@ -4565,10 +7967,20 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
               border: 1px solid #ddd;
             }
           </style>
+          <script>
+            // Apply dark mode immediately to prevent flash
+            if (localStorage.getItem('darkMode') === 'true') {
+              document.documentElement.classList.add('dark-mode-loading');
+            }
+          </script>
         </head>
         <body>
           <div class="container">
-            <a href="/" class="back-link">← Back to Groups</a>
+            <a href="/life-groups" class="back-button">
+              <span>←</span>
+              <span>Back to Groups</span>
+            </a>
+
             <h1>${group.attributes.name}</h1>
             
             <div class="stats-card">
@@ -4891,6 +8303,19 @@ app.get('/groups/:groupId/attendance', async (req, res) => {
                     }
                   }
                 }
+              }
+            });
+            
+            // Dark mode functionality
+            document.addEventListener('DOMContentLoaded', function() {
+              // Remove temporary dark mode loading class
+              document.documentElement.classList.remove('dark-mode-loading');
+              
+              // Initialize dark mode state from localStorage
+              const isDarkMode = localStorage.getItem('darkMode') === 'true';
+              
+              if (isDarkMode) {
+                document.body.classList.add('dark-mode');
               }
             });
           </script>

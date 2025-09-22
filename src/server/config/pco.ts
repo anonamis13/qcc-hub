@@ -854,4 +854,333 @@ export const getGroupMemberships = async (groupId: string, forceRefresh: boolean
   });
 };
 
+// PCO People API interfaces for Dream Teams
+interface PCOWorkflowCategory {
+  type: string;
+  id: string;
+  attributes: {
+    name: string;
+    created_at: string;
+    updated_at: string;
+  };
+}
+
+interface PCOWorkflow {
+  type: string;
+  id: string;
+  attributes: {
+    name: string;
+    created_at: string;
+    updated_at: string;
+    my_ready_card_count: number;
+    total_ready_card_count: number;
+    completed_card_count: number;
+    total_card_count: number;
+  };
+  relationships: {
+    category: {
+      data: {
+        type: string;
+        id: string;
+      };
+    };
+  };
+}
+
+interface PCOWorkflowCard {
+  type: string;
+  id: string;
+  attributes: {
+    created_at: string;
+    updated_at: string;
+    moved_to_step_at: string;
+    completed_at?: string;
+    flagged_for_notification_at?: string;
+    removed_at?: string;
+    stage: string;
+  };
+  relationships: {
+    person: {
+      data: {
+        type: string;
+        id: string;
+      };
+    };
+    current_step: {
+      data: {
+        type: string;
+        id: string;
+      } | null;
+    };
+    workflow: {
+      data: {
+        type: string;
+        id: string;
+      };
+    };
+  };
+}
+
+interface PCOPerson {
+  type: string;
+  id: string;
+  attributes: {
+    first_name: string;
+    last_name: string;
+    nickname?: string;
+    created_at: string;
+    updated_at: string;
+  };
+}
+
+interface PCOWorkflowCategoryResponse {
+  data: PCOWorkflowCategory[];
+  meta: {
+    total_count: number;
+    count: number;
+    next?: {
+      offset: number;
+    };
+  };
+}
+
+interface PCOWorkflowResponse {
+  data: PCOWorkflow[];
+  meta: {
+    total_count: number;
+    count: number;
+    next?: {
+      offset: number;
+    };
+  };
+}
+
+interface PCOWorkflowCardResponse {
+  data: PCOWorkflowCard[];
+  included?: PCOPerson[];
+  meta: {
+    total_count: number;
+    count: number;
+    next?: {
+      offset: number;
+    };
+  };
+  links?: {
+    next?: string;
+  };
+}
+
+// Get all workflow categories to find "Dream Team" category
+export const getWorkflowCategories = async (forceRefresh: boolean = false) => {
+  const cacheKey = 'workflow_categories';
+  const cachedCategories = cache.get<PCOWorkflowCategory[]>(cacheKey);
+  
+  if (cachedCategories && !forceRefresh) {
+    return cachedCategories;
+  }
+
+  return retryWithBackoff(async () => {
+    try {
+      const response = await pcoClient.get<PCOWorkflowCategoryResponse>('/people/v2/workflow_categories', {
+        params: {
+          per_page: '100'
+        }
+      });
+      
+      let categories = response.data.data;
+      
+      // Handle pagination if needed
+      let offset = 100;
+      while (response.data.meta.next) {
+        await delay(100);
+        const nextResponse = await pcoClient.get<PCOWorkflowCategoryResponse>('/people/v2/workflow_categories', {
+          params: {
+            per_page: '100',
+            offset: offset
+          }
+        });
+        categories = [...categories, ...nextResponse.data.data];
+        offset += 100;
+        if (!nextResponse.data.meta.next) break;
+      }
+      
+      cache.set(cacheKey, categories);
+      return categories;
+    } catch (error) {
+      console.error('Error fetching workflow categories:', error);
+      throw error;
+    }
+  });
+};
+
+// Get workflows for a specific category (Dream Team)
+export const getWorkflowsInCategory = async (categoryId: string, forceRefresh: boolean = false) => {
+  const cacheKey = `workflows_category_${categoryId}`;
+  const cachedWorkflows = cache.get<PCOWorkflow[]>(cacheKey);
+  
+  if (cachedWorkflows && !forceRefresh) {
+    return cachedWorkflows;
+  }
+
+  return retryWithBackoff(async () => {
+    try {
+      const response = await pcoClient.get<PCOWorkflowResponse>(`/people/v2/workflows`, {
+        params: {
+          'where[workflow_category_id]': categoryId,
+          per_page: '100'
+        }
+      });
+      
+      let workflows = response.data.data;
+      
+      // Handle pagination if needed
+      let offset = 100;
+      while (response.data.meta.next) {
+        await delay(100);
+        const nextResponse = await pcoClient.get<PCOWorkflowResponse>(`/people/v2/workflows`, {
+          params: {
+            'where[workflow_category_id]': categoryId,
+            per_page: '100',
+            offset: offset
+          }
+        });
+        workflows = [...workflows, ...nextResponse.data.data];
+        offset += 100;
+        if (!nextResponse.data.meta.next) break;
+      }
+      
+      cache.set(cacheKey, workflows);
+      return workflows;
+    } catch (error) {
+      console.error(`Error fetching workflows for category ${categoryId}:`, error);
+      throw error;
+    }
+  });
+};
+
+// Get workflow cards (people) for a specific workflow
+export const getWorkflowCards = async (workflowId: string, forceRefresh: boolean = false) => {
+  const cacheKey = `workflow_cards_${workflowId}`;
+  const cachedCards = cache.get<{cards: PCOWorkflowCard[], people: PCOPerson[]}>(cacheKey);
+  
+  if (cachedCards && !forceRefresh) {
+    return cachedCards;
+  }
+
+  return retryWithBackoff(async () => {
+    try {
+      const response = await pcoClient.get<PCOWorkflowCardResponse>(`/people/v2/workflows/${workflowId}/cards`, {
+        params: {
+          include: 'person',
+          per_page: '100'
+          // Get all cards - we'll filter out 'removed' ones after fetching
+        }
+      });
+      
+      let cards = response.data.data;
+      let people = response.data.included?.filter(item => item.type === 'Person') as PCOPerson[] || [];
+      
+      // Handle pagination
+      let nextPage = response.data.links?.next;
+      while (nextPage) {
+        await delay(100);
+        
+        const nextResponse = await pcoClient.get<PCOWorkflowCardResponse>(nextPage);
+        cards = [...cards, ...nextResponse.data.data];
+        if (nextResponse.data.included) {
+          const nextPeople = nextResponse.data.included.filter(item => item.type === 'Person') as PCOPerson[];
+          people = [...people, ...nextPeople];
+        }
+        nextPage = nextResponse.data.links?.next;
+      }
+      
+      const result = { cards, people };
+      cache.set(cacheKey, result);
+      return result;
+    } catch (error) {
+      console.error(`Error fetching workflow cards for workflow ${workflowId}:`, error);
+      throw error;
+    }
+  });
+};
+
+// Helper function to get Dream Team workflows with roster data
+export const getDreamTeamWorkflows = async (forceRefresh: boolean = false) => {
+  try {
+    // Use the specific Dream Team category ID
+    const dreamTeamCategoryId = '11927';
+    
+    // Workflow IDs to exclude (not actual teams)
+    const excludedWorkflowIds = ['568000' /*,'610176'*/]; // Dream Team Onboarding, Trev Test
+    
+    // Get all workflows in the Dream Team category
+    const allWorkflows = await getWorkflowsInCategory(dreamTeamCategoryId, forceRefresh);
+    
+    // Filter out excluded workflows
+    const workflows = allWorkflows.filter(workflow => !excludedWorkflowIds.includes(workflow.id));
+    
+    // Get roster data for each workflow
+    const workflowsWithRosters = await Promise.all(
+      workflows.map(async (workflow) => {
+        try {
+          const { cards, people } = await getWorkflowCards(workflow.id, forceRefresh);
+          
+          // Create a person lookup map
+          const personMap = new Map();
+          people.forEach(person => {
+            personMap.set(person.id, person);
+          });
+          
+          // Filter to only current team members (not removed from team)
+          const currentMembers = cards.filter(card => 
+            // Include members who are in active workflow steps or completed
+            // Exclude members who have been "removed" from the workflow
+            card.attributes.stage !== 'removed'
+          );
+          
+          const roster = currentMembers.map(card => {
+            const person = personMap.get(card.relationships.person.data.id);
+            return {
+              cardId: card.id,
+              personId: card.relationships.person.data.id,
+              firstName: person?.attributes.first_name || 'Unknown',
+              lastName: person?.attributes.last_name || '',
+              nickname: person?.attributes.nickname,
+              joinedAt: card.attributes.created_at,
+              movedToStepAt: card.attributes.moved_to_step_at,
+              stage: card.attributes.stage
+            };
+          }).sort((a, b) => a.firstName.localeCompare(b.firstName));
+          
+          return {
+            id: workflow.id,
+            name: workflow.attributes.name,
+            totalCards: workflow.attributes.total_card_count,
+            readyCards: workflow.attributes.total_ready_card_count,
+            completedCards: workflow.attributes.completed_card_count,
+            lastUpdated: workflow.attributes.updated_at,
+            roster: roster
+          };
+        } catch (error) {
+          console.error(`Error fetching roster for workflow ${workflow.id}:`, error);
+          return {
+            id: workflow.id,
+            name: workflow.attributes.name,
+            totalCards: workflow.attributes.total_card_count,
+            readyCards: workflow.attributes.total_ready_card_count,
+            completedCards: workflow.attributes.completed_card_count,
+            lastUpdated: workflow.attributes.updated_at,
+            roster: []
+          };
+        }
+      })
+    );
+    
+    return workflowsWithRosters;
+  } catch (error) {
+    console.error('Error fetching Dream Team workflows:', error);
+    throw error;
+  }
+};
+
 export default pcoClient; 
