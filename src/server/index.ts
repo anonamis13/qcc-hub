@@ -1693,6 +1693,11 @@ app.get('/life-groups/membership-changes', async (req, res) => {
               color: #cccccc !important;
             }
             
+            /* Lighten up member names specifically for better readability */
+            body.dark-mode #contentContainer span[style*="font-weight: 500"] {
+              color: #ffffff !important;
+            }
+            
             body.dark-mode #contentContainer div[style*="background-color: rgba(40, 167, 69, 0.1)"] {
               background-color: rgba(40, 167, 69, 0.2) !important;
             }
