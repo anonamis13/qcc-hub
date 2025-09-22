@@ -2,10 +2,11 @@ Users: team leaders and directors
 
 
 Upcoming Features:
-See if there's a better way to track when a member joined the workflow
-Notate members joined within 30 days
-Link to JOIN A TEAM form for adding new members
 
 
+?See if there's a better way to track when a member joined the workflow
 
 Completed Features:
+Notate members joined within 30 days
+Link to JOIN A TEAM form for adding new members
+Star teams to stay at the top

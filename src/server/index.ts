@@ -1357,6 +1357,57 @@ app.post('/api/dream-teams/:workflowId/removals', async (req, res) => {
 });
 
 // Undo removal endpoint
+// Favorite/unfavorite a team
+app.post('/api/dream-teams/:workflowId/favorite', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    const { userName, workflowName } = req.body;
+
+    if (!userName || !workflowName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields'
+      });
+    }
+
+    const isFavorited = dreamTeamsTracking.toggleFavorite(workflowId, workflowName, userName);
+    
+    res.json({
+      success: true,
+      data: {
+        isFavorited
+      }
+    });
+  } catch (error) {
+    console.error('Error toggling favorite:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to toggle favorite'
+    });
+  }
+});
+
+// Get favorite teams for a user
+app.get('/api/dream-teams/favorites/:userName', async (req, res) => {
+  try {
+    const { userName } = req.params;
+    const favorites = dreamTeamsTracking.getFavorites(userName);
+    
+    res.json({
+      success: true,
+      data: {
+        favorites
+      }
+    });
+  } catch (error) {
+    console.error('Error getting favorites:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get favorites'
+    });
+  }
+});
+
 app.post('/api/dream-teams/:workflowId/undo-removal', async (req, res) => {
   try {
     const { workflowId } = req.params;
@@ -5589,6 +5640,15 @@ app.get('/dream-teams', async (req, res) => {
             border-color: #555;
           }
           
+          body.dark-mode .team-card .star-button {
+            color: #e0e0e0;
+          }
+          
+          body.dark-mode .team-card .star-button.favorited {
+            color: #ffc107;
+            text-shadow: 0 0 3px rgba(0,0,0,0.4);
+          }
+          
           body.dark-mode .team-card.needs-review {
             border-left: 4px solid #ffc107;
           }
@@ -5733,6 +5793,29 @@ app.get('/dream-teams', async (req, res) => {
           }
           .team-card:hover {
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+          }
+          .team-card .star-button {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 5px;
+            line-height: 1;
+            transition: transform 0.2s ease;
+            z-index: 10;
+          }
+          .team-card .star-button:hover {
+            transform: scale(1.2);
+          }
+          .team-card .star-button.favorited {
+            color: #ffc107;
+            text-shadow: 0 0 3px rgba(0,0,0,0.2);
+          }
+          .team-card {
+            position: relative;
           }
           .team-card.needs-review {
             border-left: 4px solid #ffc107;
@@ -5892,6 +5975,52 @@ app.get('/dream-teams', async (req, res) => {
 
         <script>
           let teamsData = [];
+          let favorites = new Set();
+
+          // Load favorites from localStorage
+          function loadFavorites() {
+            try {
+              const savedFavorites = localStorage.getItem('dreamTeamFavorites');
+              if (savedFavorites) {
+                favorites = new Set(JSON.parse(savedFavorites));
+              }
+            } catch (error) {
+              console.error('Error loading favorites from localStorage:', error);
+              favorites = new Set();
+            }
+          }
+
+          // Save favorites to localStorage
+          function saveFavorites() {
+            try {
+              localStorage.setItem('dreamTeamFavorites', JSON.stringify([...favorites]));
+            } catch (error) {
+              console.error('Error saving favorites to localStorage:', error);
+            }
+          }
+
+          function toggleFavorite(event, teamId, teamName) {
+            event.stopPropagation(); // Prevent opening the team page
+            
+            const button = event.target;
+            const isFavorited = favorites.has(teamId);
+            
+            if (isFavorited) {
+              favorites.delete(teamId);
+            } else {
+              favorites.add(teamId);
+            }
+            
+            // Update UI
+            button.classList.toggle('favorited', !isFavorited);
+            button.textContent = !isFavorited ? '★' : '☆';
+            
+            // Save to localStorage
+            saveFavorites();
+            
+            // Re-sort teams to move favorites to top
+            displayTeams();
+          }
 
           async function loadTeams(forceRefresh = false) {
             const loadingContainer = document.getElementById('loadingContainer');
@@ -5914,6 +6043,9 @@ app.get('/dream-teams', async (req, res) => {
               }
 
               teamsData = result.data;
+              
+              // Load favorites from localStorage
+              loadFavorites();
               displayTeams();
 
               // Hide loading, show teams
@@ -5938,7 +6070,20 @@ app.get('/dream-teams', async (req, res) => {
               return;
             }
 
-            container.innerHTML = teamsData.map(team => {
+            // Sort teams: favorites first, then by status and name
+            const sortedTeams = [...teamsData].sort((a, b) => {
+              const aFavorited = favorites.has(a.id);
+              const bFavorited = favorites.has(b.id);
+              
+              // First sort by favorite status
+              if (aFavorited && !bFavorited) return -1;
+              if (!aFavorited && bFavorited) return 1;
+              
+              // Then by name
+              return a.name.localeCompare(b.name);
+            });
+
+            container.innerHTML = sortedTeams.map(team => {
               // Determine status based on actual review data
               let statusClass = 'old';
               let statusText = 'Needs review';
@@ -5965,9 +6110,15 @@ app.get('/dream-teams', async (req, res) => {
                 statusText += ' (' + team.pendingRemovals + ' pending)';
               }
 
+              // Check if team is favorited
+              const isFavorited = favorites.has(team.id);
+              
               return \`
-                <div class="team-card \${statusClass}" onclick="openTeam('\${team.id}', '\${team.name}')">
-                  <div class="team-name">
+                <div class="team-card \${statusClass}" data-team-id="\${team.id}" data-team-name="\${team.name}">
+                  <button class="star-button \${isFavorited ? 'favorited' : ''}" onclick="toggleFavorite(event, '\${team.id}', '\${team.name}')">
+                    \${isFavorited ? '★' : '☆'}
+                  </button>
+                  <div class="team-name" onclick="openTeam('\${team.id}', '\${team.name}')">
                     <span class="status-indicator status-\${statusClass}"></span>
                     \${team.name}
                   </div>
@@ -6498,6 +6649,11 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           body.dark-mode .team-info h1 {
             color: #ffffff;
           }
+
+          body.dark-mode .page-instructions {
+            color: #e3f2fd;
+            background-color: #2d3436;
+          }
           
           body.dark-mode .pending-count {
             background-color: #856404;
@@ -6567,6 +6723,64 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           
           body.dark-mode .join-date {
             color: #cccccc;
+          }
+          
+          body.dark-mode .new-member-indicator {
+            background-color: #1e7e34;
+            color: #d4edda;
+            border-color: #28a745;
+          }
+          
+          body.dark-mode .add-member-button {
+            background-color: #1e7e34;
+            color: #d4edda;
+            border-color: #28a745;
+          }
+          
+          body.dark-mode .add-member-button:hover {
+            background-color: #218838;
+          }
+          
+          body.dark-mode .add-member-info {
+            background-color: #1a3547;
+            border-color: #2a4e6a;
+            border-left-color: #0d6efd;
+            color: #e3f2fd;
+          }
+          
+          body.dark-mode .add-member-info h3 {
+            color: #4fc3f7;
+          }
+          
+          body.dark-mode .add-member-info p {
+            color: #e3f2fd;
+          }
+          
+          body.dark-mode .add-member-info a {
+            color: #4fc3f7;
+          }
+          
+          body.dark-mode .add-member-info a:hover {
+            color: #81d4fa;
+          }
+          
+          body.dark-mode .add-member-info .link-description {
+            color: #b3e5fc;
+          }
+          
+          body.dark-mode .copy-link-btn {
+            background-color: #2a4e6a;
+            color: #e3f2fd;
+            border-color: #3d6c94;
+          }
+          
+          body.dark-mode .copy-link-btn:hover {
+            background-color: #3d6c94;
+          }
+          
+          body.dark-mode .copy-link-btn.copied {
+            background-color: #0d6efd;
+            border-color: #0a58ca;
           }
           
           body.dark-mode .past-members h3 {
@@ -6640,6 +6854,17 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           .team-info h1 {
             color: #333;
             margin-bottom: 8px;
+          }
+          .page-instructions {
+            color: #495057;
+            font-size: 0.95em;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 12px 16px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
           }
           .pending-count {
             color: #856404;
@@ -6774,6 +6999,123 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           .join-date {
             color: #666;
             font-size: 0.9em;
+          }
+          .new-member-indicator {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.75em;
+            font-weight: 600;
+            margin-left: 8px;
+            cursor: help;
+          }
+          .add-member-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-bottom: 20px;
+          }
+          .add-member-button:hover {
+            background-color: #218838;
+            transform: translateY(-1px);
+          }
+          .add-member-button:active {
+            transform: translateY(0);
+          }
+          .add-member-info {
+            display: none;
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 25px;
+            border-left: 4px solid #17a2b8;
+            animation: slideDown 0.3s ease;
+          }
+          .add-member-info.visible {
+            display: block;
+          }
+          @keyframes slideDown {
+            from {
+              opacity: 0;
+              transform: translateY(-10px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
+          }
+          .add-member-info h3 {
+            margin: 0 0 12px 0;
+            color: #0c5460;
+            font-size: 1.2em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          .add-member-info p {
+            margin: 0 0 15px 0;
+            color: #0c5460;
+            line-height: 1.5;
+          }
+          .add-member-info .links {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+          }
+          .add-member-info a {
+            color: #007bff;
+            text-decoration: none;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+          }
+          .add-member-info a:hover {
+            text-decoration: underline;
+            color: #0056b3;
+          }
+          .add-member-info .link-description {
+            font-size: 0.9em;
+            color: #6c757d;
+            margin-left: 20px;
+          }
+          .add-member-info .link-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          .copy-link-btn {
+            padding: 4px 8px;
+            font-size: 12px;
+            background-color: #e9ecef;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            color: #495057;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+          }
+          .copy-link-btn:hover {
+            background-color: #dee2e6;
+          }
+          .copy-link-btn.copied {
+            background-color: #28a745;
+            border-color: #28a745;
+            color: white;
           }
           .remove-checkbox {
             width: 24px;
@@ -7010,6 +7352,9 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           </div>
           
           <div id="rosterContainer" style="display: none;">
+            <div class="page-instructions">
+              Review your team roster below, mark members for removal if needed, and the Admin Team will make changes before next month
+            </div>
             <div class="roster-section">
               <div class="roster-header">
                 <h2>Current Members <span class="member-count" id="memberCount">0</span></h2>
@@ -7023,6 +7368,42 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
                   </select>
                 </div>
               </div>
+              
+              <!-- Add Member Button & Info Box -->
+              <button class="add-member-button" id="addMemberBtn">
+                Add A Member
+              </button>
+              <div class="add-member-info" id="addMemberInfo">
+                <h3>
+                  Add A Member
+                </h3>
+                <p>Want to add someone to this team? Here's what we recommend!</p>
+                <div class="links">
+                  <div>
+                    <div class="link-row">
+                      <a href="https://queencitypeople-forms.churchcenter.com/people/forms/69044" target="_blank">
+                        Join A Team Form
+                      </a>
+                      <button class="copy-link-btn" data-link="https://queencitypeople-forms.churchcenter.com/people/forms/69044">
+                        Copy Link
+                      </button>
+                    </div>
+                    <div class="link-description">Send this link to anyone who wants to join the team</div>
+                  </div>
+                  <div>
+                    <div class="link-row">
+                      <a href="https://queencitypeople.com/dreamteam" target="_blank">
+                        Queen City People Website Dream Team Page
+                      </a>
+                      <button class="copy-link-btn" data-link="https://queencitypeople.com/dreamteam">
+                        Copy Link
+                      </button>
+                    </div>
+                    <div class="link-description">General information about joining Dream Teams</div>
+                  </div>
+                </div>
+              </div>
+              
               <div class="member-list" id="memberList">
                 <!-- Members will be loaded here -->
               </div>
@@ -7202,8 +7583,17 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
                 year: 'numeric'
               });
               
+              // Check if member joined within last 30 days
+              const thirtyDaysAgo = new Date();
+              thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+              const memberJoinDate = new Date(member.joinedAt);
+              const isNewMember = memberJoinDate >= thirtyDaysAgo;
+              
               const pendingIndicator = member.markedForRemoval ? 
                 '<span class="pending-removal-indicator" title="Pending removal: ' + (member.removalReason || 'No reason provided') + '">Pending Removal</span>' : '';
+              
+              const newMemberIndicator = isNewMember ? 
+                '<span class="new-member-indicator" title="Joined within the last 30 days">New Member</span>' : '';
               
               const removeButton = member.markedForRemoval ? 
                 '<div class="undo-button" data-member-id="' + member.personId + '" data-member-name="' + member.firstName + ' ' + member.lastName + '" title="Click to undo removal">Undo</div>' :
@@ -7212,7 +7602,7 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
               return '<div class="member-item" data-member-id="' + member.personId + '">' +
                        '<div class="member-info">' +
                          '<div class="member-name">' + member.firstName + ' ' + member.lastName + '</div>' +
-                         '<div class="join-date">' + joinDate + ' ' + pendingIndicator + '</div>' +
+                         '<div class="join-date">' + joinDate + ' ' + newMemberIndicator + ' ' + pendingIndicator + '</div>' +
                        '</div>' +
                        removeButton +
                      '</div>';
@@ -7536,6 +7926,43 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
               this.disabled = false;
               this.textContent = 'Confirm Changes';
             }
+          });
+
+          // Add Member Info Box toggle functionality
+          document.getElementById('addMemberBtn').addEventListener('click', function() {
+            const infoBox = document.getElementById('addMemberInfo');
+            infoBox.classList.toggle('visible');
+            
+            // Change button text based on state
+            if (infoBox.classList.contains('visible')) {
+              this.innerHTML = 'Hide';
+            } else {
+              this.innerHTML = 'Add A Member';
+            }
+          });
+
+          // Copy link button functionality
+          document.querySelectorAll('.copy-link-btn').forEach(button => {
+            button.addEventListener('click', async function() {
+              const link = this.dataset.link;
+              try {
+                await navigator.clipboard.writeText(link);
+                
+                // Visual feedback
+                const originalText = this.innerHTML;
+                this.innerHTML = '<span>✓</span>Copied!';
+                this.classList.add('copied');
+                
+                // Reset after 2 seconds
+                setTimeout(() => {
+                  this.innerHTML = originalText;
+                  this.classList.remove('copied');
+                }, 2000);
+              } catch (err) {
+                console.error('Failed to copy link:', err);
+                alert('Failed to copy link. Please try again.');
+              }
+            });
           });
 
           // Load team roster on page load

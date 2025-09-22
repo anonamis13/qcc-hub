@@ -769,5 +769,75 @@ export const dreamTeamsTracking = {
       console.error(`Failed to undo removal for member ${memberId} in workflow ${workflowId}:`, error);
       throw error;
     }
+  },
+
+  // Favorite/unfavorite a team
+  toggleFavorite: (workflowId: string, workflowName: string, userName: string): boolean => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      
+      // Check if already favorited
+      const checkStmt = db.prepare('SELECT id FROM dream_team_favorites WHERE workflow_id = ? AND user_name = ?');
+      const existing = checkStmt.get(workflowId, userName);
+      
+      if (existing) {
+        // Remove favorite
+        const deleteStmt = db.prepare('DELETE FROM dream_team_favorites WHERE workflow_id = ? AND user_name = ?');
+        deleteStmt.run(workflowId, userName);
+        return false; // No longer favorited
+      } else {
+        // Add favorite
+        const insertStmt = db.prepare(`
+          INSERT INTO dream_team_favorites 
+          (workflow_id, workflow_name, user_name, timestamp)
+          VALUES (?, ?, ?, ?)
+        `);
+        insertStmt.run(workflowId, workflowName, userName, timestamp);
+        return true; // Now favorited
+      }
+    } catch (error) {
+      console.error(`Failed to toggle favorite for workflow ${workflowId}:`, error);
+      throw error;
+    }
+  },
+
+  // Get favorite teams for a user
+  getFavorites: (userName: string): Array<{
+    workflowId: string;
+    workflowName: string;
+    timestamp: number;
+  }> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT workflow_id as workflowId, workflow_name as workflowName, timestamp
+        FROM dream_team_favorites 
+        WHERE user_name = ?
+        ORDER BY timestamp DESC
+      `);
+      
+      return stmt.all(userName) as Array<{
+        workflowId: string;
+        workflowName: string;
+        timestamp: number;
+      }>;
+    } catch (error) {
+      console.error(`Failed to get favorites for user ${userName}:`, error);
+      return [];
+    }
+  },
+
+  // Check if a team is favorited by a user
+  isFavorited: (workflowId: string, userName: string): boolean => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare('SELECT id FROM dream_team_favorites WHERE workflow_id = ? AND user_name = ?');
+      const result = stmt.get(workflowId, userName);
+      return !!result;
+    } catch (error) {
+      console.error(`Failed to check favorite status for workflow ${workflowId}:`, error);
+      return false;
+    }
   }
 }; 
