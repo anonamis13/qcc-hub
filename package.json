@@ -1,7 +1,7 @@
 {
-  "name": "church-life-groups",
+  "name": "qcc-hub",
   "version": "1.0.0",
-  "description": "Church Life Groups Attendance and Membership Tracking System",
+  "description": "Queen City Church Administrative Hub - Life Groups, Dream Teams, and Management Tools",
   "main": "dist/server/index.js",
   "type": "module",
   "engines": {

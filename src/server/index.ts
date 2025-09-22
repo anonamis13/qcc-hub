@@ -1487,7 +1487,7 @@ app.get('/life-groups/membership-changes', async (req, res) => {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Recent Membership Changes - Queen City Church</title>
+          <title>Recent Membership Changes - QCC Hub</title>
           <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
           <style>
             /* Fix radio buttons and checkboxes to show blue when checked */
@@ -1669,6 +1669,36 @@ app.get('/life-groups/membership-changes', async (req, res) => {
               background-color: #155724;
               color: #d4edda;
               border-color: #28a745;
+            }
+            
+            /* Dark mode styles for membership changes content */
+            body.dark-mode #contentContainer div[style*="background-color: #f8f9fa"] {
+              background-color: #3d3d3d !important;
+            }
+            
+            body.dark-mode #contentContainer div[style*="background-color: white"] {
+              background-color: #2d2d2d !important;
+              color: #ffffff !important;
+            }
+            
+            body.dark-mode #contentContainer div[style*="color: #666"] {
+              color: #cccccc !important;
+            }
+            
+            body.dark-mode #contentContainer div[style*="color: #333"] {
+              color: #ffffff !important;
+            }
+            
+            body.dark-mode #contentContainer span[style*="color: #666"] {
+              color: #cccccc !important;
+            }
+            
+            body.dark-mode #contentContainer div[style*="background-color: rgba(40, 167, 69, 0.1)"] {
+              background-color: rgba(40, 167, 69, 0.2) !important;
+            }
+            
+            body.dark-mode #contentContainer div[style*="background-color: rgba(220, 53, 69, 0.1)"] {
+              background-color: rgba(220, 53, 69, 0.2) !important;
             }
             
             /* FOUC Prevention - Temporary loading styles */
@@ -1956,7 +1986,7 @@ app.get('/home-page', async (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>QCC Health Report</title>
+      <title>QCC Hub</title>
       <style>
         body {
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -2130,7 +2160,7 @@ app.get('/home-page', async (req, res) => {
         <img src="/QC_Mark_White_translu.webp" alt="Queen City Church Logo" class="logo">
       </div>
       <div class="container">
-        <h1>QCC Health Reports</h1>
+        <h1>QCC Hub</h1>
         <p class="subtitle">Choose an application</p>
         
         <a href="/life-groups" class="app-button">
@@ -5521,7 +5551,7 @@ app.get('/dream-teams', async (req, res) => {
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Queen City Church - Dream Teams Roster Manager</title>
+        <title>Queen City Church - Dream Team Health Report</title>
         <style>
           body {
             font-family: Arial, sans-serif;
@@ -6436,7 +6466,7 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Queen City Church - Team Roster Management</title>
+        <title>Team Roster Management - QCC Hub</title>
         <style>
           body {
             font-family: Arial, sans-serif;

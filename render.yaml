@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: qcc-life-group-health-report
+    name: qcc-hub
     env: node
     nodeVersion: 18
     buildCommand: npm ci --include=dev && npm run build
