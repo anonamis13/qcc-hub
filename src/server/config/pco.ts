@@ -1111,7 +1111,7 @@ export const getDreamTeamWorkflows = async (forceRefresh: boolean = false) => {
     const dreamTeamCategoryId = '11927';
     
     // Workflow IDs to exclude (not actual teams)
-    const excludedWorkflowIds = ['568000' /*,'610176'*/]; // Dream Team Onboarding, Trev Test
+    const excludedWorkflowIds = ['568000' ,'610176']; // Dream Team Onboarding, Trev Test
     
     // Get all workflows in the Dream Team category
     const allWorkflows = await getWorkflowsInCategory(dreamTeamCategoryId, forceRefresh);
