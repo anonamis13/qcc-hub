@@ -1538,7 +1538,7 @@ app.get('/life-groups/membership-changes', async (req, res) => {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Recent Membership Changes - QCC Hub</title>
+          <title>QCC Hub - LGHR - Membership Changes</title>
           <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
           <style>
             /* Fix radio buttons and checkboxes to show blue when checked */
@@ -2043,6 +2043,7 @@ app.get('/home-page', async (req, res) => {
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>QCC Hub</title>
+      <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
       <style>
         body {
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -2272,7 +2273,7 @@ app.get('/life-groups', async (req, res) => {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Queen City Church - Life Groups Health Report</title>
+          <title>QCC Hub - LGHR</title>
           <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
           <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
           <style>
@@ -5607,7 +5608,8 @@ app.get('/dream-teams', async (req, res) => {
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Queen City Church - Dream Team Health Report</title>
+        <title>QCC Hub - DTHR</title>
+        <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
         <style>
           body {
             font-family: Arial, sans-serif;
@@ -6120,7 +6122,7 @@ app.get('/dream-teams', async (req, res) => {
               
               return \`
                 <div class="team-card \${statusClass}" data-team-id="\${team.id}" data-team-name="\${team.name}" onclick="openTeam('\${team.id}', '\${team.name}')">
-                  <button class="star-button \${isFavorited ? 'favorited' : ''}" onclick="toggleFavorite(event, '\${team.id}', '\${team.name}')">
+                  <button style="font-size: 32px;" class="star-button \${isFavorited ? 'favorited' : ''}" onclick="toggleFavorite(event, '\${team.id}', '\${team.name}')">
                     \${isFavorited ? '★' : '☆'}
                   </button>
                   <div class="team-name">
@@ -6214,7 +6216,8 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Queen City Church - Pending Dream Team Removals</title>
+      <title>QCC Hub - DTHR - Pending Removals</title>
+      <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
       <style>
         body {
           font-family: Arial, sans-serif;
@@ -6621,13 +6624,19 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
   try {
     const { workflowId } = req.params;
     
+    // Get the workflow data to get the team name
+    const dreamTeams = await getDreamTeamWorkflows();
+    const team = dreamTeams.find(t => t.id === workflowId);
+    const teamName = team ? team.name : 'Unknown Team';
+    
     const html = `
       <!DOCTYPE html>
       <html lang="en">
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Team Roster Management - QCC Hub</title>
+        <title>QCC Hub - DTHR - ${teamName}</title>
+        <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
         <style>
           body {
             font-family: Arial, sans-serif;
@@ -8000,7 +8009,7 @@ app.get('/life-groups/groups/:groupId/attendance', async (req, res) => {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>${group.attributes.name} - Attendance Report</title>
+          <title>QCC Hub - LGHR - ${group.attributes.name}: Attendance</title>
           <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
           <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
           <style>
