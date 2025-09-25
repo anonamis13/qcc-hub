@@ -5816,6 +5816,11 @@ app.get('/dream-teams', async (req, res) => {
           }
           .team-card {
             position: relative;
+            display: flex;
+            flex-direction: column;
+          }
+          .team-card > *:not(.star-button) {
+            pointer-events: none;
           }
           .team-card.needs-review {
             border-left: 4px solid #ffc107;
@@ -6114,11 +6119,11 @@ app.get('/dream-teams', async (req, res) => {
               const isFavorited = favorites.has(team.id);
               
               return \`
-                <div class="team-card \${statusClass}" data-team-id="\${team.id}" data-team-name="\${team.name}">
+                <div class="team-card \${statusClass}" data-team-id="\${team.id}" data-team-name="\${team.name}" onclick="openTeam('\${team.id}', '\${team.name}')">
                   <button class="star-button \${isFavorited ? 'favorited' : ''}" onclick="toggleFavorite(event, '\${team.id}', '\${team.name}')">
                     \${isFavorited ? '★' : '☆'}
                   </button>
-                  <div class="team-name" onclick="openTeam('\${team.id}', '\${team.name}')">
+                  <div class="team-name">
                     <span class="status-indicator status-\${statusClass}"></span>
                     \${team.name}
                   </div>

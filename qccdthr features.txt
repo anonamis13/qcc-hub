@@ -2,13 +2,11 @@ Users: team leaders and directors
 
 
 Upcoming Features:
-Make test team for TLM
 Status has a space in front of it?
 Chart for total members vs. serve attendance
 Flag for haven't served in 2 months?
 Some teams clickboxes weird
 Include favicon on all endpoints
-Create workflow for dream team leaders
 
 ?See if there's a better way to track when a member joined the workflow
 
@@ -16,3 +14,5 @@ Completed Features:
 Notate members joined within 30 days
 Link to JOIN A TEAM form for adding new members
 Star teams to stay at the top
+Create workflow for dream team leaders
+Make test team for TLM
