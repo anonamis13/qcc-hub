@@ -3,9 +3,10 @@ eventually coaches will use
 
 
 Upcoming Features:
+Lighten blue group name text in Dark Mode
 
-month-over-month and year-over-year percentage
-YA groups functionality
+?month-over-month and year-over-year percentage
+?YA groups functionality
 
 
 Completed Features:
