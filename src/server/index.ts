@@ -7671,6 +7671,20 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             }
           });
 
+          // Handle clicking outside modals to close them
+          window.addEventListener('click', function(event) {
+            const modals = document.querySelectorAll('.modal');
+            modals.forEach(function(modal) {
+              if (event.target === modal) {
+                modal.style.display = 'none';
+                // Reset any current member selections
+                currentMemberForRemoval = null;
+                currentMemberForUndo = null;
+                document.getElementById('removalReason').value = '';
+              }
+            });
+          });
+
           // Custom modal functions to replace native browser dialogs
           function showAlert(title, message) {
             document.getElementById('alertTitle').textContent = title;
