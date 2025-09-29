@@ -6604,7 +6604,7 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           const summaryText = document.getElementById('summaryText');
           
           if (totalCount > 0) {
-            summaryText.textContent = 'There ' + (totalCount === 1 ? 'is' : 'are') + ' ' + totalCount + ' member' + (totalCount === 1 ? '' : 's') + ' marked for removal who ' + (totalCount === 1 ? 'is' : 'are') + ' still active in PCO. Remove ' + (totalCount === 1 ? 'them' : 'them') + ' from the workflow in Planning Center Online, then refresh this page.';
+            summaryText.textContent = 'There ' + (totalCount === 1 ? 'is' : 'are') + ' ' + totalCount + ' member' + (totalCount === 1 ? '' : 's') + ' marked for removal who ' + (totalCount === 1 ? 'is' : 'are') + ' still in-progress in PCO. The Admin Team will remove them from the workflows in Planning Center Online, then refresh this page.';
             summary.style.display = 'block';
           } else {
             summary.style.display = 'none';
@@ -6745,9 +6745,9 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           }
           
           body.dark-mode .pending-removal-indicator {
-            background-color: #856404;
-            color: #fff3cd;
-            border-color: #ffeaa7;
+            background-color: #4e1f1b;
+            color: #ffa39e;
+            border-color: #ff7875;
           }
           
           body.dark-mode .join-date {
@@ -6881,11 +6881,27 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           .header {
             display: flex;
             justify-content: space-between;
-            align-items: center;
+            align-items: flex-start;
             margin-bottom: 30px;
             border-bottom: 2px solid #e9ecef;
             padding-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
           }
+          
+          @media (max-width: 600px) {
+            .header {
+              flex-direction: column;
+            }
+            .header .team-info {
+              width: 100%;
+              margin-bottom: 15px;
+            }
+            .header .back-button {
+              align-self: flex-start;
+            }
+          }
+          
           .team-info h1 {
             color: #333;
             margin-bottom: 8px;
@@ -7023,6 +7039,44 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             border-radius: 8px;
             transition: background-color 0.2s ease;
           }
+          
+          @media (max-width: 600px) {
+            .member-item {
+              padding: 12px;
+              gap: 12px;
+              min-height: 70px;
+              display: grid;
+              grid-template-columns: 1fr 60px; /* Fixed width for button column */
+            }
+            .member-item .remove-checkbox,
+            .member-item .undo-button {
+              align-self: center;
+              justify-self: center;
+              width: 100%;
+              text-align: center;
+            }
+          }
+          
+          @media (max-width: 600px) {
+            .member-item {
+              flex-direction: column;
+              align-items: flex-start;
+              gap: 10px;
+            }
+            .member-info {
+              width: 100%;
+            }
+            .join-date {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 6px;
+              align-items: center;
+            }
+            .remove-checkbox, .undo-button {
+              align-self: flex-end;
+              margin-top: -30px;
+            }
+          }
           .member-item:hover {
             background-color: #f8f9fa;
           }
@@ -7030,25 +7084,76 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             display: flex;
             align-items: center;
             gap: 15px;
+            flex: 1;
           }
           .member-name {
             font-weight: 500;
             color: #333;
           }
+          
+          @media (max-width: 600px) {
+            .member-info {
+              flex-direction: column;
+              align-items: flex-start;
+              gap: 8px;
+            }
+            .member-name {
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              width: 100%;
+            }
+          }
           .pending-removal-indicator {
-            background-color: #fff3cd;
-            color: #856404;
-            border: 1px solid #ffeaa7;
+            background-color: #ffe5e3;
+            color: #cd4631;
+            border: 1px solid #ffccc7;
             padding: 2px 6px;
             border-radius: 3px;
             font-size: 0.75em;
             font-weight: 600;
-            margin-left: 8px;
             cursor: help;
+          }
+          
+          @media (max-width: 600px) {
+            .new-member-indicator,
+            .incomplete-indicator,
+            .pending-removal-indicator {
+              font-size: 0.7em;
+              padding: 1px 4px;
+            }
           }
           .join-date {
             color: #666;
             font-size: 0.9em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          
+          @media (max-width: 600px) {
+            .join-date {
+              width: 100%;
+              display: grid;
+              grid-template-areas:
+                "date ."
+                "badges badges";
+              grid-template-columns: 1fr 60px; /* Match the button column width */
+              gap: 8px;
+              align-items: center;
+            }
+            .join-date .date {
+              grid-area: date;
+            }
+            .badges-container {
+              grid-area: badges;
+              display: flex;
+              flex-wrap: wrap;
+              gap: 6px;
+              justify-content: flex-end;
+              margin-top: 4px;
+              padding-right: 0; /* Align with the edge */
+            }
           }
           .new-member-indicator {
             background-color: #d4edda;
@@ -7220,12 +7325,15 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             border: none;
             border-radius: 4px;
             padding: 4px 8px;
-            font-size: 12px;
+            font-size: 16px;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.2s ease;
             min-width: 50px;
-            text-align: center;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
           }
           .undo-button:hover {
             background-color: #218838;
@@ -7670,7 +7778,13 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
               return '<div class="member-item" data-member-id="' + member.personId + '">' +
                        '<div class="member-info">' +
                          '<div class="member-name">' + member.firstName + ' ' + member.lastName + '</div>' +
-                         '<div class="join-date">' + joinDate + ' ' + newMemberIndicator + ' ' + incompleteIndicator + ' ' + pendingIndicator + '</div>' +
+                         '<div class="join-date">' + 
+                           '<span class="date">' + joinDate + '</span>' +
+                           '<div class="badges-container">' +
+                             (newMemberIndicator || incompleteIndicator || pendingIndicator ? 
+                               [newMemberIndicator, incompleteIndicator, pendingIndicator].filter(Boolean).join('') : '') +
+                           '</div>' +
+                         '</div>' +
                        '</div>' +
                        removeButton +
                      '</div>';
