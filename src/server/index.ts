@@ -7360,6 +7360,8 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             display: flex;
             align-items: center;
             gap: 8px;
+            position: relative;
+            z-index: 2;
           }
           .reviewer-input label {
             font-weight: 500;
@@ -7371,13 +7373,31 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             padding: 8px 12px;
             border: 1px solid #ced4da;
             border-radius: 4px;
-            font-size: 14px;
+            font-size: 16px;
             box-sizing: border-box;
+            background: white;
           }
           .reviewer-input input:focus {
             outline: none;
             border-color: #007bff;
             box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+          }
+          @media (max-width: 600px) {
+            .reviewer-input {
+              flex-direction: column;
+              align-items: flex-start;
+              width: 100%;
+              padding: 15px 0;
+            }
+            .reviewer-input input {
+              width: 100%;
+            }
+            .reviewer-input:focus-within {
+              background: white;
+              margin: 0 -12px;
+              padding: 15px 12px;
+              box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
           }
           .action-buttons {
             display: flex;
@@ -7585,7 +7605,8 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             <div class="action-section">
               <div class="reviewer-input">
                 <label for="reviewerName">Your Name:</label>
-                <input type="text" id="reviewerName" placeholder="Enter your name" required>
+                <input type="text" id="reviewerName" placeholder="Enter your name" required
+                  onfocus="setTimeout(() => { this.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 300)">
               </div>
               <div class="action-buttons">
                 <button class="action-button no-changes-btn" id="noChangesBtn">No Changes</button>
