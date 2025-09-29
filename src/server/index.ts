@@ -6851,6 +6851,21 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             color: #ffffff;
             border-color: #555;
           }
+
+          @media (max-width: 600px) {
+            body.dark-mode .reviewer-input:focus-within {
+              background-color: #2d2d2d;
+              box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            }
+            body.dark-mode .reviewer-input input {
+              background-color: #3d3d3d;
+            }
+            body.dark-mode .reviewer-input input:focus {
+              background-color: #3d3d3d;
+              border-color: #4fc3f7;
+              box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.25);
+            }
+          }
           
           /* FOUC Prevention - Temporary loading styles */
           html.dark-mode-loading {
@@ -7606,7 +7621,7 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
               <div class="reviewer-input">
                 <label for="reviewerName">Your Name:</label>
                 <input type="text" id="reviewerName" placeholder="Enter your name" required
-                  onfocus="setTimeout(() => { this.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 300)">
+                  onfocus="setTimeout(() => { this.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 200)">
               </div>
               <div class="action-buttons">
                 <button class="action-button no-changes-btn" id="noChangesBtn">No Changes</button>
