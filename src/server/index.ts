@@ -5667,6 +5667,12 @@ app.get('/dream-teams', async (req, res) => {
             color: #ffffff;
           }
           
+          body.dark-mode .member-count {
+            background-color: #2d3436;
+            color: #cccccc;
+            border-color: #495057;
+          }
+          
           body.dark-mode .stat-value {
             color: #4fc3f7;
           }
@@ -5838,6 +5844,21 @@ app.get('/dream-teams', async (req, res) => {
             font-weight: 600;
             color: #333;
             margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          
+          .member-count {
+            background-color: #e9ecef;
+            color: #495057;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: 600;
+            min-width: 24px;
+            text-align: center;
+            border: 1px solid #dee2e6;
           }
           .team-stats {
             display: grid;
@@ -6128,12 +6149,13 @@ app.get('/dream-teams', async (req, res) => {
                   <div class="team-name">
                     <span class="status-indicator status-\${statusClass}"></span>
                     \${team.name}
+                    <span class="member-count">\${team.roster.length}</span>
                   </div>
                   
                   <div class="team-stats">
                     <div class="stat">
                       <div class="stat-value">\${team.readyCards}</div>
-                      <div class="stat-label">Active Members</div>
+                      <div class="stat-label">In-Progress</div>
                     </div>
                     <div class="stat">
                       <div class="stat-value">\${team.completedCards}</div>
@@ -6663,6 +6685,14 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           body.dark-mode .team-info h1 {
             color: #ffffff;
           }
+          
+          body.dark-mode .pco-link {
+            color: #4fc3f7;
+          }
+          
+          body.dark-mode .pco-link:hover {
+            color: #81d4fa;
+          }
 
           body.dark-mode .page-instructions {
             color: #e3f2fd;
@@ -6743,6 +6773,12 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             background-color: #1e7e34;
             color: #d4edda;
             border-color: #28a745;
+          }
+          
+          body.dark-mode .incomplete-indicator {
+            background-color: #856404;
+            color: #fff3cd;
+            border-color: #ffd700;
           }
           
           body.dark-mode .add-member-button {
@@ -6868,6 +6904,21 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           .team-info h1 {
             color: #333;
             margin-bottom: 8px;
+          }
+          
+          .pco-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: #007bff;
+            text-decoration: none;
+            font-size: 0.9em;
+            margin-bottom: 12px;
+          }
+          
+          .pco-link:hover {
+            color: #0056b3;
+            text-decoration: underline;
           }
           .page-instructions {
             color: #495057;
@@ -7018,6 +7069,18 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             background-color: #d4edda;
             color: #155724;
             border: 1px solid #c3e6cb;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.75em;
+            font-weight: 600;
+            margin-left: 8px;
+            cursor: help;
+          }
+          
+          .incomplete-indicator {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
             padding: 2px 6px;
             border-radius: 3px;
             font-size: 0.75em;
@@ -7348,6 +7411,9 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           <div class="header">
             <div class="team-info">
               <h1 id="teamName">Loading...</h1>
+              <a href="https://people.planningcenteronline.com/workflows/${workflowId}" target="_blank" class="pco-link">
+                🔗 View in Planning Center
+              </a>
               <div id="pendingCount" class="pending-count" style="display: none;"></div>
               <div class="last-updated" id="lastUpdated">Last Updated: Loading...</div>
             </div>
@@ -7367,7 +7433,7 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           
           <div id="rosterContainer" style="display: none;">
             <div class="page-instructions">
-              Review your team roster below, mark members for removal if needed, and the Admin Team will make changes before next month
+              Review your team roster below, mark members for removal if needed, and the Admin Team will make changes before next month's review
             </div>
             <div class="roster-section">
               <div class="roster-header">
@@ -7608,6 +7674,9 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
               
               const newMemberIndicator = isNewMember ? 
                 '<span class="new-member-indicator" title="Joined within the last 30 days">New Member</span>' : '';
+                
+              const incompleteIndicator = member.stage !== 'completed' ? 
+                '<span class="incomplete-indicator" title="Onboarding process not yet completed">In Progress</span>' : '';
               
               const removeButton = member.markedForRemoval ? 
                 '<div class="undo-button" data-member-id="' + member.personId + '" data-member-name="' + member.firstName + ' ' + member.lastName + '" title="Click to undo removal">Undo</div>' :
@@ -7616,7 +7685,7 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
               return '<div class="member-item" data-member-id="' + member.personId + '">' +
                        '<div class="member-info">' +
                          '<div class="member-name">' + member.firstName + ' ' + member.lastName + '</div>' +
-                         '<div class="join-date">' + joinDate + ' ' + newMemberIndicator + ' ' + pendingIndicator + '</div>' +
+                         '<div class="join-date">' + joinDate + ' ' + newMemberIndicator + ' ' + incompleteIndicator + ' ' + pendingIndicator + '</div>' +
                        '</div>' +
                        removeButton +
                      '</div>';
