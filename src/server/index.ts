@@ -1783,7 +1783,7 @@ app.get('/life-groups/membership-changes', async (req, res) => {
           <div class="container">
             <div class="button-group">
               <a href="/life-groups" class="back-button">
-                <span>←</span>
+                <span><strong>⟵</strong></span>
                 <span>Back to Groups</span>
               </a>
               <button id="captureSnapshotBtn" class="capture-button">
@@ -6499,7 +6499,7 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
         <div class="header">
           <h1>Pending Dream Team Removals</h1>
           <a href="/dream-teams" class="back-button">
-            <span>←</span>
+            <span><strong>⟵</strong></span>
             <span>Back to Teams</span>
           </a>
         </div>
@@ -7546,7 +7546,7 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
               <div class="last-updated" id="lastUpdated">Last Updated: Loading...</div>
             </div>
             <a href="/dream-teams" class="back-button">
-              <span>←</span>
+            <span><strong>⟵</strong></span>
               <span>Back to Teams</span>
             </a>
           </div>
@@ -8671,7 +8671,7 @@ app.get('/life-groups/groups/:groupId/attendance', async (req, res) => {
         <body>
           <div class="container">
             <a href="/life-groups" class="back-button">
-              <span>←</span>
+              <span><strong>⟵</strong></span>
               <span>Back to Groups</span>
             </a>
 
