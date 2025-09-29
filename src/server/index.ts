@@ -6320,10 +6320,6 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           color: #cccccc;
         }
         
-        body.dark-mode .removal-status {
-          background-color: #495057;
-          color: #ffffff;
-        }
         
         body.dark-mode .empty-state {
           color: #cccccc;
@@ -6467,16 +6463,6 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           font-weight: 500;
           margin-top: 4px;
         }
-        .removal-status {
-          background-color: #e9ecef;
-          color: #6c757d;
-          padding: 8px 16px;
-          border-radius: 4px;
-          font-size: 0.85em;
-          text-align: center;
-          font-style: italic;
-          white-space: nowrap;
-        }
 
         .empty-state {
           text-align: center;
@@ -6594,7 +6580,7 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
             
             teamRemovals.forEach(function(removal) {
               const removalDate = new Date(removal.removalDate).toLocaleDateString();
-              const reason = removal.reason || 'No reason provided';
+              const reason = removal.reason || '<No reason provided>';
               const reviewerName = removal.reviewerName || 'Unknown';
               
               html += '<div class="removal-item">';
@@ -6604,7 +6590,6 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
               html += '<div class="removal-date">Marked for removal: ' + removalDate + '</div>';
               html += '<div class="reviewer-name">Requested by: ' + reviewerName + '</div>';
               html += '</div>';
-              html += '<div class="removal-status">Remove from PCO to clear</div>';
               html += '</div>';
             });
             
@@ -7670,7 +7655,7 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
               const isNewMember = memberJoinDate >= thirtyDaysAgo;
               
               const pendingIndicator = member.markedForRemoval ? 
-                '<span class="pending-removal-indicator" title="Pending removal: ' + (member.removalReason || 'No reason provided') + '">Pending Removal</span>' : '';
+                '<span class="pending-removal-indicator" title="Pending removal: ' + (member.removalReason || '<No reason provided>') + '">Pending Removal</span>' : '';
               
               const newMemberIndicator = isNewMember ? 
                 '<span class="new-member-indicator" title="Joined within the last 30 days">New Member</span>' : '';
