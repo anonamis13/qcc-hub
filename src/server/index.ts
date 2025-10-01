@@ -2328,7 +2328,7 @@ app.get('/life-groups', async (req, res) => {
             }
             
             body.dark-mode .group-item a {
-              color: #4fc3f7;
+              color: #87ceeb;
             }
             
             body.dark-mode .stats-container {
@@ -3495,7 +3495,7 @@ app.get('/life-groups', async (req, res) => {
 
                   return '<li class="' + groupItemClasses + '" id="group-' + group.id + '" data-group-id="' + group.id + '"' +
                          (group.stats?.needsAttention ? ' title="Recent event missing attendance data - Click exclamation mark to open Planning Center"' : '') + '>' +
-                    '<a href="/life-groups/groups/' + group.id + '/attendance" style="color: #007bff; text-decoration: none; font-size: 18px; font-weight: 500;" onmouseover="this.style.textDecoration=&quot;underline&quot;;" onmouseout="this.style.textDecoration=&quot;none&quot;;">' +
+                    '<a href="/life-groups/groups/' + group.id + '/attendance" style="color: ' + (document.body.classList.contains('dark-mode') ? '#87ceeb' : '#007bff') + '; text-decoration: none; font-size: 18px; font-weight: 500;" onmouseover="this.style.textDecoration=&quot;underline&quot;;" onmouseout="this.style.textDecoration=&quot;none&quot;;">' +
                       group.attributes.name +
                     '</a>' +
                     '<div class="stats-container" id="stats-' + group.id + '">' +
@@ -5930,6 +5930,77 @@ app.get('/dream-teams', async (req, res) => {
           body.dark-mode .dark-mode-toggle:hover {
             background-color: #e0a800;
           }
+          
+          .stats-summary {
+            margin: 20px 0;
+            padding: 15px 20px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
+            border-left: 3px solid #007bff;
+          }
+          
+          .stats-summary h2 {
+            margin: 0 0 12px 0;
+            color: #333;
+            font-size: 1.2em;
+            font-weight: 600;
+          }
+          
+          .stats-grid {
+            display: flex;
+            gap: 15px;
+            justify-content: space-around;
+          }
+          
+          .stat-card {
+            background-color: white;
+            padding: 12px 16px;
+            border-radius: 6px;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            transition: transform 0.2s ease;
+            flex: 1;
+            min-width: 0;
+          }
+          
+          .stat-card:hover {
+            transform: translateY(-1px);
+          }
+          
+          .stat-card .stat-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #007bff;
+            margin-bottom: 4px;
+          }
+          
+          .stat-card .stat-label {
+            color: #666;
+            font-size: 0.85em;
+            font-weight: 500;
+          }
+          
+          /* Dark mode styles for stats */
+          body.dark-mode .stats-summary {
+            background-color: #3d3d3d;
+            border-left-color: #4fc3f7;
+          }
+          
+          body.dark-mode .stats-summary h2 {
+            color: #ffffff;
+          }
+          
+          body.dark-mode .stat-card {
+            background-color: #2d2d2d;
+          }
+          
+          body.dark-mode .stat-card .stat-value {
+            color: #4fc3f7;
+          }
+          
+          body.dark-mode .stat-card .stat-label {
+            color: #cccccc;
+          }
         </style>
         <script>
           // Apply dark mode immediately to prevent flash
@@ -5971,6 +6042,27 @@ app.get('/dream-teams', async (req, res) => {
           html.dark-mode-loading .stat-label {
             color: #cccccc !important;
           }
+          
+          html.dark-mode-loading .stats-summary {
+            background-color: #3d3d3d !important;
+            border-left-color: #4fc3f7 !important;
+          }
+          
+          html.dark-mode-loading .stats-summary h2 {
+            color: #ffffff !important;
+          }
+          
+          html.dark-mode-loading .stat-card {
+            background-color: #2d2d2d !important;
+          }
+          
+          html.dark-mode-loading .stat-card .stat-value {
+            color: #4fc3f7 !important;
+          }
+          
+          html.dark-mode-loading .stat-card .stat-label {
+            color: #cccccc !important;
+          }
         </style>
       </head>
       <body>
@@ -5985,6 +6077,24 @@ app.get('/dream-teams', async (req, res) => {
               <button id="refreshButton" class="refresh-button">
                 <span>Refresh Data</span>
               </button>
+            </div>
+          </div>
+          
+          <div id="dreamTeamStats" class="stats-summary" style="display: none;">
+            <h2>Dream Team Overview</h2>
+            <div class="stats-grid">
+              <div class="stat-card">
+                <div class="stat-value" id="totalDreamTeamers">-</div>
+                <div class="stat-label">Current Dream Teamers! 🎉</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value" id="inProcessCount">-</div>
+                <div class="stat-label">In Process</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value" id="completedCount">-</div>
+                <div class="stat-label">Completed</div>
+              </div>
             </div>
           </div>
           
@@ -6079,6 +6189,9 @@ app.get('/dream-teams', async (req, res) => {
               // Hide loading, show teams
               loadingContainer.style.display = 'none';
               teamsContainer.style.display = 'grid';
+              
+              // Calculate and display Dream Team statistics
+              calculateDreamTeamStats();
 
             } catch (error) {
               console.error('Error loading teams:', error);
@@ -6088,6 +6201,56 @@ app.get('/dream-teams', async (req, res) => {
             } finally {
               refreshButton.disabled = false;
             }
+          }
+
+          function calculateDreamTeamStats() {
+            if (teamsData.length === 0) return;
+            
+            const uniquePeople = new Map(); // personId -> { status, teams }
+            let totalInProcess = 0;
+            let totalCompleted = 0;
+            
+            // Process each team's roster
+            teamsData.forEach(team => {
+              if (team.roster && team.roster.length > 0) {
+                team.roster.forEach(member => {
+                  const personId = member.personId;
+                  const status = member.stage;
+                  
+                  if (!uniquePeople.has(personId)) {
+                    uniquePeople.set(personId, {
+                      statuses: new Set(),
+                      teams: new Set()
+                    });
+                  }
+                  
+                  const person = uniquePeople.get(personId);
+                  person.statuses.add(status);
+                  person.teams.add(team.name);
+                });
+              }
+            });
+            
+            // Count unique people and determine their final status
+            uniquePeople.forEach((person, personId) => {
+              // If someone is both in process and completed, prioritize completed
+              if (person.statuses.has('completed')) {
+                totalCompleted++;
+              } else if (person.statuses.has('in_process') || person.statuses.has('ready')) {
+                totalInProcess++;
+              }
+              // Note: We're excluding 'removed' status as per requirements
+            });
+            
+            const totalDreamTeamers = totalInProcess + totalCompleted;
+            
+            // Update the UI
+            document.getElementById('totalDreamTeamers').textContent = totalDreamTeamers;
+            document.getElementById('inProcessCount').textContent = totalInProcess;
+            document.getElementById('completedCount').textContent = totalCompleted;
+            
+            // Show the stats section
+            document.getElementById('dreamTeamStats').style.display = 'block';
           }
 
           function displayTeams() {
@@ -6140,7 +6303,7 @@ app.get('/dream-teams', async (req, res) => {
 
               // Check if team is favorited
               const isFavorited = favorites.has(team.id);
-              
+
               return \`
                 <div class="team-card \${statusClass}" data-team-id="\${team.id}" data-team-name="\${team.name}" onclick="openTeam('\${team.id}', '\${team.name}')">
                   <button style="font-size: 32px;" class="star-button \${isFavorited ? 'favorited' : ''}" onclick="toggleFavorite(event, '\${team.id}', '\${team.name}')">
@@ -6201,6 +6364,10 @@ app.get('/dream-teams', async (req, res) => {
           if (isDarkMode) {
             body.classList.add('dark-mode');
             darkModeToggle.innerHTML = '☀️ Light Mode';
+            // Update group link colors
+            document.querySelectorAll('.group-item a').forEach(link => {
+              link.style.color = '#87ceeb';
+            });
           }
           
           // Toggle dark mode
@@ -6216,6 +6383,11 @@ app.get('/dream-teams', async (req, res) => {
               darkModeToggle.innerHTML = '🌙 Dark Mode';
               localStorage.setItem('darkMode', 'false');
             }
+
+            // Update group link colors
+            document.querySelectorAll('.group-item a').forEach(link => {
+              link.style.color = isCurrentlyDark ? '#87ceeb' : '#007bff';
+            });
           });
         </script>
       </body>
