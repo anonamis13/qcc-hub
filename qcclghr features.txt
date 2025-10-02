@@ -3,7 +3,6 @@ eventually coaches will use
 
 
 Upcoming Features:
-Lighten blue group name text in Dark Mode
 
 ?month-over-month and year-over-year percentage
 ?YA groups functionality
@@ -29,3 +28,4 @@ missing persons report
 multi-select groups to show data on home page (similar to PCO Workflows)
 compare graphs function?
 attendance reminder sent button (or auto-notify)
+Lighten blue group name text in Dark Mode
