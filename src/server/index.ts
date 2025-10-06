@@ -1085,11 +1085,13 @@ app.get('/api/dream-teams', async (req, res) => {
 // Get all pending removals across all teams (for admin review)
 app.get('/api/dream-teams/pending-removals', async (req, res) => {
   try {
+    const forceRefresh = req.query.forceRefresh === 'true';
+    
     // Get all removals from database
     const allRemovals = dreamTeamsTracking.getAllPendingRemovals();
     
     // Get current PCO data for all workflows to see who's still there
-    const currentWorkflows = await getDreamTeamWorkflows();
+    const currentWorkflows = await getDreamTeamWorkflows(forceRefresh);
     
     // Create a set of current active members across all workflows
     const currentActiveMembers = new Set();
@@ -1357,57 +1359,6 @@ app.post('/api/dream-teams/:workflowId/removals', async (req, res) => {
 });
 
 // Undo removal endpoint
-// Favorite/unfavorite a team
-app.post('/api/dream-teams/:workflowId/favorite', async (req, res) => {
-  try {
-    const { workflowId } = req.params;
-    const { userName, workflowName } = req.body;
-
-    if (!userName || !workflowName) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required fields'
-      });
-    }
-
-    const isFavorited = dreamTeamsTracking.toggleFavorite(workflowId, workflowName, userName);
-    
-    res.json({
-      success: true,
-      data: {
-        isFavorited
-      }
-    });
-  } catch (error) {
-    console.error('Error toggling favorite:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to toggle favorite'
-    });
-  }
-});
-
-// Get favorite teams for a user
-app.get('/api/dream-teams/favorites/:userName', async (req, res) => {
-  try {
-    const { userName } = req.params;
-    const favorites = dreamTeamsTracking.getFavorites(userName);
-    
-    res.json({
-      success: true,
-      data: {
-        favorites
-      }
-    });
-  } catch (error) {
-    console.error('Error getting favorites:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to get favorites'
-    });
-  }
-});
-
 app.post('/api/dream-teams/:workflowId/undo-removal', async (req, res) => {
   try {
     const { workflowId } = req.params;
@@ -6088,8 +6039,8 @@ app.get('/dream-teams', async (req, res) => {
                 <div class="stat-label">Current Dream Teamers! 🎉</div>
               </div>
               <div class="stat-card">
-                <div class="stat-value" id="inProcessCount">-</div>
-                <div class="stat-label">In Process</div>
+                <div class="stat-value" id="inProgressCount">-</div>
+                <div class="stat-label">In-Progress</div>
               </div>
               <div class="stat-card">
                 <div class="stat-value" id="completedCount">-</div>
@@ -6164,12 +6115,14 @@ app.get('/dream-teams', async (req, res) => {
             const loadingContainer = document.getElementById('loadingContainer');
             const errorContainer = document.getElementById('errorContainer');
             const teamsContainer = document.getElementById('teamsContainer');
+            const dreamTeamStats = document.getElementById('dreamTeamStats');
             const refreshButton = document.getElementById('refreshButton');
 
             // Show loading state
             loadingContainer.style.display = 'block';
             errorContainer.style.display = 'none';
             teamsContainer.style.display = 'none';
+            dreamTeamStats.style.display = 'none';
             refreshButton.disabled = true;
 
             try {
@@ -6207,7 +6160,7 @@ app.get('/dream-teams', async (req, res) => {
             if (teamsData.length === 0) return;
             
             const uniquePeople = new Map(); // personId -> { status, teams }
-            let totalInProcess = 0;
+            let totalInProgress = 0;
             let totalCompleted = 0;
             
             // Process each team's roster
@@ -6233,20 +6186,20 @@ app.get('/dream-teams', async (req, res) => {
             
             // Count unique people and determine their final status
             uniquePeople.forEach((person, personId) => {
-              // If someone is both in process and completed, prioritize completed
+              // If someone is both in-progress and completed, prioritize completed
               if (person.statuses.has('completed')) {
                 totalCompleted++;
               } else if (person.statuses.has('in_process') || person.statuses.has('ready')) {
-                totalInProcess++;
+                totalInProgress++;
               }
               // Note: We're excluding 'removed' status as per requirements
             });
             
-            const totalDreamTeamers = totalInProcess + totalCompleted;
+            const totalDreamTeamers = totalInProgress + totalCompleted;
             
             // Update the UI
             document.getElementById('totalDreamTeamers').textContent = totalDreamTeamers;
-            document.getElementById('inProcessCount').textContent = totalInProcess;
+            document.getElementById('inProgressCount').textContent = totalInProgress;
             document.getElementById('completedCount').textContent = totalCompleted;
             
             // Show the stats section
@@ -6277,7 +6230,7 @@ app.get('/dream-teams', async (req, res) => {
             container.innerHTML = sortedTeams.map(team => {
               // Determine status based on actual review data
               let statusClass = 'old';
-              let statusText = 'Needs review';
+              let statusText = 'Never reviewed';
               
               if (team.lastReviewed) {
                 const lastReviewed = new Date(team.lastReviewed);
@@ -6292,7 +6245,7 @@ app.get('/dream-teams', async (req, res) => {
                   statusText = 'Review soon';
                 } else {
                   statusClass = 'old';
-                  statusText = 'Needs attention';
+                  statusText = 'Needs review';
                 }
               }
               
@@ -6472,6 +6425,14 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           border-color: #ffc107;
         }
         
+        body.dark-mode .pco-link {
+          color: #4fc3f7;
+        }
+        
+        body.dark-mode .pco-link:hover {
+          color: #81d4fa;
+        }
+        
         body.dark-mode .removal-item {
           border-bottom-color: #555;
         }
@@ -6485,7 +6446,7 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
         }
         
         body.dark-mode .removal-date {
-          color: #aaaaaa;
+          color: #cccccc;
         }
         
         body.dark-mode .reviewer-name {
@@ -6559,8 +6520,8 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           background-color: #6c757d;
           color: white;
           border: none;
-          padding: 10px 20px;
-          border-radius: 6px;
+          padding: 10px 16px;
+          border-radius: 4px;
           text-decoration: none;
           font-size: 14px;
           cursor: pointer;
@@ -6568,6 +6529,27 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
         }
         .back-button:hover {
           background-color: #5a6268;
+        }
+        .refresh-button {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 16px;
+          background-color: #007bff;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          font-size: 14px;
+          cursor: pointer;
+          transition: background-color 0.3s ease;
+        }
+        .refresh-button:hover {
+          background-color: #0056b3;
+        }
+        .refresh-button:disabled {
+          background-color: #007bff !important;
+          cursor: not-allowed;
+          opacity: 0.7;
         }
         .summary {
           background-color: #d1ecf1;
@@ -6600,6 +6582,27 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           padding: 15px 20px;
           font-weight: 600;
           font-size: 1.1em;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 15px;
+        }
+        .team-header-title {
+          flex: 1;
+        }
+        .pco-link {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          color: #007bff;
+          text-decoration: none;
+          font-size: 0.85em;
+          font-weight: 500;
+          white-space: nowrap;
+        }
+        .pco-link:hover {
+          color: #0056b3;
+          text-decoration: underline;
         }
         .removal-item {
           padding: 15px 20px;
@@ -6626,8 +6629,9 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           line-height: 1.4;
         }
         .removal-date {
-          color: #999;
-          font-size: 0.85em;
+          color: #666;
+          font-size: 0.9em;
+          line-height: 1.4;
         }
         .reviewer-name {
           color: #666;
@@ -6670,10 +6674,15 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
       <div class="container">
         <div class="header">
           <h1>Pending Dream Team Removals</h1>
-          <a href="/dream-teams" class="back-button">
-            <span><strong>⟵</strong></span>
-            <span>Back to Teams</span>
-          </a>
+          <div class="header-buttons">
+            <button id="refreshButton" class="refresh-button">
+              <span>Refresh Data</span>
+            </button>
+            <a href="/dream-teams" class="back-button">
+              <span><strong>⟵</strong></span>
+              <span>Back to Teams</span>
+            </a>
+          </div>
         </div>
         
         <div id="summary" class="summary" style="display: none;">
@@ -6682,7 +6691,7 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
         </div>
         
         <div id="errorMessage" class="error" style="display: none;"></div>
-        <div id="loadingMessage" class="loading">Loading pending removals...</div>
+        <div id="loadingMessage" class="loading">Loading dream teams data...</div>
         <div id="removalsList" class="removals-list"></div>
       </div>
 
@@ -6702,15 +6711,29 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           }
         });
 
-        async function loadPendingRemovals() {
+        async function loadPendingRemovals(forceRefresh = false) {
+          const loadingMessage = document.getElementById('loadingMessage');
+          const refreshButton = document.getElementById('refreshButton');
+          const errorMessage = document.getElementById('errorMessage');
+          const removalsList = document.getElementById('removalsList');
+          const summary = document.getElementById('summary');
+          
           try {
-            const response = await fetch('/api/dream-teams/pending-removals');
+            // Show loading state
+            loadingMessage.style.display = 'block';
+            errorMessage.style.display = 'none';
+            removalsList.style.display = 'none';
+            summary.style.display = 'none';
+            refreshButton.disabled = true;
+            
+            const response = await fetch('/api/dream-teams/pending-removals?forceRefresh=' + forceRefresh);
             const result = await response.json();
             
             if (result.success) {
               pendingRemovalsData = result.data.pendingRemovals;
               displayPendingRemovals(pendingRemovalsData);
               updateSummary(result.data.totalCount);
+              removalsList.style.display = 'grid';
             } else {
               showError('Failed to load pending removals: ' + result.error);
             }
@@ -6718,7 +6741,8 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
             console.error('Error loading pending removals:', error);
             showError('Failed to load pending removals. Please try again.');
           } finally {
-            document.getElementById('loadingMessage').style.display = 'none';
+            loadingMessage.style.display = 'none';
+            refreshButton.disabled = false;
           }
         }
 
@@ -6738,21 +6762,30 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           const groupedRemovals = {};
           removals.forEach(function(removal) {
             if (!groupedRemovals[removal.workflowName]) {
-              groupedRemovals[removal.workflowName] = [];
+              groupedRemovals[removal.workflowName] = {
+                workflowId: removal.workflowId,
+                removals: []
+              };
             }
-            groupedRemovals[removal.workflowName].push(removal);
+            groupedRemovals[removal.workflowName].removals.push(removal);
           });
 
           // Build HTML
           let html = '';
           Object.keys(groupedRemovals).sort().forEach(function(teamName) {
-            const teamRemovals = groupedRemovals[teamName];
+            const teamData = groupedRemovals[teamName];
+            const teamRemovals = teamData.removals;
+            const workflowId = teamData.workflowId;
+            
             html += '<div class="team-section">';
-            html += '<div class="team-header">' + teamName + ' (' + teamRemovals.length + ' removal' + (teamRemovals.length === 1 ? '' : 's') + ')</div>';
+            html += '<div class="team-header">';
+            html += '<div class="team-header-title">' + teamName + ' (' + teamRemovals.length + ' removal' + (teamRemovals.length === 1 ? '' : 's') + ')</div>';
+            html += '<a href="https://people.planningcenteronline.com/workflows/' + workflowId + '" target="_blank" class="pco-link">🔗 View in PCO</a>';
+            html += '</div>';
             
             teamRemovals.forEach(function(removal) {
               const removalDate = new Date(removal.removalDate).toLocaleDateString();
-              const reason = removal.reason || '<No reason provided>';
+              const reason = removal.reason || '&lt;No reason provided&gt;';
               const reviewerName = removal.reviewerName || 'Unknown';
               
               html += '<div class="removal-item">';
@@ -6790,6 +6823,11 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           errorDiv.textContent = message;
           errorDiv.style.display = 'block';
         }
+
+        // Refresh button event listener
+        document.getElementById('refreshButton').addEventListener('click', () => {
+          loadPendingRemovals(true);
+        });
 
         // Load data on page load
         loadPendingRemovals();
@@ -7299,6 +7337,7 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             border-radius: 3px;
             font-size: 0.75em;
             font-weight: 600;
+            margin-left: 8px;
             cursor: help;
           }
           
@@ -7991,7 +8030,7 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
                 '<span class="new-member-indicator" title="Joined within the last 30 days">New Member</span>' : '';
                 
               const incompleteIndicator = member.stage !== 'completed' ? 
-                '<span class="incomplete-indicator" title="Onboarding process not yet completed">In Progress</span>' : '';
+                '<span class="incomplete-indicator" title="Onboarding process not yet completed">In-Progress</span>' : '';
               
               const removeButton = member.markedForRemoval ? 
                 '<div class="undo-button" data-member-id="' + member.personId + '" data-member-name="' + member.firstName + ' ' + member.lastName + '" title="Click to undo removal">Undo</div>' :
