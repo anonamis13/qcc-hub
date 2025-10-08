@@ -173,6 +173,18 @@ app.get('/api/cache-info', async (req, res) => {
   }
 });
 
+// Get Dream Teams cache timestamp
+app.get('/api/dream-teams/cache-info', async (req, res) => {
+  try {
+    // The cache key for Dream Team workflows (category ID 11927)
+    const cacheKey = 'workflows_category_11927';
+    const timestamp = await cache.getTimestamp(cacheKey);
+    res.json({ timestamp });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get cache info' });
+  }
+});
+
 // Add new endpoint for individual group attendance time-series
 app.get('/api/individual-group-attendance', async (req, res) => {
   try {
@@ -1078,6 +1090,132 @@ app.get('/api/dream-teams', async (req, res) => {
       success: false,
       error: 'Failed to fetch dream teams data',
       details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Hidden endpoint: Export all Dream Teamer emails (only enabled when ENABLE_EMAIL_EXPORT=true)
+app.get('/api/dream-teams/export-emails', async (req, res) => {
+  // Check if email export is enabled via environment variable
+  if (process.env.ENABLE_EMAIL_EXPORT !== 'true') {
+    return res.status(404).json({ success: false, error: 'Not Found' });
+  }
+  
+  try {
+    const forceRefresh = req.query.forceRefresh === 'true';
+    
+    // Get all dream team workflows
+    const currentWorkflows = await getDreamTeamWorkflows(forceRefresh);
+    
+    // Collect all unique person IDs
+    const uniquePersonIds = new Set<string>();
+    currentWorkflows.forEach(workflow => {
+      workflow.roster.forEach(member => {
+        uniquePersonIds.add(member.personId);
+      });
+    });
+    
+    console.log(`Fetching email data for ${uniquePersonIds.size} unique dream teamers...`);
+    
+    // Fetch email addresses for each person
+    const emailData: Array<{
+      personId: string;
+      firstName: string;
+      lastName: string;
+      emails: string[];
+      teams: string[];
+    }> = [];
+    
+    // Helper function to fetch email with retry logic for rate limiting
+    const fetchPersonEmail = async (personId: string, retries = 5): Promise<string | null> => {
+      try {
+        const response = await pcoClient.get(`/people/v2/people/${personId}`, {
+          params: {
+            include: 'emails'
+          }
+        });
+        
+        const emails = response.data.included?.filter((item: any) => item.type === 'Email') || [];
+        
+        // Find the primary email address
+        const primaryEmailObj = emails.find((email: any) => email.attributes.primary === true);
+        if (primaryEmailObj) {
+          return primaryEmailObj.attributes.address;
+        } else if (emails.length > 0) {
+          // If no primary email is marked, use the first one
+          return emails[0].attributes.address;
+        }
+        return null;
+      } catch (error: any) {
+        // Handle rate limiting (429) with exponential backoff
+        if (error.response?.status === 429 && retries > 0) {
+          const retryAfter = parseInt(error.response.headers['retry-after'] || '0');
+          const waitTime = retryAfter * 1000 || 3000 * Math.pow(2, 5 - retries);
+          console.log(`Rate limited for person ${personId}, waiting ${waitTime/1000}s (${retries - 1} retries left)`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          return fetchPersonEmail(personId, retries - 1);
+        }
+        throw error;
+      }
+    };
+    
+    for (const personId of uniquePersonIds) {
+      // First, get the person's name from the workflow roster data we already have
+      let firstName = 'Unknown';
+      let lastName = '';
+      const teams: string[] = [];
+      
+      currentWorkflows.forEach(workflow => {
+        const member = workflow.roster.find(m => m.personId === personId);
+        if (member) {
+          firstName = member.firstName;
+          lastName = member.lastName;
+          teams.push(workflow.name);
+        }
+      });
+      
+      // Now try to fetch their email address with retry logic
+      let primaryEmail: string | null = null;
+      
+      try {
+        primaryEmail = await fetchPersonEmail(personId);
+        
+        // Add delay to avoid rate limiting (200ms per request)
+        await new Promise(resolve => setTimeout(resolve, 200));
+      } catch (error: any) {
+        console.error(`Error fetching email for person ${personId} (${firstName} ${lastName}):`, error.message);
+        // Continue without email - we'll still add the person to the list
+      }
+      
+      // Add person to results (even if we couldn't get their email)
+      emailData.push({
+        personId,
+        firstName,
+        lastName,
+        emails: primaryEmail ? [primaryEmail] : [],
+        teams
+      });
+    }
+    
+    // Sort by last name, then first name
+    emailData.sort((a, b) => {
+      const lastNameCompare = a.lastName.localeCompare(b.lastName);
+      if (lastNameCompare !== 0) return lastNameCompare;
+      return a.firstName.localeCompare(b.firstName);
+    });
+    
+    res.json({
+      success: true,
+      data: {
+        totalPeople: emailData.length,
+        dreamTeamers: emailData
+      }
+    });
+  } catch (error) {
+    console.error('Error exporting dream teamer emails:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to export email addresses'
     });
   }
 });
@@ -5583,6 +5721,10 @@ app.get('/dream-teams', async (req, res) => {
             color: #ffffff;
           }
           
+          body.dark-mode #lastUpdate {
+            color: #e0e0e0;
+          }
+          
           body.dark-mode .header {
             border-bottom-color: #555;
           }
@@ -5665,6 +5807,12 @@ app.get('/dream-teams', async (req, res) => {
           h1 {
             color: #333;
             margin-bottom: 20px;
+          }
+          #lastUpdate {
+            margin: 10px 0;
+            color: #666;
+            font-size: 14px;
+            display: none;
           }
           .back-button {
             display: inline-flex;
@@ -6031,6 +6179,8 @@ app.get('/dream-teams', async (req, res) => {
             </div>
           </div>
           
+          <p id="lastUpdate"></p>
+          
           <div id="dreamTeamStats" class="stats-summary" style="display: none;">
             <h2>Dream Team Overview</h2>
             <div class="stats-grid">
@@ -6111,6 +6261,37 @@ app.get('/dream-teams', async (req, res) => {
             displayTeams();
           }
 
+          // Format timestamp for display
+          function formatLastUpdateTime(timestamp) {
+            if (!timestamp) return '';
+            const date = new Date(timestamp);
+            return date.toLocaleString('en-US', { 
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+              hour: 'numeric',
+              minute: 'numeric',
+              hour12: true
+            });
+          }
+
+          // Update the last update time display
+          async function updateLastUpdateTime() {
+            try {
+              const response = await fetch('/api/dream-teams/cache-info');
+              if (!response.ok) throw new Error('Failed to fetch cache info');
+              const { timestamp } = await response.json();
+              const lastUpdate = document.getElementById('lastUpdate');
+              if (timestamp) {
+                lastUpdate.textContent = 'Last updated: ' + formatLastUpdateTime(timestamp);
+                lastUpdate.style.display = 'block';
+              }
+            } catch (error) {
+              console.error('Error fetching cache info:', error);
+            }
+          }
+
           async function loadTeams(forceRefresh = false) {
             const loadingContainer = document.getElementById('loadingContainer');
             const errorContainer = document.getElementById('errorContainer');
@@ -6145,6 +6326,9 @@ app.get('/dream-teams', async (req, res) => {
               
               // Calculate and display Dream Team statistics
               calculateDreamTeamStats();
+              
+              // Update the last update timestamp
+              updateLastUpdateTime();
 
             } catch (error) {
               console.error('Error loading teams:', error);
@@ -6355,6 +6539,339 @@ app.get('/dream-teams', async (req, res) => {
 });
 
 // Individual Dream Team roster management page
+// Dream Teamer Email Export Page (only enabled when ENABLE_EMAIL_EXPORT=true)
+app.get('/dream-teams/export-emails', async (req, res) => {
+  // Check if email export is enabled via environment variable
+  if (process.env.ENABLE_EMAIL_EXPORT !== 'true') {
+    return res.status(404).send('Not Found');
+  }
+  
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>QCC Hub - DTHR - Email Export</title>
+      <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          margin: 20px;
+          background-color: #f5f5f5;
+          transition: background-color 0.3s ease;
+        }
+        
+        .container {
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 20px;
+          background-color: white;
+          border-radius: 10px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 30px;
+          padding-bottom: 20px;
+          border-bottom: 2px solid #e9ecef;
+        }
+        
+        h1 {
+          color: #333;
+          margin: 0;
+          font-size: 1.8em;
+        }
+        
+        .back-button {
+          background-color: #6c757d;
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 6px;
+          text-decoration: none;
+          font-size: 14px;
+          cursor: pointer;
+          transition: background-color 0.3s ease;
+        }
+        
+        .back-button:hover {
+          background-color: #5a6268;
+        }
+        
+        .load-button {
+          background-color: #007bff;
+          color: white;
+          border: none;
+          padding: 12px 24px;
+          border-radius: 6px;
+          font-size: 16px;
+          cursor: pointer;
+          transition: background-color 0.3s ease;
+        }
+        
+        .load-button:hover {
+          background-color: #0056b3;
+        }
+        
+        .load-button:disabled {
+          background-color: #6c757d;
+          cursor: not-allowed;
+        }
+        
+        .loading {
+          text-align: center;
+          padding: 40px;
+          color: #666;
+        }
+        
+        .error {
+          background-color: #f8d7da;
+          border: 1px solid #f5c6cb;
+          color: #721c24;
+          padding: 15px;
+          border-radius: 6px;
+          margin-bottom: 20px;
+        }
+        
+        .summary {
+          background-color: #d1ecf1;
+          border: 1px solid #bee5eb;
+          border-radius: 6px;
+          padding: 15px;
+          margin-bottom: 20px;
+        }
+        
+        .summary h3 {
+          margin: 0 0 10px 0;
+          color: #0c5460;
+        }
+        
+        .copy-buttons {
+          display: flex;
+          gap: 10px;
+          margin: 20px 0;
+        }
+        
+        .copy-btn {
+          padding: 10px 20px;
+          background-color: #28a745;
+          color: white;
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 14px;
+          transition: background-color 0.3s ease;
+        }
+        
+        .copy-btn:hover {
+          background-color: #218838;
+        }
+        
+        .copy-btn.copied {
+          background-color: #17a2b8;
+        }
+        
+        .email-list {
+          background-color: #f8f9fa;
+          border: 1px solid #dee2e6;
+          border-radius: 6px;
+          padding: 15px;
+          margin: 20px 0;
+        }
+        
+        .person-item {
+          padding: 12px;
+          border-bottom: 1px solid #e9ecef;
+          display: grid;
+          grid-template-columns: 200px 1fr 300px;
+          gap: 15px;
+          align-items: center;
+        }
+        
+        .person-item:last-child {
+          border-bottom: none;
+        }
+        
+        .person-name {
+          font-weight: 600;
+          color: #333;
+        }
+        
+        .person-emails {
+          color: #007bff;
+          font-size: 0.9em;
+        }
+        
+        .person-teams {
+          color: #666;
+          font-size: 0.85em;
+        }
+        
+        @media (max-width: 768px) {
+          .person-item {
+            grid-template-columns: 1fr;
+            gap: 8px;
+          }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>Dream Teamer Email Export</h1>
+          <a href="/dream-teams" class="back-button">
+            <span><strong>⟵</strong></span>
+            <span>Back to Teams</span>
+          </a>
+        </div>
+        
+        <div id="initialState">
+          <p>Click the button below to load all Dream Teamer email addresses. This may take a moment as it fetches data from Planning Center.</p>
+          <button id="loadButton" class="load-button">Load Email Addresses</button>
+        </div>
+        
+        <div id="loadingMessage" class="loading" style="display: none;">
+          Loading email addresses... This may take a minute.
+        </div>
+        
+        <div id="errorMessage" class="error" style="display: none;"></div>
+        
+        <div id="resultsContainer" style="display: none;">
+          <div class="summary">
+            <h3>Export Summary</h3>
+            <p id="summaryText"></p>
+          </div>
+          
+          <div class="copy-buttons">
+            <button class="copy-btn" id="copyEmailsBtn">Copy All Emails (Comma Separated)</button>
+            <button class="copy-btn" id="copyListBtn">Copy Full List</button>
+          </div>
+          
+          <div class="email-list" id="emailList">
+            <!-- Email list will be populated here -->
+          </div>
+        </div>
+      </div>
+
+      <script>
+        let emailData = [];
+
+        document.getElementById('loadButton').addEventListener('click', async () => {
+          const loadButton = document.getElementById('loadButton');
+          const initialState = document.getElementById('initialState');
+          const loadingMessage = document.getElementById('loadingMessage');
+          const errorMessage = document.getElementById('errorMessage');
+          const resultsContainer = document.getElementById('resultsContainer');
+          
+          try {
+            loadButton.disabled = true;
+            initialState.style.display = 'none';
+            loadingMessage.style.display = 'block';
+            errorMessage.style.display = 'none';
+            resultsContainer.style.display = 'none';
+            
+            const response = await fetch('/api/dream-teams/export-emails?forceRefresh=true');
+            const result = await response.json();
+            
+            if (!result.success) {
+              throw new Error(result.error || 'Failed to fetch email addresses');
+            }
+            
+            emailData = result.data.dreamTeamers;
+            displayResults();
+            
+            loadingMessage.style.display = 'none';
+            resultsContainer.style.display = 'block';
+            
+          } catch (error) {
+            console.error('Error loading emails:', error);
+            errorMessage.textContent = 'Error: ' + error.message;
+            errorMessage.style.display = 'block';
+            loadingMessage.style.display = 'none';
+            initialState.style.display = 'block';
+            loadButton.disabled = false;
+          }
+        });
+
+        function displayResults() {
+          const summaryText = document.getElementById('summaryText');
+          const emailList = document.getElementById('emailList');
+          
+          const totalPeople = emailData.length;
+          const peopleWithEmails = emailData.filter(p => p.emails.length > 0).length;
+          const totalEmails = emailData.reduce((sum, p) => sum + p.emails.length, 0);
+          
+          summaryText.textContent = \`Found \${totalPeople} Dream Teamers with \${totalEmails} total email addresses. \${peopleWithEmails} people have at least one email.\`;
+          
+          emailList.innerHTML = emailData.map(person => {
+            const emailsDisplay = person.emails.length > 0 
+              ? person.emails.join(', ') 
+              : '<em>No email on file</em>';
+            const teamsDisplay = person.teams.join(', ');
+            
+            return \`
+              <div class="person-item">
+                <div class="person-name">\${person.firstName} \${person.lastName}</div>
+                <div class="person-emails">\${emailsDisplay}</div>
+                <div class="person-teams">\${teamsDisplay}</div>
+              </div>
+            \`;
+          }).join('');
+        }
+
+        document.getElementById('copyEmailsBtn').addEventListener('click', async () => {
+          const allEmails = emailData
+            .flatMap(p => p.emails)
+            .filter(email => email)
+            .join(', ');
+          
+          try {
+            await navigator.clipboard.writeText(allEmails);
+            const btn = document.getElementById('copyEmailsBtn');
+            const originalText = btn.textContent;
+            btn.textContent = '✓ Copied!';
+            btn.classList.add('copied');
+            
+            setTimeout(() => {
+              btn.textContent = originalText;
+              btn.classList.remove('copied');
+            }, 2000);
+          } catch (err) {
+            alert('Failed to copy to clipboard');
+          }
+        });
+
+        document.getElementById('copyListBtn').addEventListener('click', async () => {
+          const fullList = emailData.map(person => {
+            const emails = person.emails.join(', ') || 'No email';
+            return \`\${person.firstName} \${person.lastName} - \${emails} - Teams: \${person.teams.join(', ')}\`;
+          }).join('\\n');
+          
+          try {
+            await navigator.clipboard.writeText(fullList);
+            const btn = document.getElementById('copyListBtn');
+            const originalText = btn.textContent;
+            btn.textContent = '✓ Copied!';
+            btn.classList.add('copied');
+            
+            setTimeout(() => {
+              btn.textContent = originalText;
+              btn.classList.remove('copied');
+            }, 2000);
+          } catch (err) {
+            alert('Failed to copy to clipboard');
+          }
+        });
+      </script>
+    </body>
+    </html>
+  `);
+});
+
 // Pending removals page (for admin review)
 app.get('/dream-teams/pending-removals', async (req, res) => {
   res.send(`
@@ -6662,6 +7179,15 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           border-radius: 6px;
           margin-bottom: 20px;
         }
+        #lastUpdate {
+          margin: 10px 0;
+          color: #666;
+          font-size: 14px;
+          display: none;
+        }
+        body.dark-mode #lastUpdate {
+          color: #e0e0e0;
+        }
       </style>
       <script>
         // Apply dark mode immediately to prevent flash
@@ -6685,6 +7211,8 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
           </div>
         </div>
         
+        <p id="lastUpdate"></p>
+        
         <div id="summary" class="summary" style="display: none;">
           <h3>Removal Summary</h3>
           <p id="summaryText">Loading...</p>
@@ -6697,6 +7225,37 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
 
       <script>
         let pendingRemovalsData = [];
+
+        // Format timestamp for display
+        function formatLastUpdateTime(timestamp) {
+          if (!timestamp) return '';
+          const date = new Date(timestamp);
+          return date.toLocaleString('en-US', { 
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: 'numeric',
+            minute: 'numeric',
+            hour12: true
+          });
+        }
+
+        // Update the last update time display
+        async function updateLastUpdateTime() {
+          try {
+            const response = await fetch('/api/dream-teams/cache-info');
+            if (!response.ok) throw new Error('Failed to fetch cache info');
+            const { timestamp } = await response.json();
+            const lastUpdate = document.getElementById('lastUpdate');
+            if (timestamp) {
+              lastUpdate.textContent = 'Last updated: ' + formatLastUpdateTime(timestamp);
+              lastUpdate.style.display = 'block';
+            }
+          } catch (error) {
+            console.error('Error fetching cache info:', error);
+          }
+        }
 
         // Dark mode functionality
         document.addEventListener('DOMContentLoaded', function() {
@@ -6734,6 +7293,9 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
               displayPendingRemovals(pendingRemovalsData);
               updateSummary(result.data.totalCount);
               removalsList.style.display = 'grid';
+              
+              // Update the last update timestamp
+              updateLastUpdateTime();
             } else {
               showError('Failed to load pending removals: ' + result.error);
             }
