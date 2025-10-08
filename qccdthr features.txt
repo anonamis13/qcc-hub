@@ -5,7 +5,6 @@ Upcoming Features:
 Chart for total members vs. serve attendance
 Flag for haven't served in 2 months?
 ?which step of the workflow the person is on, on the admin page (need to link data with WorkflowStep API)
-Change "Current Dream Teamers" to just "Dream Teamers"
 
 ?See if there's a better way to track when a member joined the workflow
 ?Add 2/6 Month Check-In tags to Completed members
@@ -25,3 +24,4 @@ hide screen when refresh data is ongoing
 Pending Removals keeps empty removal reason, should be default message
 standardize in process vs in progress
 new member, in progress, and pending removal tags all at the same time do not space correctly
+Change "Current Dream Teamers" to just "Dream Teamers"

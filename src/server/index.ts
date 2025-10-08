@@ -6186,7 +6186,7 @@ app.get('/dream-teams', async (req, res) => {
             <div class="stats-grid">
               <div class="stat-card">
                 <div class="stat-value" id="totalDreamTeamers">-</div>
-                <div class="stat-label">Current Dream Teamers! 🎉</div>
+                <div class="stat-label">Dream Teamers! 🎉</div>
               </div>
               <div class="stat-card">
                 <div class="stat-value" id="inProgressCount">-</div>
