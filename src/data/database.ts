@@ -703,6 +703,7 @@ export const dreamTeamsTracking = {
     reason: string | null;
     removalDate: string;
     reviewerName: string;
+    processed: number;
   }> => {
     try {
       const db = initializeDb();
@@ -710,7 +711,8 @@ export const dreamTeamsTracking = {
         SELECT id, workflow_id as workflowId, workflow_name as workflowName,
                person_id as personId, person_first_name as firstName, 
                person_last_name as lastName, removal_reason as reason, 
-               removal_date as removalDate, reviewer_name as reviewerName
+               removal_date as removalDate, reviewer_name as reviewerName,
+               processed
         FROM dream_team_removals 
         ORDER BY workflow_name ASC, person_last_name ASC, person_first_name ASC
       `);
@@ -725,6 +727,7 @@ export const dreamTeamsTracking = {
         reason: string | null;
         removalDate: string;
         reviewerName: string;
+        processed: number;
       }>;
     } catch (error) {
       console.error('Failed to get all pending removals:', error);

@@ -1035,8 +1035,10 @@ app.get('/api/dream-teams', async (req, res) => {
       const lastReviewed = dreamTeamsTracking.getLastReviewDate(workflow.id);
       const lastReviewInfo = dreamTeamsTracking.getLastReviewInfo(workflow.id);
       
-      // Filter database removals to only those still active in this workflow's PCO data
-      const workflowRemovals = allRemovals.filter(removal => removal.workflowId === workflow.id);
+      // Filter database removals to only unprocessed ones that are still active in this workflow's PCO data
+      const workflowRemovals = allRemovals.filter(removal => 
+        removal.workflowId === workflow.id && removal.processed === 0
+      );
       const actualPendingRemovals = workflowRemovals.filter(removal => {
         // Check if this person is still in the current workflow roster
         const currentMember = workflow.roster.find(member => member.personId === removal.personId);
@@ -1044,12 +1046,21 @@ app.get('/api/dream-teams', async (req, res) => {
           return false; // Not in roster
         }
         
-        // Check if they rejoined after the removal date
+        // Check if they rejoined after the removal date (compare dates only, not times)
         const joinDate = new Date(currentMember.movedToStepAt || currentMember.joinedAt);
-        const removalDate = new Date(removal.removalDate);
+        
+        // Parse removal date string directly (YYYY-MM-DD format) to avoid timezone issues
+        const removalDateParts = removal.removalDate.split('-');
+        const removalYear = parseInt(removalDateParts[0]);
+        const removalMonth = parseInt(removalDateParts[1]) - 1; // JS months are 0-indexed
+        const removalDay = parseInt(removalDateParts[2]);
+        
+        // Compare only the DATE portion (ignore time of day)
+        const joinDateOnly = new Date(joinDate.getFullYear(), joinDate.getMonth(), joinDate.getDate());
+        const removalDateOnly = new Date(removalYear, removalMonth, removalDay);
         
         // Only consider it pending if they didn't rejoin after removal
-        return joinDate <= removalDate;
+        return joinDateOnly <= removalDateOnly;
       });
       
       // Calculate if review is needed based on the 15th-of-the-month logic
@@ -1265,8 +1276,13 @@ app.get('/api/dream-teams/pending-removals', async (req, res) => {
       });
     });
     
-    // Filter removals to only show people who are still in PCO workflows AND haven't rejoined
+    // Filter removals to only show unprocessed people who are still in PCO workflows AND haven't rejoined
     const actualPendingRemovals = allRemovals.filter(removal => {
+      // Only show unprocessed removals
+      if (removal.processed === 1) {
+        return false;
+      }
+      
       const memberKey = `${removal.workflowId}-${removal.personId}`;
       const memberDetails = currentMemberDetails.get(memberKey);
       
@@ -1274,9 +1290,20 @@ app.get('/api/dream-teams/pending-removals', async (req, res) => {
         return false; // Not currently in any workflow
       }
       
-      // Check if they rejoined after the removal date
-      const removalDate = new Date(removal.removalDate);
-      return memberDetails.joinDate <= removalDate;
+      // Check if they rejoined after the removal date (compare dates only, not times)
+      const joinDate = memberDetails.joinDate;
+      
+      // Parse removal date string directly (YYYY-MM-DD format) to avoid timezone issues
+      const removalDateParts = removal.removalDate.split('-');
+      const removalYear = parseInt(removalDateParts[0]);
+      const removalMonth = parseInt(removalDateParts[1]) - 1; // JS months are 0-indexed
+      const removalDay = parseInt(removalDateParts[2]);
+      
+      // Compare only the DATE portion (ignore time of day)
+      const joinDateOnly = new Date(joinDate.getFullYear(), joinDate.getMonth(), joinDate.getDate());
+      const removalDateOnly = new Date(removalYear, removalMonth, removalDay);
+      
+      return joinDateOnly <= removalDateOnly;
     });
     
     res.json({
@@ -1324,7 +1351,7 @@ app.get('/api/dream-teams/:workflowId', async (req, res) => {
     const lastReviewed = dreamTeamsTracking.getLastReviewDate(workflowId);
     const lastReviewInfo = dreamTeamsTracking.getLastReviewInfo(workflowId);
     
-    // Get all removals for this workflow and filter based on current PCO data
+    // Get all removals for this workflow
     const allRemovalsForWorkflow = dreamTeamsTracking.getAllPendingRemovals().filter(removal => removal.workflowId === workflowId);
     const currentMemberIds = new Set(currentMembers.map(card => card.relationships.person.data.id));
     
@@ -1364,16 +1391,33 @@ app.get('/api/dream-teams/:workflowId', async (req, res) => {
     allRemovalsForWorkflow.forEach(removal => {
       const isCurrentlyInPCO = currentMemberIds.has(removal.personId);
       
+      // Only consider unprocessed removals for "pending" status
+      // Processed removals should always go to past members
+      if (removal.processed === 1) {
+        pastMembers.push(removal);
+        return;
+      }
+      
       if (isCurrentlyInPCO) {
         // Check if they rejoined after the removal date
         const currentJoinDate = currentMemberJoinDates.get(removal.personId);
-        const removalDate = new Date(removal.removalDate);
         
-        if (currentJoinDate && currentJoinDate > removalDate) {
+        // Parse removal date string directly (YYYY-MM-DD format) to avoid timezone issues
+        const removalDateParts = removal.removalDate.split('-');
+        const removalYear = parseInt(removalDateParts[0]);
+        const removalMonth = parseInt(removalDateParts[1]) - 1; // JS months are 0-indexed
+        const removalDay = parseInt(removalDateParts[2]);
+        
+        // Compare only the DATE portion (ignore time of day)
+        // Create dates at midnight local time for fair comparison
+        const joinDateOnly = currentJoinDate ? new Date(currentJoinDate.getFullYear(), currentJoinDate.getMonth(), currentJoinDate.getDate()) : null;
+        const removalDateOnly = new Date(removalYear, removalMonth, removalDay);
+        
+        if (joinDateOnly && joinDateOnly > removalDateOnly) {
           // They rejoined after being removed - treat as past member (don't mark as pending)
           pastMembers.push(removal);
         } else {
-          // Still pending removal
+          // Still pending removal (unprocessed and not rejoined)
           pendingRemovals.push(removal);
         }
       } else {
