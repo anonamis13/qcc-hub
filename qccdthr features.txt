@@ -25,3 +25,4 @@ Pending Removals keeps empty removal reason, should be default message
 standardize in process vs in progress
 new member, in progress, and pending removal tags all at the same time do not space correctly
 Change "Current Dream Teamers" to just "Dream Teamers"
+Show number of pending removals on the home page button

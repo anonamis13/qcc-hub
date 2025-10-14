@@ -1052,11 +1052,24 @@ app.get('/api/dream-teams', async (req, res) => {
         return joinDate <= removalDate;
       });
       
-      // Calculate if review is needed (more than 30 days since last review)
+      // Calculate if review is needed based on the 15th-of-the-month logic
       let needsReview = true;
       if (lastReviewed) {
-        const daysSinceReview = Math.floor((Date.now() - new Date(lastReviewed).getTime()) / (1000 * 60 * 60 * 24));
-        needsReview = daysSinceReview > 30;
+        // Parse the review date (YYYY-MM-DD format) as local time
+        const dateParts = lastReviewed.split('-');
+        const reviewDate = new Date(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]));
+        const now = new Date();
+        
+        // Calculate the next 15th after the review date
+        let next15th = new Date(reviewDate.getFullYear(), reviewDate.getMonth(), 15);
+        
+        // If the review date is on or after the 15th of that month, move to the 15th of next month
+        if (reviewDate.getDate() >= 15) {
+          next15th = new Date(reviewDate.getFullYear(), reviewDate.getMonth() + 1, 15);
+        }
+        
+        // Team needs review if we've reached or passed the next 15th
+        needsReview = now >= next15th;
       }
       
       return {
@@ -5870,6 +5883,13 @@ app.get('/dream-teams', async (req, res) => {
             color: #212529;
             text-decoration: none;
           }
+          #pendingRemovalsCount {
+            background-color: rgba(33, 37, 41, 0.2);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+          }
           .loading {
             text-align: center;
             padding: 40px;
@@ -6172,6 +6192,7 @@ app.get('/dream-teams', async (req, res) => {
             <div class="header-buttons">
               <a href="/dream-teams/pending-removals" class="pending-removals-button">
                 <span>View Pending Removals</span>
+                <span id="pendingRemovalsCount" style="display: none;"></span>
               </a>
               <button id="refreshButton" class="refresh-button">
                 <span>Refresh Data</span>
@@ -6346,9 +6367,15 @@ app.get('/dream-teams', async (req, res) => {
             const uniquePeople = new Map(); // personId -> { status, teams }
             let totalInProgress = 0;
             let totalCompleted = 0;
+            let totalPendingRemovals = 0;
             
             // Process each team's roster
             teamsData.forEach(team => {
+              // Count pending removals across all teams
+              if (team.pendingRemovals) {
+                totalPendingRemovals += team.pendingRemovals;
+              }
+              
               if (team.roster && team.roster.length > 0) {
                 team.roster.forEach(member => {
                   const personId = member.personId;
@@ -6386,6 +6413,15 @@ app.get('/dream-teams', async (req, res) => {
             document.getElementById('inProgressCount').textContent = totalInProgress;
             document.getElementById('completedCount').textContent = totalCompleted;
             
+            // Update pending removals count on button
+            const pendingRemovalsCountSpan = document.getElementById('pendingRemovalsCount');
+            if (totalPendingRemovals > 0) {
+              pendingRemovalsCountSpan.textContent = totalPendingRemovals;
+              pendingRemovalsCountSpan.style.display = 'inline';
+            } else {
+              pendingRemovalsCountSpan.style.display = 'none';
+            }
+            
             // Show the stats section
             document.getElementById('dreamTeamStats').style.display = 'block';
           }
@@ -6417,17 +6453,26 @@ app.get('/dream-teams', async (req, res) => {
               let statusText = 'Never reviewed';
               
               if (team.lastReviewed) {
-                const lastReviewed = new Date(team.lastReviewed);
+                // Parse the review date (YYYY-MM-DD format)
+                const dateParts = team.lastReviewed.split('-');
+                const lastReviewed = new Date(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]));
                 const now = new Date();
-                const daysSince = Math.floor((now - lastReviewed) / (1000 * 60 * 60 * 24));
                 
-                if (daysSince <= 14) {
+                // Calculate the next 15th after the review date
+                let next15th = new Date(lastReviewed.getFullYear(), lastReviewed.getMonth(), 15);
+                
+                // If the review date is on or after the 15th of that month, move to the 15th of next month
+                if (lastReviewed.getDate() >= 15) {
+                  next15th = new Date(lastReviewed.getFullYear(), lastReviewed.getMonth() + 1, 15);
+                }
+                
+                // Compare today with the next 15th
+                if (now < next15th) {
+                  // Still green - before the next 15th
                   statusClass = 'fresh';
                   statusText = 'Recently reviewed';
-                } else if (daysSince <= 30) {
-                  statusClass = 'needs-review';
-                  statusText = 'Review soon';
                 } else {
+                  // Turn red - on or after the next 15th
                   statusClass = 'old';
                   statusText = 'Needs review';
                 }
