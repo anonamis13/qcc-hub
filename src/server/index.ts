@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import cron from 'node-cron';
 import pcoClient, { getPeopleGroups, getGroupAttendance, getGroup, getGroupMemberships, getDreamTeamWorkflows, getWorkflowCards } from './config/pco.js';
 import { cache } from './config/cache.js';
-import { membershipSnapshots, dreamTeamsTracking } from '../data/database.js';
+import { membershipSnapshots, dreamTeamsTracking, replenishmentRequests } from '../data/database.js';
 
 dotenv.config();
 
@@ -2292,6 +2292,12 @@ app.get('/home-page', async (req, res) => {
         .app-button.dream-teams:hover {
           background-color: #1e7e34;
         }
+        .app-button.replenishment {
+          background-color: #6f42c1;
+        }
+        .app-button.replenishment:hover {
+          background-color: #5a32a3;
+        }
         .description {
           color: #888;
           font-size: 14px;
@@ -2375,6 +2381,11 @@ app.get('/home-page', async (req, res) => {
           Dream Team Health Report
         </a>
         <p class="description">Manage Dream Team rosters and review member status</p>
+        
+        <a href="/replenishment-requests" class="app-button replenishment">
+          Replenishment Requests
+        </a>
+        <p class="description">Submit and manage resource replenishment requests</p>
       </div>
       
       <script>
@@ -8381,6 +8392,11 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             background-color: #dc3545;
             color: white;
           }
+          .modal-btn.confirm:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+            opacity: 0.6;
+          }
           .modal-btn.undo-confirm {
             background-color: #28a745;
             color: white;
@@ -8504,8 +8520,8 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
         <div id="reasonModal" class="modal">
           <div class="modal-content">
             <h3>Reason for Removal</h3>
-            <p>Please provide a reason for removing this member (optional):</p>
-            <textarea id="removalReason" placeholder="e.g., Moved to different team, No longer attending, etc."></textarea>
+            <p>Please provide a reason for removing this member (required):</p>
+            <textarea id="removalReason" placeholder="e.g., Moved to different team, No longer attending, etc." required></textarea>
             <div class="modal-buttons">
               <button class="modal-btn cancel" id="cancelRemoval">Cancel</button>
               <button class="modal-btn confirm" id="confirmRemoval">Confirm Removal</button>
@@ -8798,6 +8814,10 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
                     checkbox: this
                   };
                   document.getElementById('reasonModal').style.display = 'block';
+                  // Disable confirm button initially
+                  document.getElementById('confirmRemoval').disabled = true;
+                  // Clear textarea
+                  document.getElementById('removalReason').value = '';
                 }
               });
             });
@@ -8865,6 +8885,12 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           }
 
           // Modal event listeners
+          // Enable/disable confirm button based on textarea input
+          document.getElementById('removalReason').addEventListener('input', function() {
+            const confirmButton = document.getElementById('confirmRemoval');
+            confirmButton.disabled = this.value.trim() === '';
+          });
+
           document.getElementById('cancelRemoval').addEventListener('click', function() {
             if (currentMemberForRemoval) {
               currentMemberForRemoval.checkbox.classList.remove('selected');
@@ -9069,6 +9095,1617 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
     res.send(html);
   } catch (error) {
     console.error('Error rendering team roster page:', error);
+    res.status(500).send('Error loading page');
+  }
+});
+
+// ==================== REPLENISHMENT REQUESTS API ENDPOINTS ====================
+
+// Get all departments
+app.get('/api/replenishment/departments', async (req, res) => {
+  try {
+    const departments = replenishmentRequests.getDepartments();
+    res.json(departments);
+  } catch (error) {
+    console.error('Error fetching departments:', error);
+    res.status(500).json({ error: 'Failed to fetch departments' });
+  }
+});
+
+// Get all items (with department info)
+app.get('/api/replenishment/items', async (req, res) => {
+  try {
+    const items = replenishmentRequests.getAllItems();
+    res.json(items);
+  } catch (error) {
+    console.error('Error fetching items:', error);
+    res.status(500).json({ error: 'Failed to fetch items' });
+  }
+});
+
+// Get items for a specific department
+app.get('/api/replenishment/departments/:departmentId/items', async (req, res) => {
+  try {
+    const { departmentId } = req.params;
+    const items = replenishmentRequests.getItemsByDepartment(parseInt(departmentId));
+    res.json(items);
+  } catch (error) {
+    console.error('Error fetching department items:', error);
+    res.status(500).json({ error: 'Failed to fetch department items' });
+  }
+});
+
+// Get all requests
+app.get('/api/replenishment/requests', async (req, res) => {
+  try {
+    const { status } = req.query;
+    
+    if (status && typeof status === 'string') {
+      const requests = replenishmentRequests.getRequestsByStatus(status);
+      res.json(requests);
+    } else {
+      const requests = replenishmentRequests.getAllRequests();
+      res.json(requests);
+    }
+  } catch (error) {
+    console.error('Error fetching requests:', error);
+    res.status(500).json({ error: 'Failed to fetch requests' });
+  }
+});
+
+// Create a new request
+app.post('/api/replenishment/requests', async (req, res) => {
+  try {
+    const { itemId, departmentId, quantityRequested, requestedBy, notes } = req.body;
+    
+    // Validate required fields
+    if (!itemId || !departmentId || !quantityRequested || !requestedBy) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: itemId, departmentId, quantityRequested, requestedBy' 
+      });
+    }
+    
+    const requestId = replenishmentRequests.createRequest(
+      parseInt(itemId),
+      parseInt(departmentId),
+      parseInt(quantityRequested),
+      requestedBy,
+      notes
+    );
+    
+    res.json({ 
+      success: true, 
+      requestId,
+      message: 'Request created successfully' 
+    });
+  } catch (error) {
+    console.error('Error creating request:', error);
+    res.status(500).json({ error: 'Failed to create request' });
+  }
+});
+
+// Update request status
+app.post('/api/replenishment/requests/:requestId/status', async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { status, changedBy, notes } = req.body;
+    
+    // Validate required fields
+    if (!status || !changedBy) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: status, changedBy' 
+      });
+    }
+    
+    // Validate status
+    const validStatuses = ['requested', 'ordered', 'delivered', 'stocked'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ 
+        error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+      });
+    }
+    
+    replenishmentRequests.updateRequestStatus(
+      parseInt(requestId),
+      status,
+      changedBy,
+      notes
+    );
+    
+    res.json({ 
+      success: true, 
+      message: `Request status updated to ${status}` 
+    });
+  } catch (error) {
+    console.error('Error updating request status:', error);
+    res.status(500).json({ error: 'Failed to update request status' });
+  }
+});
+
+// Get request history (audit log)
+app.get('/api/replenishment/requests/:requestId/history', async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const history = replenishmentRequests.getRequestHistory(parseInt(requestId));
+    res.json(history);
+  } catch (error) {
+    console.error('Error fetching request history:', error);
+    res.status(500).json({ error: 'Failed to fetch request history' });
+  }
+});
+
+// Update item stock manually
+app.post('/api/replenishment/items/:itemId/stock', async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    const { stock } = req.body;
+    
+    if (stock === undefined || stock === null) {
+      return res.status(400).json({ 
+        error: 'Missing required field: stock' 
+      });
+    }
+    
+    replenishmentRequests.updateItemStock(parseInt(itemId), parseInt(stock));
+    
+    res.json({ 
+      success: true, 
+      message: 'Item stock updated successfully' 
+    });
+  } catch (error) {
+    console.error('Error updating item stock:', error);
+    res.status(500).json({ error: 'Failed to update item stock' });
+  }
+});
+
+// ==================== REPLENISHMENT REQUESTS UI ====================
+
+// Replenishment Requests - Main dashboard
+app.get('/replenishment-requests', async (req, res) => {
+  try {
+    // Fetch initial data
+    const departments = replenishmentRequests.getDepartments();
+    const items = replenishmentRequests.getAllItems();
+    const allRequests = replenishmentRequests.getAllRequests();
+    
+    // Calculate stats
+    const requestedCount = allRequests.filter(r => r.status === 'requested').length;
+    const orderedCount = allRequests.filter(r => r.status === 'ordered').length;
+    const deliveredCount = allRequests.filter(r => r.status === 'delivered').length;
+    const stockedThisMonth = allRequests.filter(r => {
+      if (r.status !== 'stocked' || !r.stocked_date) return false;
+      const stockedDate = new Date(r.stocked_date);
+      const now = new Date();
+      return stockedDate.getMonth() === now.getMonth() && 
+             stockedDate.getFullYear() === now.getFullYear();
+    }).length;
+    
+    const lowStockItems = items.filter(item => item.needs_replenishment);
+    
+    const html = `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>QCC Hub - Replenishment Requests</title>
+        <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+            transition: background-color 0.3s ease;
+          }
+          
+          /* Dark mode styles */
+          body.dark-mode {
+            background-color: #1a1a1a;
+          }
+          
+          body.dark-mode .container {
+            background-color: #2d2d2d;
+            color: #ffffff;
+          }
+          
+          body.dark-mode h1 {
+            color: #ffffff;
+          }
+          
+          body.dark-mode h2 {
+            color: #ffffff;
+          }
+          
+          body.dark-mode .header {
+            border-bottom-color: #555;
+          }
+          
+          body.dark-mode .info-card {
+            background-color: #3d3d3d;
+            border-color: #555;
+            color: #ffffff;
+          }
+          
+          body.dark-mode .info-card h3 {
+            color: #ffffff;
+          }
+          
+          body.dark-mode .info-card p {
+            color: #cccccc;
+          }
+          
+          body.dark-mode .new-request-button {
+            background-color: #6f42c1;
+          }
+          
+          body.dark-mode .new-request-button:hover {
+            background-color: #5a32a3;
+          }
+          
+          body.dark-mode .refresh-button {
+            background-color: #007bff;
+          }
+          
+          body.dark-mode .refresh-button:hover {
+            background-color: #0056b3;
+          }
+          
+          body.dark-mode .coming-soon-message {
+            background-color: #3d3d3d;
+            border-color: #6f42c1;
+            color: #ffffff;
+          }
+          
+          body.dark-mode .tabs {
+            border-bottom-color: #555;
+          }
+          
+          body.dark-mode .tab-button {
+            background-color: #2d2d2d;
+            color: #cccccc;
+            border-color: #555;
+          }
+          
+          body.dark-mode .tab-button:hover {
+            background-color: #3d3d3d;
+          }
+          
+          body.dark-mode .tab-button.active {
+            background-color: #6f42c1;
+            color: #ffffff;
+            border-bottom-color: #6f42c1;
+          }
+          
+          body.dark-mode .tab-content {
+            background-color: #2d2d2d;
+          }
+          
+          body.dark-mode .request-card {
+            background-color: #3d3d3d;
+            border-color: #555;
+          }
+          
+          body.dark-mode .status-header {
+            color: #ffffff;
+            border-bottom-color: #555;
+          }
+          
+          body.dark-mode .form-container {
+            background-color: #3d3d3d;
+          }
+          
+          body.dark-mode input,
+          body.dark-mode select,
+          body.dark-mode textarea {
+            background-color: #2d2d2d;
+            color: #ffffff;
+            border-color: #555;
+          }
+          
+          body.dark-mode .inventory-card {
+            background-color: #3d3d3d;
+            border-color: #555;
+          }
+          
+          body.dark-mode .inventory-card.low-stock {
+            border-color: #ff9800;
+            background-color: #4a3520;
+          }
+          
+          body.dark-mode .history-card {
+            background-color: #3d3d3d;
+            border-color: #555;
+          }
+          
+          body.dark-mode .low-stock-alert {
+            background-color: #4a3520;
+            border-color: #ff9800;
+          }
+          
+          body.dark-mode .empty-state {
+            color: #888;
+          }
+          
+          .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          }
+          
+          .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 20px;
+          }
+          
+          h1 {
+            color: #333;
+            margin-bottom: 10px;
+          }
+          
+          .dark-mode-toggle {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            padding: 8px 16px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            z-index: 1000;
+          }
+          
+          .dark-mode-toggle:hover {
+            background-color: #0056b3;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+          }
+          
+          body.dark-mode .dark-mode-toggle {
+            background-color: #ffc107;
+            color: #212529;
+          }
+          
+          body.dark-mode .dark-mode-toggle:hover {
+            background-color: #e0a800;
+          }
+          
+          .action-buttons {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+          }
+          
+          .new-request-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 20px;
+            background-color: #6f42c1;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background-color 0.3s ease;
+          }
+          
+          .new-request-button:hover {
+            background-color: #5a32a3;
+          }
+          
+          .refresh-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+          }
+          
+          .refresh-button:hover {
+            background-color: #0056b3;
+          }
+          
+          .refresh-button:disabled {
+            background-color: #007bff !important;
+            cursor: not-allowed;
+            opacity: 0.7;
+          }
+          
+          .info-section {
+            margin-top: 30px;
+          }
+          
+          .info-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+          }
+          
+          .info-card {
+            background-color: white;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+          }
+          
+          .info-card h3 {
+            color: #6f42c1;
+            margin-top: 0;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+          }
+          
+          .info-card p {
+            color: #666;
+            line-height: 1.6;
+            margin: 10px 0;
+          }
+          
+          .info-card ul {
+            margin: 10px 0;
+            padding-left: 20px;
+          }
+          
+          .info-card li {
+            color: #666;
+            margin: 5px 0;
+          }
+          
+          body.dark-mode .info-card ul {
+            color: #cccccc;
+          }
+          
+          body.dark-mode .info-card li {
+            color: #cccccc;
+          }
+          
+          .coming-soon-message {
+            background-color: #f8f9fa;
+            border: 2px solid #6f42c1;
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            margin: 30px 0;
+          }
+          
+          .coming-soon-message h2 {
+            color: #6f42c1;
+            margin-top: 0;
+            margin-bottom: 15px;
+          }
+          
+          .coming-soon-message p {
+            color: #666;
+            font-size: 1.1em;
+            line-height: 1.6;
+          }
+          
+          body.dark-mode .coming-soon-message h2 {
+            color: #9d7bd8;
+          }
+          
+          body.dark-mode .coming-soon-message p {
+            color: #cccccc;
+          }
+          
+          .feature-icon {
+            font-size: 2em;
+            margin-bottom: 10px;
+          }
+          
+          /* Low stock alert */
+          .low-stock-alert {
+            background-color: #fff3cd;
+            border: 2px solid #ff9800;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+          }
+          
+          .low-stock-alert h3 {
+            margin-top: 0;
+            color: #856404;
+          }
+          
+          .low-stock-items {
+            display: grid;
+            gap: 10px;
+          }
+          
+          .low-stock-item {
+            padding: 10px;
+            background-color: white;
+            border-radius: 4px;
+            border-left: 3px solid #ff9800;
+          }
+          
+          .stock-level {
+            color: #ff9800;
+            font-weight: 600;
+          }
+          
+          /* Tabs */
+          .tabs {
+            display: flex;
+            gap: 10px;
+            border-bottom: 2px solid #e9ecef;
+            margin: 20px 0;
+          }
+          
+          .tab-button {
+            padding: 12px 24px;
+            background-color: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            color: #666;
+            transition: all 0.3s ease;
+          }
+          
+          .tab-button:hover {
+            color: #6f42c1;
+            background-color: #f8f9fa;
+          }
+          
+          .tab-button.active {
+            color: #6f42c1;
+            border-bottom-color: #6f42c1;
+          }
+          
+          .tab-content {
+            display: none;
+            padding: 20px 0;
+          }
+          
+          .tab-content.active {
+            display: block;
+          }
+          
+          /* Request cards in columns */
+          .requests-by-status {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-top: 20px;
+          }
+          
+          .status-column {
+            min-width: 0;
+          }
+          
+          .status-header {
+            font-size: 1.1em;
+            font-weight: 600;
+            padding: 12px;
+            border-bottom: 2px solid #e9ecef;
+            margin-bottom: 15px;
+          }
+          
+          .status-header.requested {
+            color: #007bff;
+          }
+          
+          .status-header.ordered {
+            color: #6f42c1;
+          }
+          
+          .status-header.delivered {
+            color: #28a745;
+          }
+          
+          .request-cards {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+          }
+          
+          .request-card {
+            background-color: white;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+          }
+          
+          .request-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+          }
+          
+          .request-details {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 12px;
+          }
+          
+          .detail-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 14px;
+          }
+          
+          .detail-row .label {
+            color: #666;
+            font-weight: 500;
+          }
+          
+          .badge {
+            background-color: #e9ecef;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+          }
+          
+          .badge.success {
+            background-color: #d4edda;
+            color: #155724;
+          }
+          
+          .status-button {
+            width: 100%;
+            padding: 8px 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background-color 0.3s ease;
+          }
+          
+          .status-button-delivered {
+            background-color: #6f42c1;
+          }
+          
+          .status-button-stocked {
+            background-color: #28a745;
+          }
+          
+          .status-button:hover {
+            background-color: #0056b3;
+          }
+          
+          .status-button-delivered:hover {
+            background-color: #5a32a3;
+          }
+          
+          .status-button-stocked:hover {
+            background-color: #198754;
+          }
+          
+          .empty-state {
+            text-align: center;
+            color: #999;
+            padding: 20px;
+            font-style: italic;
+          }
+          
+          /* Form styles */
+          .form-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          }
+          
+          .form-group {
+            margin-bottom: 20px;
+          }
+          
+          .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+          }
+          
+          .form-group input,
+          .form-group select,
+          .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+          }
+          
+          .form-group input:focus,
+          .form-group select:focus,
+          .form-group textarea:focus {
+            outline: none;
+            border-color: #6f42c1;
+          }
+          
+          .submit-button {
+            width: 100%;
+            padding: 12px 20px;
+            background-color: #6f42c1;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+          }
+          
+          .submit-button:hover {
+            background-color: #5a32a3;
+          }
+          
+          /* Inventory grid */
+          .inventory-section {
+            margin-bottom: 30px;
+          }
+          
+          .inventory-section h3 {
+            margin-bottom: 15px;
+            color: #6f42c1;
+          }
+          
+          .inventory-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+          }
+          
+          .inventory-card {
+            background-color: white;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+            transition: all 0.3s ease;
+          }
+          
+          .inventory-card.low-stock {
+            border-color: #ff9800;
+            background-color: #fff3cd;
+          }
+          
+          .inventory-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 14px;
+            font-weight: 600;
+          }
+          
+          .warning-badge {
+            background-color: #ff9800;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 8px;
+            font-size: 11px;
+          }
+          
+          .inventory-stock {
+            margin: 15px 0;
+          }
+          
+          .stock-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #6f42c1;
+          }
+          
+          .stock-unit {
+            display: block;
+            color: #666;
+            font-size: 14px;
+            margin-top: 5px;
+          }
+          
+          .inventory-threshold {
+            color: #666;
+            font-size: 12px;
+            margin-top: 10px;
+          }
+          
+          .inventory-description {
+            color: #888;
+            font-size: 12px;
+            margin-top: 8px;
+            font-style: italic;
+          }
+          
+          .edit-stock-button {
+            width: 100%;
+            margin-top: 10px;
+            padding: 8px 12px;
+            background-color: #6f42c1;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: background-color 0.3s ease;
+          }
+          
+          .edit-stock-button:hover {
+            background-color: #5a32a3;
+          }
+          
+          /* Modal styles */
+          .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            animation: fadeIn 0.3s;
+          }
+          
+          @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+          }
+          
+          .modal.show {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+          }
+          
+          .modal-content {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            max-width: 500px;
+            width: 90%;
+            animation: slideDown 0.3s;
+            position: relative;
+          }
+          
+          @keyframes slideDown {
+            from {
+              transform: translateY(-50px);
+              opacity: 0;
+            }
+            to {
+              transform: translateY(0);
+              opacity: 1;
+            }
+          }
+          
+          body.dark-mode .modal-content {
+            background-color: #2d2d2d;
+            color: #ffffff;
+          }
+          
+          body.dark-mode .modal-content p {
+            color: #cccccc;
+          }
+          
+          body.dark-mode .modal-content h2 {
+            color: #ffffff;
+          }
+          
+          .close-modal {
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            font-size: 28px;
+            font-weight: bold;
+            color: #999;
+            cursor: pointer;
+            transition: color 0.3s ease;
+          }
+          
+          .close-modal:hover {
+            color: #333;
+          }
+          
+          body.dark-mode .close-modal {
+            color: #cccccc;
+          }
+          
+          body.dark-mode .close-modal:hover {
+            color: #ffffff;
+          }
+          
+          .modal-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+          }
+          
+          .cancel-button {
+            flex: 1;
+            padding: 10px 20px;
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+          }
+          
+          .cancel-button:hover {
+            background-color: #5a6268;
+          }
+          
+          /* History list */
+          .history-list {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+          }
+          
+          .history-card {
+            background-color: white;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+          }
+          
+          .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #e9ecef;
+          }
+          
+          .history-details {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+          }
+          
+          /* Responsive design */
+          @media (max-width: 1024px) {
+            .requests-by-status {
+              grid-template-columns: 1fr;
+            }
+            
+            .history-details {
+              grid-template-columns: 1fr;
+            }
+          }
+          
+          @media (max-width: 768px) {
+            .inventory-grid {
+              grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            }
+          }
+        </style>
+        <script>
+          // Apply dark mode immediately to prevent flash
+          if (localStorage.getItem('darkMode') === 'true') {
+            document.documentElement.classList.add('dark-mode-loading');
+          }
+        </script>
+        <style>
+          /* Temporary class to apply dark mode before body loads */
+          html.dark-mode-loading body {
+            background-color: #1a1a1a !important;
+          }
+          html.dark-mode-loading .container {
+            background-color: #2d2d2d !important;
+            color: #ffffff !important;
+          }
+          html.dark-mode-loading h1 {
+            color: #ffffff !important;
+          }
+        </style>
+      </head>
+      <body>
+        <button class="dark-mode-toggle" id="darkModeToggle">🌙 Dark Mode</button>
+        
+        <div class="container">
+          <div class="header">
+            <div>
+              <h1>Queen City Church - Replenishment Requests</h1>
+            </div>
+            <div class="action-buttons">
+              <button class="new-request-button" disabled>
+                New Request
+              </button>
+            </div>
+          </div>
+          
+          ${lowStockItems.length > 0 ? `
+          <div class="low-stock-alert">
+            <h3>⚠️ Low Stock Items (${lowStockItems.length})</h3>
+            <div class="low-stock-items">
+              ${lowStockItems.map(item => `
+                <div class="low-stock-item">
+                  <strong>${item.department_name}</strong>: ${item.name} 
+                  <span class="stock-level">(${item.current_stock} ${item.unit} remaining)</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+          ` : ''}
+          
+          <!-- Tab Navigation -->
+          <div class="tabs">
+            <button class="tab-button active" data-tab="requests">Active Requests</button>
+            <button class="tab-button" data-tab="new-request">New Request</button>
+            <button class="tab-button" data-tab="inventory">Inventory</button>
+            <button class="tab-button" data-tab="history">History</button>
+          </div>
+          
+          <!-- Active Requests Tab -->
+          <div id="requests-tab" class="tab-content active">
+            <div class="requests-by-status">
+              <div class="status-column">
+                <h3 class="status-header requested">📝 Requested (${requestedCount})</h3>
+                <div class="request-cards" id="requested-cards">
+                  ${allRequests.filter(r => r.status === 'requested').map(req => `
+                    <div class="request-card" data-request-id="${req.id}">
+                      <div class="request-header">
+                        <strong>${req.item_name}</strong>
+                        <span class="badge">${req.quantity_requested} ${req.unit}</span>
+                      </div>
+                      <div class="request-details">
+                        <div class="detail-row">
+                          <span class="label">Department:</span>
+                          <span>${req.department_name}</span>
+                        </div>
+                        <div class="detail-row">
+                          <span class="label">Requested by:</span>
+                          <span>${req.requested_by}</span>
+                        </div>
+                        <div class="detail-row">
+                          <span class="label">Date:</span>
+                          <span>${req.requested_date}</span>
+                        </div>
+                        ${req.notes ? `<div class="detail-row"><span class="label">Notes:</span><span>${req.notes}</span></div>` : ''}
+                      </div>
+                      <button class="status-button" onclick="updateStatus(${req.id}, 'ordered', '${req.item_name}')">
+                        Mark as Ordered ✓
+                      </button>
+                    </div>
+                  `).join('') || '<p class="empty-state">No requested items</p>'}
+                </div>
+              </div>
+              
+              <div class="status-column">
+                <h3 class="status-header ordered">📦 Ordered (${orderedCount})</h3>
+                <div class="request-cards" id="ordered-cards">
+                  ${allRequests.filter(r => r.status === 'ordered').map(req => `
+                    <div class="request-card" data-request-id="${req.id}">
+                      <div class="request-header">
+                        <strong>${req.item_name}</strong>
+                        <span class="badge">${req.quantity_requested} ${req.unit}</span>
+                      </div>
+                      <div class="request-details">
+                        <div class="detail-row">
+                          <span class="label">Department:</span>
+                          <span>${req.department_name}</span>
+                        </div>
+                        <div class="detail-row">
+                          <span class="label">Ordered by:</span>
+                          <span>${req.ordered_by}</span>
+                        </div>
+                        <div class="detail-row">
+                          <span class="label">Date:</span>
+                          <span>${req.ordered_date}</span>
+                        </div>
+                      </div>
+                      <button class="status-button status-button-delivered" onclick="updateStatus(${req.id}, 'delivered', '${req.item_name}')">
+                        Mark as Delivered ✓
+                      </button>
+                    </div>
+                  `).join('') || '<p class="empty-state">No ordered items</p>'}
+                </div>
+              </div>
+              
+              <div class="status-column">
+                <h3 class="status-header delivered">🚚 Delivered (${deliveredCount})</h3>
+                <div class="request-cards" id="delivered-cards">
+                  ${allRequests.filter(r => r.status === 'delivered').map(req => `
+                    <div class="request-card" data-request-id="${req.id}">
+                      <div class="request-header">
+                        <strong>${req.item_name}</strong>
+                        <span class="badge">${req.quantity_requested} ${req.unit}</span>
+                      </div>
+                      <div class="request-details">
+                        <div class="detail-row">
+                          <span class="label">Department:</span>
+                          <span>${req.department_name}</span>
+                        </div>
+                        <div class="detail-row">
+                          <span class="label">Delivered by:</span>
+                          <span>${req.delivered_by}</span>
+                        </div>
+                        <div class="detail-row">
+                          <span class="label">Date:</span>
+                          <span>${req.delivered_date}</span>
+                        </div>
+                      </div>
+                      <button class="status-button status-button-stocked" onclick="updateStatus(${req.id}, 'stocked', '${req.item_name}')">
+                        Mark as Stocked ✓
+                      </button>
+                    </div>
+                  `).join('') || '<p class="empty-state">No delivered items</p>'}
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- New Request Tab -->
+          <div id="new-request-tab" class="tab-content">
+            <div class="form-container">
+              <h2>Submit New Request</h2>
+              <form id="newRequestForm">
+                <div class="form-group">
+                  <label for="requestDepartment">Department *</label>
+                  <select id="requestDepartment" required>
+                    <option value="">Select a department...</option>
+                    ${departments.map(dept => `<option value="${dept.id}">${dept.name}</option>`).join('')}
+                  </select>
+                </div>
+                
+                <div class="form-group">
+                  <label for="requestItem">Item *</label>
+                  <select id="requestItem" required disabled>
+                    <option value="">Select a department first...</option>
+                  </select>
+                </div>
+                
+                <div class="form-group">
+                  <label for="requestQuantity">Quantity *</label>
+                  <input type="number" id="requestQuantity" min="1" required>
+                </div>
+                
+                <div class="form-group">
+                  <label for="requestedBy">Your Name *</label>
+                  <input type="text" id="requestedBy" required placeholder="Enter your name">
+                </div>
+                
+                <div class="form-group">
+                  <label for="requestNotes">Notes (Optional)</label>
+                  <textarea id="requestNotes" rows="3" placeholder="Any additional information..."></textarea>
+                </div>
+                
+                <button type="submit" class="submit-button">Submit Request</button>
+              </form>
+            </div>
+          </div>
+          
+          <!-- Inventory Tab -->
+          <div id="inventory-tab" class="tab-content">
+            <h2>Current Inventory</h2>
+            ${departments.map(dept => {
+              const deptItems = items.filter(item => item.department_id === dept.id);
+              return `
+                <div class="inventory-section">
+                  <h3>${dept.name}</h3>
+                  <div class="inventory-grid">
+                    ${deptItems.map(item => `
+                      <div class="inventory-card ${item.needs_replenishment ? 'low-stock' : ''}" data-item-id="${item.id}">
+                        <div class="inventory-header">
+                          <strong>${item.name}</strong>
+                          ${item.needs_replenishment ? '<span class="warning-badge">⚠️ Low</span>' : ''}
+                        </div>
+                        <div class="inventory-stock">
+                          <span class="stock-number">${item.current_stock}</span>
+                          <span class="stock-unit">${item.unit}</span>
+                        </div>
+                        <div class="inventory-threshold">
+                          Min: ${item.min_threshold} ${item.unit}
+                        </div>
+                        ${item.description ? `<div class="inventory-description">${item.description}</div>` : ''}
+                        <button class="edit-stock-button" onclick="editStock(${item.id}, '${item.name}', ${item.current_stock}, '${item.unit}')">
+                          Edit Stock
+                        </button>
+                      </div>
+                    `).join('')}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+          
+          <!-- History Tab -->
+          <div id="history-tab" class="tab-content">
+            <h2>Completed Requests</h2>
+            <div class="history-list">
+              ${allRequests.filter(r => r.status === 'stocked').map(req => `
+                <div class="history-card">
+                  <div class="history-header">
+                    <strong>${req.item_name}</strong>
+                    <span class="badge success">✓ Stocked</span>
+                  </div>
+                  <div class="history-details">
+                    <div class="detail-row">
+                      <span class="label">Department:</span>
+                      <span>${req.department_name}</span>
+                    </div>
+                    <div class="detail-row">
+                      <span class="label">Quantity:</span>
+                      <span>${req.quantity_requested} ${req.unit}</span>
+                    </div>
+                    <div class="detail-row">
+                      <span class="label">Requested by:</span>
+                      <span>${req.requested_by} on ${req.requested_date}</span>
+                    </div>
+                    <div class="detail-row">
+                      <span class="label">Completed:</span>
+                      <span>${req.stocked_date} by ${req.stocked_by}</span>
+                    </div>
+                  </div>
+                </div>
+              `).join('') || '<p class="empty-state">No completed requests yet</p>'}
+            </div>
+          </div>
+          
+          <!-- Edit Stock Modal -->
+          <div id="editStockModal" class="modal">
+            <div class="modal-content">
+              <span class="close-modal" onclick="closeEditModal()">&times;</span>
+              <h2>Edit Stock</h2>
+              <form id="editStockForm">
+                <div class="form-group">
+                  <label>Item:</label>
+                  <p id="editItemName" style="font-weight: bold; margin: 5px 0;"></p>
+                </div>
+                <div class="form-group">
+                  <label for="editCurrentStock">Current Stock:</label>
+                  <p id="editCurrentStock" style="margin: 5px 0 15px 0; color: #666;"></p>
+                </div>
+                <div class="form-group">
+                  <label for="editNewStock">New Stock Amount *</label>
+                  <input type="number" id="editNewStock" min="0" required>
+                </div>
+                <div class="modal-actions">
+                  <button type="button" class="cancel-button" onclick="closeEditModal()">Cancel</button>
+                  <button type="submit" class="submit-button">Update Stock</button>
+                </div>
+              </form>
+            </div>
+          </div>
+          
+          <!-- Name Input Modal (for status updates) -->
+          <div id="nameInputModal" class="modal">
+            <div class="modal-content">
+              <span class="close-modal" onclick="closeNameModal()">&times;</span>
+              <h2 id="nameModalTitle">Enter Your Name</h2>
+              <p id="nameModalMessage" style="margin-bottom: 20px; color: #666;"></p>
+              <form id="nameInputForm">
+                <div class="form-group">
+                  <label for="nameInput">Your Name *</label>
+                  <input type="text" id="nameInput" required placeholder="Enter your name">
+                </div>
+                <div class="modal-actions">
+                  <button type="button" class="cancel-button" onclick="closeNameModal()">Cancel</button>
+                  <button type="submit" class="submit-button">Continue</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+        
+        <script>
+          // Define global functions first for onclick handlers
+          let currentEditItemId = null;
+          let pendingStatusUpdate = null;
+          
+          function editStock(itemId, itemName, currentStock, unit) {
+            currentEditItemId = itemId;
+            document.getElementById('editItemName').textContent = itemName;
+            document.getElementById('editCurrentStock').textContent = currentStock + ' ' + unit;
+            document.getElementById('editNewStock').value = currentStock;
+            document.getElementById('editStockModal').classList.add('show');
+          }
+          
+          function closeEditModal() {
+            document.getElementById('editStockModal').classList.remove('show');
+            currentEditItemId = null;
+          }
+          
+          function openNameModal(title, message) {
+            return new Promise((resolve, reject) => {
+              document.getElementById('nameModalTitle').textContent = title;
+              document.getElementById('nameModalMessage').textContent = message;
+              document.getElementById('nameInput').value = '';
+              document.getElementById('nameInputModal').classList.add('show');
+              
+              // Focus on the input field
+              setTimeout(() => {
+                document.getElementById('nameInput').focus();
+              }, 100);
+              
+              // Store the promise resolver
+              window._nameModalResolve = resolve;
+              window._nameModalReject = reject;
+            });
+          }
+          
+          function closeNameModal() {
+            document.getElementById('nameInputModal').classList.remove('show');
+            if (window._nameModalReject) {
+              window._nameModalReject('cancelled');
+              window._nameModalResolve = null;
+              window._nameModalReject = null;
+            }
+          }
+          
+          async function updateStatus(requestId, newStatus, itemName) {
+            try {
+              const userName = await openNameModal(
+                'Confirm Status Update',
+                \`Enter your name to mark "\${itemName}" as \${newStatus}:\`
+              );
+              
+              const response = await fetch(\`/api/replenishment/requests/\${requestId}/status\`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  status: newStatus,
+                  changedBy: userName
+                })
+              });
+              
+              const result = await response.json();
+              
+              if (result.success) {
+                alert(\`Successfully marked as \${newStatus}!\`);
+                window.location.reload();
+              } else {
+                alert('Error: ' + (result.error || 'Failed to update status'));
+              }
+            } catch (error) {
+              if (error !== 'cancelled') {
+                console.error('Error updating status:', error);
+                alert('Failed to update status. Please try again.');
+              }
+            }
+          }
+          
+          // Dark mode toggle functionality
+          const darkModeToggle = document.getElementById('darkModeToggle');
+          const body = document.body;
+          
+          // Check for saved dark mode preference
+          const isDarkMode = localStorage.getItem('darkMode') === 'true';
+          
+          // Clean up temporary loading class and apply proper dark mode
+          document.documentElement.classList.remove('dark-mode-loading');
+          if (isDarkMode) {
+            body.classList.add('dark-mode');
+            darkModeToggle.innerHTML = '☀️ Light Mode';
+          }
+          
+          // Toggle dark mode
+          darkModeToggle.addEventListener('click', function() {
+            body.classList.toggle('dark-mode');
+            const isCurrentlyDark = body.classList.contains('dark-mode');
+            
+            // Update button text and icon
+            if (isCurrentlyDark) {
+              darkModeToggle.innerHTML = '☀️ Light Mode';
+              localStorage.setItem('darkMode', 'true');
+            } else {
+              darkModeToggle.innerHTML = '🌙 Dark Mode';
+              localStorage.setItem('darkMode', 'false');
+            }
+          });
+          
+          // Tab switching
+          const tabButtons = document.querySelectorAll('.tab-button');
+          const tabContents = document.querySelectorAll('.tab-content');
+          
+          tabButtons.forEach(button => {
+            button.addEventListener('click', () => {
+              const tabName = button.getAttribute('data-tab');
+              
+              // Remove active class from all tabs
+              tabButtons.forEach(btn => btn.classList.remove('active'));
+              tabContents.forEach(content => content.classList.remove('active'));
+              
+              // Add active class to clicked tab
+              button.classList.add('active');
+              document.getElementById(tabName + '-tab').classList.add('active');
+            });
+          });
+          
+          // Department selection for items
+          const departmentSelect = document.getElementById('requestDepartment');
+          const itemSelect = document.getElementById('requestItem');
+          
+          const allItems = ${JSON.stringify(items)};
+          
+          departmentSelect.addEventListener('change', function() {
+            const deptId = parseInt(this.value);
+            itemSelect.disabled = false;
+            itemSelect.innerHTML = '<option value="">Select an item...</option>';
+            
+            if (deptId) {
+              const deptItems = allItems.filter(item => item.department_id === deptId);
+              deptItems.forEach(item => {
+                const option = document.createElement('option');
+                option.value = item.id;
+                option.textContent = item.name + ' (Current: ' + item.current_stock + ' ' + item.unit + ')';
+                if (item.needs_replenishment) {
+                  option.textContent += ' ⚠️ Low Stock';
+                }
+                itemSelect.appendChild(option);
+              });
+            }
+          });
+          
+          // Form submission
+          const newRequestForm = document.getElementById('newRequestForm');
+          newRequestForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = {
+              itemId: parseInt(document.getElementById('requestItem').value),
+              departmentId: parseInt(document.getElementById('requestDepartment').value),
+              quantityRequested: parseInt(document.getElementById('requestQuantity').value),
+              requestedBy: document.getElementById('requestedBy').value,
+              notes: document.getElementById('requestNotes').value
+            };
+            
+            try {
+              const response = await fetch('/api/replenishment/requests', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(formData)
+              });
+              
+              const result = await response.json();
+              
+              if (result.success) {
+                alert('Request submitted successfully!');
+                window.location.reload();
+              } else {
+                alert('Error: ' + (result.error || 'Failed to submit request'));
+              }
+            } catch (error) {
+              console.error('Error submitting request:', error);
+              alert('Failed to submit request. Please try again.');
+            }
+          });
+          
+          // Refresh button
+          const refreshBtn = document.getElementById('refreshBtn');
+          refreshBtn.disabled = false;
+          refreshBtn.addEventListener('click', function() {
+            window.location.reload();
+          });
+          
+          // New request button - switch to tab
+          const newRequestButton = document.querySelector('.new-request-button');
+          newRequestButton.disabled = false;
+          newRequestButton.addEventListener('click', function() {
+            // Activate the new request tab
+            tabButtons.forEach(btn => {
+              if (btn.getAttribute('data-tab') === 'new-request') {
+                btn.click();
+              }
+            });
+          });
+          
+          // Handle edit stock form submission
+          const editStockForm = document.getElementById('editStockForm');
+          editStockForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const newStock = parseInt(document.getElementById('editNewStock').value);
+            
+            try {
+              const response = await fetch(\`/api/replenishment/items/\${currentEditItemId}/stock\`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  stock: newStock
+                })
+              });
+              
+              const result = await response.json();
+              
+              if (result.success) {
+                alert('Stock updated successfully!');
+                window.location.reload();
+              } else {
+                alert('Error: ' + (result.error || 'Failed to update stock'));
+              }
+            } catch (error) {
+              console.error('Error updating stock:', error);
+              alert('Failed to update stock. Please try again.');
+            }
+          });
+          
+          // Handle name input form submission
+          const nameInputForm = document.getElementById('nameInputForm');
+          nameInputForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const userName = document.getElementById('nameInput').value.trim();
+            if (userName && window._nameModalResolve) {
+              window._nameModalResolve(userName);
+              window._nameModalResolve = null;
+              window._nameModalReject = null;
+              document.getElementById('nameInputModal').classList.remove('show');
+            }
+          });
+          
+          // Close modal when clicking outside
+          window.addEventListener('click', function(event) {
+            const editModal = document.getElementById('editStockModal');
+            const nameModal = document.getElementById('nameInputModal');
+            
+            if (event.target === editModal) {
+              closeEditModal();
+            } else if (event.target === nameModal) {
+              closeNameModal();
+            }
+          });
+          
+          // Close modal with Escape key
+          window.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+              const editModal = document.getElementById('editStockModal');
+              const nameModal = document.getElementById('nameInputModal');
+              
+              if (editModal.classList.contains('show')) {
+                closeEditModal();
+              } else if (nameModal.classList.contains('show')) {
+                closeNameModal();
+              }
+            }
+          });
+        </script>
+      </body>
+      </html>
+    `;
+    
+    res.send(html);
+  } catch (error) {
+    console.error('Error rendering replenishment requests page:', error);
     res.status(500).send('Error loading page');
   }
 });

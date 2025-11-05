@@ -1,0 +1,9 @@
+Upcoming Features
+=================
+collapsible teams/hubs
+starred/favorite teams
+include physical locaiton of item if more than one location
+
+
+Completed Features
+==================

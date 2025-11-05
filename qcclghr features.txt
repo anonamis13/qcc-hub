@@ -1,14 +1,12 @@
-Users: lauren, hannah, caleb
-eventually coaches will use
-
-
-Upcoming Features:
+Upcoming Features
+=================
 
 ?month-over-month and year-over-year percentage
 ?YA groups functionality
 
 
-Completed Features:
+Completed Features
+==================
 
 differentiate family groups
 display average membership next to avg. attendance

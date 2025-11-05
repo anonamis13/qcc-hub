@@ -773,4 +773,590 @@ export const dreamTeamsTracking = {
       throw error;
     }
   }
-}; 
+};
+
+// Replenishment Requests tracking functions
+export const replenishmentRequests = {
+  // Initialize replenishment tables
+  initializeTables: (): void => {
+    try {
+      const db = initializeDb();
+      
+      // Create departments table
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS replenishment_departments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      
+      // Create items table
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS replenishment_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          department_id INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT,
+          current_stock INTEGER DEFAULT 0,
+          min_threshold INTEGER DEFAULT 10,
+          unit TEXT DEFAULT 'units',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          is_active BOOLEAN DEFAULT 1,
+          FOREIGN KEY (department_id) REFERENCES replenishment_departments(id),
+          UNIQUE(department_id, name)
+        )
+      `);
+      
+      // Create requests table
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS replenishment_requests (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          item_id INTEGER NOT NULL,
+          department_id INTEGER NOT NULL,
+          quantity_requested INTEGER NOT NULL,
+          status TEXT DEFAULT 'requested',
+          requested_by TEXT NOT NULL,
+          requested_date TEXT NOT NULL,
+          ordered_date TEXT,
+          ordered_by TEXT,
+          delivered_date TEXT,
+          delivered_by TEXT,
+          stocked_date TEXT,
+          stocked_by TEXT,
+          notes TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (item_id) REFERENCES replenishment_items(id),
+          FOREIGN KEY (department_id) REFERENCES replenishment_departments(id)
+        )
+      `);
+      
+      // Create status log table for audit trail
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS replenishment_status_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          request_id INTEGER NOT NULL,
+          old_status TEXT,
+          new_status TEXT NOT NULL,
+          changed_by TEXT NOT NULL,
+          changed_at TEXT NOT NULL,
+          notes TEXT,
+          timestamp INTEGER NOT NULL,
+          FOREIGN KEY (request_id) REFERENCES replenishment_requests(id)
+        )
+      `);
+      
+      // Create indexes
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_replenishment_requests_status 
+        ON replenishment_requests(status)
+      `);
+      
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_replenishment_requests_department 
+        ON replenishment_requests(department_id)
+      `);
+      
+      console.log('Replenishment tables initialized successfully');
+    } catch (error) {
+      console.error('Error initializing replenishment tables:', error);
+      throw error;
+    }
+  },
+  
+  // Seed initial data
+  seedInitialData: (): void => {
+    try {
+      const db = initializeDb();
+      
+      // Check if we already have data
+      const checkStmt = db.prepare('SELECT COUNT(*) as count FROM replenishment_departments');
+      const result = checkStmt.get() as { count: number };
+      
+      if (result.count > 0) {
+        console.log('Replenishment data already seeded');
+        return;
+      }
+      
+      const timestamp = Date.now();
+      
+      // Seed departments
+      const deptStmt = db.prepare(`
+        INSERT INTO replenishment_departments (name, description, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+      `);
+      
+      const depts = [
+        { name: 'Connect Area', description: 'First-time guest connections and welcome resources' },
+        { name: 'Baptisms', description: 'Baptism ceremony supplies and apparel' },
+        { name: 'Admin', description: 'Administrative office supplies' }
+      ];
+      
+      const insertDepts = db.transaction(() => {
+        for (const dept of depts) {
+          deptStmt.run(dept.name, dept.description, timestamp, timestamp);
+        }
+      });
+      insertDepts();
+      
+      // Get department IDs
+      const getDeptId = (name: string): number => {
+        const stmt = db.prepare('SELECT id FROM replenishment_departments WHERE name = ?');
+        const row = stmt.get(name) as { id: number };
+        return row.id;
+      };
+      
+      const connectId = getDeptId('Connect Area');
+      const baptismsId = getDeptId('Baptisms');
+      const adminId = getDeptId('Admin');
+      
+      // Seed items
+      const itemStmt = db.prepare(`
+        INSERT INTO replenishment_items 
+        (department_id, name, description, current_stock, min_threshold, unit, created_at, updated_at, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+      `);
+      
+      const items = [
+        // Connect Area
+        { deptId: connectId, name: 'Mugs', description: 'Coffee mugs for first-time guests', stock: 50, min: 20, unit: 'units' },
+        { deptId: connectId, name: 'Bibles', description: 'Gift Bibles for new believers', stock: 30, min: 15, unit: 'units' },
+        // Baptisms
+        { deptId: baptismsId, name: 'T-Shirts', description: 'Baptism t-shirts', stock: 40, min: 20, unit: 'units' },
+        { deptId: baptismsId, name: 'Gym Shorts', description: 'Baptism gym shorts', stock: 35, min: 15, unit: 'units' },
+        { deptId: baptismsId, name: 'Towels', description: 'Baptism towels', stock: 25, min: 10, unit: 'units' },
+        // Admin
+        { deptId: adminId, name: 'Kids Birthday Cards', description: 'Birthday cards for kids ministry', stock: 100, min: 30, unit: 'cards' },
+        { deptId: adminId, name: 'Stamps', description: 'Postage stamps', stock: 50, min: 20, unit: 'stamps' },
+        { deptId: adminId, name: 'Printer Paper', description: 'Letter-size printer paper', stock: 5, min: 3, unit: 'reams' }
+      ];
+      
+      const insertItems = db.transaction(() => {
+        for (const item of items) {
+          itemStmt.run(
+            item.deptId,
+            item.name,
+            item.description,
+            item.stock,
+            item.min,
+            item.unit,
+            timestamp,
+            timestamp
+          );
+        }
+      });
+      insertItems();
+      
+      console.log('Replenishment initial data seeded successfully');
+    } catch (error) {
+      console.error('Error seeding replenishment data:', error);
+      throw error;
+    }
+  },
+  
+  // Get all departments
+  getDepartments: (): Array<{
+    id: number;
+    name: string;
+    description: string | null;
+    created_at: number;
+    updated_at: number;
+  }> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT id, name, description, created_at, updated_at
+        FROM replenishment_departments
+        ORDER BY name ASC
+      `);
+      return stmt.all() as Array<{
+        id: number;
+        name: string;
+        description: string | null;
+        created_at: number;
+        updated_at: number;
+      }>;
+    } catch (error) {
+      console.error('Error getting departments:', error);
+      return [];
+    }
+  },
+  
+  // Get items for a department
+  getItemsByDepartment: (departmentId: number): Array<{
+    id: number;
+    department_id: number;
+    name: string;
+    description: string | null;
+    current_stock: number;
+    min_threshold: number;
+    unit: string;
+    is_active: number;
+    needs_replenishment: boolean;
+  }> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT id, department_id, name, description, current_stock, min_threshold, unit, is_active
+        FROM replenishment_items
+        WHERE department_id = ? AND is_active = 1
+        ORDER BY name ASC
+      `);
+      const items = stmt.all(departmentId) as Array<{
+        id: number;
+        department_id: number;
+        name: string;
+        description: string | null;
+        current_stock: number;
+        min_threshold: number;
+        unit: string;
+        is_active: number;
+      }>;
+      
+      // Add needs_replenishment flag
+      return items.map(item => ({
+        ...item,
+        needs_replenishment: item.current_stock <= item.min_threshold
+      }));
+    } catch (error) {
+      console.error(`Error getting items for department ${departmentId}:`, error);
+      return [];
+    }
+  },
+  
+  // Get all items with department info
+  getAllItems: (): Array<{
+    id: number;
+    department_id: number;
+    department_name: string;
+    name: string;
+    description: string | null;
+    current_stock: number;
+    min_threshold: number;
+    unit: string;
+    is_active: number;
+    needs_replenishment: boolean;
+  }> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT 
+          i.id, 
+          i.department_id, 
+          d.name as department_name,
+          i.name, 
+          i.description, 
+          i.current_stock, 
+          i.min_threshold, 
+          i.unit, 
+          i.is_active
+        FROM replenishment_items i
+        JOIN replenishment_departments d ON i.department_id = d.id
+        WHERE i.is_active = 1
+        ORDER BY d.name ASC, i.name ASC
+      `);
+      const items = stmt.all() as Array<{
+        id: number;
+        department_id: number;
+        department_name: string;
+        name: string;
+        description: string | null;
+        current_stock: number;
+        min_threshold: number;
+        unit: string;
+        is_active: number;
+      }>;
+      
+      return items.map(item => ({
+        ...item,
+        needs_replenishment: item.current_stock <= item.min_threshold
+      }));
+    } catch (error) {
+      console.error('Error getting all items:', error);
+      return [];
+    }
+  },
+  
+  // Create a new request
+  createRequest: (
+    itemId: number,
+    departmentId: number,
+    quantityRequested: number,
+    requestedBy: string,
+    notes?: string
+  ): number => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      const requestedDate = getLocalDateString();
+      
+      const stmt = db.prepare(`
+        INSERT INTO replenishment_requests 
+        (item_id, department_id, quantity_requested, status, requested_by, requested_date, notes, created_at, updated_at)
+        VALUES (?, ?, ?, 'requested', ?, ?, ?, ?, ?)
+      `);
+      
+      const result = stmt.run(itemId, departmentId, quantityRequested, requestedBy, requestedDate, notes || null, timestamp, timestamp);
+      const requestId = result.lastInsertRowid as number;
+      
+      // Log the status change
+      const logStmt = db.prepare(`
+        INSERT INTO replenishment_status_log
+        (request_id, old_status, new_status, changed_by, changed_at, notes, timestamp)
+        VALUES (?, NULL, 'requested', ?, ?, ?, ?)
+      `);
+      logStmt.run(requestId, requestedBy, requestedDate, 'Request created', timestamp);
+      
+      return requestId;
+    } catch (error) {
+      console.error('Error creating request:', error);
+      throw error;
+    }
+  },
+  
+  // Update request status
+  updateRequestStatus: (
+    requestId: number,
+    newStatus: 'requested' | 'ordered' | 'delivered' | 'stocked',
+    changedBy: string,
+    notes?: string
+  ): void => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      const changedDate = getLocalDateString();
+      
+      // Get current status
+      const getCurrentStmt = db.prepare('SELECT status, item_id, quantity_requested FROM replenishment_requests WHERE id = ?');
+      const current = getCurrentStmt.get(requestId) as { status: string; item_id: number; quantity_requested: number } | undefined;
+      
+      if (!current) {
+        throw new Error(`Request ${requestId} not found`);
+      }
+      
+      // Update the request with status-specific fields
+      let updateQuery = 'UPDATE replenishment_requests SET status = ?, updated_at = ?';
+      const params: any[] = [newStatus, timestamp];
+      
+      if (newStatus === 'ordered') {
+        updateQuery += ', ordered_date = ?, ordered_by = ?';
+        params.push(changedDate, changedBy);
+      } else if (newStatus === 'delivered') {
+        updateQuery += ', delivered_date = ?, delivered_by = ?';
+        params.push(changedDate, changedBy);
+      } else if (newStatus === 'stocked') {
+        updateQuery += ', stocked_date = ?, stocked_by = ?';
+        params.push(changedDate, changedBy);
+      }
+      
+      if (notes) {
+        updateQuery += ', notes = ?';
+        params.push(notes);
+      }
+      
+      updateQuery += ' WHERE id = ?';
+      params.push(requestId);
+      
+      const updateStmt = db.prepare(updateQuery);
+      updateStmt.run(...params);
+      
+      // Log the status change
+      const logStmt = db.prepare(`
+        INSERT INTO replenishment_status_log
+        (request_id, old_status, new_status, changed_by, changed_at, notes, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      logStmt.run(requestId, current.status, newStatus, changedBy, changedDate, notes || null, timestamp);
+      
+      // If status is 'stocked', update the item's current_stock
+      if (newStatus === 'stocked') {
+        const updateStockStmt = db.prepare(`
+          UPDATE replenishment_items 
+          SET current_stock = current_stock + ?, updated_at = ?
+          WHERE id = ?
+        `);
+        updateStockStmt.run(current.quantity_requested, timestamp, current.item_id);
+      }
+    } catch (error) {
+      console.error(`Error updating request status for request ${requestId}:`, error);
+      throw error;
+    }
+  },
+  
+  // Get all requests
+  getAllRequests: (): Array<{
+    id: number;
+    item_id: number;
+    item_name: string;
+    department_id: number;
+    department_name: string;
+    quantity_requested: number;
+    current_stock: number;
+    unit: string;
+    status: string;
+    requested_by: string;
+    requested_date: string;
+    ordered_date: string | null;
+    ordered_by: string | null;
+    delivered_date: string | null;
+    delivered_by: string | null;
+    stocked_date: string | null;
+    stocked_by: string | null;
+    notes: string | null;
+    created_at: number;
+  }> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT 
+          r.id,
+          r.item_id,
+          i.name as item_name,
+          r.department_id,
+          d.name as department_name,
+          r.quantity_requested,
+          i.current_stock,
+          i.unit,
+          r.status,
+          r.requested_by,
+          r.requested_date,
+          r.ordered_date,
+          r.ordered_by,
+          r.delivered_date,
+          r.delivered_by,
+          r.stocked_date,
+          r.stocked_by,
+          r.notes,
+          r.created_at
+        FROM replenishment_requests r
+        JOIN replenishment_items i ON r.item_id = i.id
+        JOIN replenishment_departments d ON r.department_id = d.id
+        ORDER BY r.created_at DESC
+      `);
+      return stmt.all() as Array<{
+        id: number;
+        item_id: number;
+        item_name: string;
+        department_id: number;
+        department_name: string;
+        quantity_requested: number;
+        current_stock: number;
+        unit: string;
+        status: string;
+        requested_by: string;
+        requested_date: string;
+        ordered_date: string | null;
+        ordered_by: string | null;
+        delivered_date: string | null;
+        delivered_by: string | null;
+        stocked_date: string | null;
+        stocked_by: string | null;
+        notes: string | null;
+        created_at: number;
+      }>;
+    } catch (error) {
+      console.error('Error getting all requests:', error);
+      return [];
+    }
+  },
+  
+  // Get requests by status
+  getRequestsByStatus: (status: string): Array<any> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT 
+          r.id,
+          r.item_id,
+          i.name as item_name,
+          r.department_id,
+          d.name as department_name,
+          r.quantity_requested,
+          i.current_stock,
+          i.unit,
+          r.status,
+          r.requested_by,
+          r.requested_date,
+          r.ordered_date,
+          r.ordered_by,
+          r.delivered_date,
+          r.delivered_by,
+          r.stocked_date,
+          r.stocked_by,
+          r.notes,
+          r.created_at
+        FROM replenishment_requests r
+        JOIN replenishment_items i ON r.item_id = i.id
+        JOIN replenishment_departments d ON r.department_id = d.id
+        WHERE r.status = ?
+        ORDER BY r.created_at DESC
+      `);
+      return stmt.all(status) as Array<any>;
+    } catch (error) {
+      console.error(`Error getting requests with status ${status}:`, error);
+      return [];
+    }
+  },
+  
+  // Get status history for a request
+  getRequestHistory: (requestId: number): Array<{
+    id: number;
+    request_id: number;
+    old_status: string | null;
+    new_status: string;
+    changed_by: string;
+    changed_at: string;
+    notes: string | null;
+    timestamp: number;
+  }> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT id, request_id, old_status, new_status, changed_by, changed_at, notes, timestamp
+        FROM replenishment_status_log
+        WHERE request_id = ?
+        ORDER BY timestamp ASC
+      `);
+      return stmt.all(requestId) as Array<{
+        id: number;
+        request_id: number;
+        old_status: string | null;
+        new_status: string;
+        changed_by: string;
+        changed_at: string;
+        notes: string | null;
+        timestamp: number;
+      }>;
+    } catch (error) {
+      console.error(`Error getting request history for request ${requestId}:`, error);
+      return [];
+    }
+  },
+  
+  // Update item stock manually
+  updateItemStock: (itemId: number, newStock: number): void => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      
+      const stmt = db.prepare(`
+        UPDATE replenishment_items 
+        SET current_stock = ?, updated_at = ?
+        WHERE id = ?
+      `);
+      stmt.run(newStock, timestamp, itemId);
+    } catch (error) {
+      console.error(`Error updating stock for item ${itemId}:`, error);
+      throw error;
+    }
+  }
+};
+
+// Initialize replenishment tables when database is initialized
+initializeDb();
+replenishmentRequests.initializeTables();
+replenishmentRequests.seedInitialData(); 

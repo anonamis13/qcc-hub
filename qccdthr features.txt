@@ -1,7 +1,10 @@
-Users: team leaders and directors
-
-
-Upcoming Features:
+Upcoming Features
+=================
+add leaders to teams
+add directors to teams
+	both editable
+add 2/6 month tags with way to checkbox them
+notify leader/director after 2/6 months
 Chart for total members vs. serve attendance
 Flag for haven't served in 2 months?
 ?which step of the workflow the person is on, on the admin page (need to link data with WorkflowStep API)
@@ -10,7 +13,8 @@ Flag for haven't served in 2 months?
 ?Add 2/6 Month Check-In tags to Completed members
 
 
-Completed Features:
+Completed Features
+==================
 Notate members joined within 30 days
 Link to JOIN A TEAM form for adding new members
 Star teams to stay at the top
