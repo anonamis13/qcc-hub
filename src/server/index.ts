@@ -1584,6 +1584,10 @@ app.get('/api/dream-teams/:workflowId', async (req, res) => {
             completedDate: twoMonthCheckIn.completedDate,
             isLegacy: twoMonthCheckIn.isLegacy
           };
+        } else if (monthsSinceCompletion >= 6.5) {
+          // Completed 6+ months ago - mark as legacy (feature didn't exist back then)
+          dreamTeamsTracking.recordLegacyCheckIn(workflowId, personId, '2-month');
+          checkIns.twoMonth = { needed: false, completed: true, completedBy: null, completedDate: null, isLegacy: true };
         } else if (isBulkCompletion) {
           // Bulk completion - use time before 10/1/2025 to determine legacy status
           if (monthsBeforeBulkCompletion >= 4) {
@@ -1618,6 +1622,10 @@ app.get('/api/dream-teams/:workflowId', async (req, res) => {
             completedDate: sixMonthCheckIn.completedDate,
             isLegacy: sixMonthCheckIn.isLegacy
           };
+        } else if (monthsSinceCompletion >= 6.5) {
+          // Completed 6+ months ago - mark as legacy (feature didn't exist back then)
+          dreamTeamsTracking.recordLegacyCheckIn(workflowId, personId, '6-month');
+          checkIns.sixMonth = { needed: false, completed: true, completedBy: null, completedDate: null, isLegacy: true };
         } else if (isBulkCompletion) {
           // Bulk completion - use time before 10/1/2025 to determine legacy status
           if (monthsBeforeBulkCompletion >= 6) {
