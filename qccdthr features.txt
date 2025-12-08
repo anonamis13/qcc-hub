@@ -1,16 +1,11 @@
 Upcoming Features
 =================
-add leaders to teams
-add directors to teams
-	both editable
-add 2/6 month tags with way to checkbox them
-notify leader/director after 2/6 months
 Chart for total members vs. serve attendance
 Flag for haven't served in 2 months?
-?which step of the workflow the person is on, on the admin page (need to link data with WorkflowStep API)
-
-?See if there's a better way to track when a member joined the workflow
-?Add 2/6 Month Check-In tags to Completed members
+Create a full suite of developer tools, including:
+	DB View
+	Audit Logs
+	Data Manipulation
 
 
 Completed Features
@@ -30,3 +25,8 @@ standardize in process vs in progress
 new member, in progress, and pending removal tags all at the same time do not space correctly
 Change "Current Dream Teamers" to just "Dream Teamers"
 Show number of pending removals on the home page button
+add 2/6 month tags with way to checkbox them
+nightly refresh not working
+add leaders to teams
+add directors to teams
+notify leader/director after 2/6 months

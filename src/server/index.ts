@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import cron from 'node-cron';
+import nodemailer from 'nodemailer';
 import pcoClient, { getPeopleGroups, getGroupAttendance, getGroup, getGroupMemberships, getDreamTeamWorkflows, getWorkflowCards } from './config/pco.js';
 import { cache } from './config/cache.js';
 import { membershipSnapshots, dreamTeamsTracking, replenishmentRequests } from '../data/database.js';
@@ -1322,6 +1323,77 @@ app.get('/api/dream-teams/pending-removals', async (req, res) => {
   }
 });
 
+// Search PCO people for adding as leaders
+// NOTE: This route MUST be before /api/dream-teams/:workflowId to avoid conflict
+app.get('/api/dream-teams/search-people', async (req, res) => {
+  try {
+    const { q } = req.query;
+    
+    if (!q || typeof q !== 'string' || q.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: 'Search query must be at least 2 characters'
+      });
+    }
+    
+    // Search PCO for people matching the query using the search_name parameter
+    const searchQuery = q.trim();
+    const response = await pcoClient.get('/people/v2/people', {
+      params: {
+        'where[search_name]': searchQuery,
+        'per_page': 20
+      }
+    });
+    
+    const people = response.data.data.map((person: any) => ({
+      id: person.id,
+      firstName: person.attributes.first_name,
+      lastName: person.attributes.last_name,
+      name: `${person.attributes.first_name} ${person.attributes.last_name}`.trim()
+    }));
+    
+    res.json({
+      success: true,
+      data: people
+    });
+  } catch (error) {
+    console.error('Error searching PCO people:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to search people'
+    });
+  }
+});
+
+// Test endpoint for check-in notifications (manual trigger)
+// IMPORTANT: This must be defined BEFORE the :workflowId route
+app.get('/api/dream-teams/test-notifications', async (req, res) => {
+  try {
+    if (process.env.CHECKIN_EMAIL_FLAG !== 'true') {
+      console.log('Check-in notifications are disabled (CHECKIN_EMAIL_FLAG is not set to true)');
+      return res.json({
+        success: true,
+        message: 'Check-in notifications are currently disabled',
+        notificationsEnabled: false
+      });
+    }
+    
+    console.log('Manually triggering check-in notification check...');
+    const result = await sendCheckInNotifications();
+    res.json({
+      success: true,
+      notificationsEnabled: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('Error testing notifications:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
 app.get('/api/dream-teams/:workflowId', async (req, res) => {
   try {
     const { workflowId } = req.params;
@@ -1432,11 +1504,141 @@ app.get('/api/dream-teams/:workflowId', async (req, res) => {
       pendingRemovalMap.set(removal.personId, removal.reason);
     });
     
+    // Get all check-ins for this workflow
+    const workflowCheckIns = dreamTeamsTracking.getWorkflowCheckIns(workflowId);
+    
+    // Helper function to calculate months since join date
+    const getMonthsSinceJoin = (joinDate: string): number => {
+      const join = new Date(joinDate);
+      const now = new Date();
+      const months = (now.getFullYear() - join.getFullYear()) * 12 + (now.getMonth() - join.getMonth());
+      // Adjust if we haven't reached the day of the month yet
+      if (now.getDate() < join.getDate()) {
+        return months - 1;
+      }
+      return months;
+    };
+    
     // Combine card and person data
     const roster = currentMembers.map(card => {
       const person = personMap.get(card.relationships.person.data.id);
       const personId = card.relationships.person.data.id;
       const isPendingRemoval = pendingRemovalMap.has(personId);
+      // Calculate time periods for check-in logic
+      const originalJoinDate = card.attributes.created_at;
+      const completionDate = card.attributes.moved_to_step_at;
+      const monthsSinceJoin = getMonthsSinceJoin(originalJoinDate);
+      const monthsSinceCompletion = completionDate ? getMonthsSinceJoin(completionDate) : 0;
+      
+      // For display purposes
+      const effectiveDate = completionDate || originalJoinDate;
+      const monthsOnTeam = getMonthsSinceJoin(effectiveDate);
+      
+      // Get existing check-ins for this member
+      const memberCheckIns = workflowCheckIns.get(personId) || [];
+      const twoMonthCheckIn = memberCheckIns.find(c => c.checkInType === '2-month');
+      const sixMonthCheckIn = memberCheckIns.find(c => c.checkInType === '6-month');
+      
+      // Determine check-in status
+      // IMPORTANT: Only show check-ins for COMPLETED members
+      let checkIns: {
+        twoMonth: { needed: boolean; completed: boolean; completedBy: string | null; completedDate: string | null; isLegacy: boolean } | null;
+        sixMonth: { needed: boolean; completed: boolean; completedBy: string | null; completedDate: string | null; isLegacy: boolean } | null;
+      } = {
+        twoMonth: null,
+        sixMonth: null
+      };
+      
+      // Teams that don't require check-ins
+      const teamsWithoutCheckIns = ['665166', '666583'];
+      const skipCheckIns = teamsWithoutCheckIns.includes(workflowId);
+      
+      // Only process check-ins for completed members (and not for excluded teams)
+      if (card.attributes.stage === 'completed' && !skipCheckIns) {
+        // Check if this was a bulk completion on 10/1/2025
+        const bulkCompletionDate = new Date('2025-10-01');
+        const memberCompletionDate = completionDate ? new Date(completionDate) : null;
+        const isBulkCompletion = memberCompletionDate && 
+          memberCompletionDate.getFullYear() === 2025 && 
+          memberCompletionDate.getMonth() === 9 && // October is month 9 (0-indexed)
+          memberCompletionDate.getDate() === 1;
+        
+        // For bulk completions, calculate months between join date and 10/1/2025
+        let monthsBeforeBulkCompletion = 0;
+        if (isBulkCompletion) {
+          const joinDateObj = new Date(originalJoinDate);
+          monthsBeforeBulkCompletion = (bulkCompletionDate.getFullYear() - joinDateObj.getFullYear()) * 12 + 
+            (bulkCompletionDate.getMonth() - joinDateObj.getMonth());
+          if (bulkCompletionDate.getDate() < joinDateObj.getDate()) {
+            monthsBeforeBulkCompletion--;
+          }
+        }
+        
+        // 2-MONTH CHECK-IN LOGIC
+        if (twoMonthCheckIn) {
+          // Already has a check-in record
+          checkIns.twoMonth = { 
+            needed: false, 
+            completed: true, 
+            completedBy: twoMonthCheckIn.completedBy, 
+            completedDate: twoMonthCheckIn.completedDate,
+            isLegacy: twoMonthCheckIn.isLegacy
+          };
+        } else if (isBulkCompletion) {
+          // Bulk completion - use time before 10/1/2025 to determine legacy status
+          if (monthsBeforeBulkCompletion >= 4) {
+            // Joined 4+ months before bulk completion - both check-ins are legacy
+            dreamTeamsTracking.recordLegacyCheckIn(workflowId, personId, '2-month');
+            checkIns.twoMonth = { needed: false, completed: true, completedBy: null, completedDate: null, isLegacy: true };
+          } else if (monthsBeforeBulkCompletion >= 2) {
+            // Joined 2-4 months before bulk completion - 2-month is legacy
+            dreamTeamsTracking.recordLegacyCheckIn(workflowId, personId, '2-month');
+            checkIns.twoMonth = { needed: false, completed: true, completedBy: null, completedDate: null, isLegacy: true };
+          } else if (monthsSinceCompletion >= 2) {
+            // Joined recently before bulk completion, now 2+ months since - check-in is needed
+            checkIns.twoMonth = { needed: true, completed: false, completedBy: null, completedDate: null, isLegacy: false };
+          }
+          // Else: not yet due
+        } else {
+          // Regular completion - use completion date
+          if (monthsSinceCompletion >= 2) {
+            // 2+ months since completion - check-in is needed
+            checkIns.twoMonth = { needed: true, completed: false, completedBy: null, completedDate: null, isLegacy: false };
+          }
+          // Else: not yet due
+        }
+        
+        // 6-MONTH CHECK-IN LOGIC
+        if (sixMonthCheckIn) {
+          // Already has a check-in record
+          checkIns.sixMonth = { 
+            needed: false, 
+            completed: true, 
+            completedBy: sixMonthCheckIn.completedBy, 
+            completedDate: sixMonthCheckIn.completedDate,
+            isLegacy: sixMonthCheckIn.isLegacy
+          };
+        } else if (isBulkCompletion) {
+          // Bulk completion - use time before 10/1/2025 to determine legacy status
+          if (monthsBeforeBulkCompletion >= 6) {
+            // Joined 6+ months before bulk completion - 6-month is legacy
+            dreamTeamsTracking.recordLegacyCheckIn(workflowId, personId, '6-month');
+            checkIns.sixMonth = { needed: false, completed: true, completedBy: null, completedDate: null, isLegacy: true };
+          } else if (monthsSinceJoin >= 6) {
+            // 6+ months since join date - check-in is needed
+            checkIns.sixMonth = { needed: true, completed: false, completedBy: null, completedDate: null, isLegacy: false };
+          }
+          // Else: not yet due (hasn't been 6 months since they joined)
+        } else {
+          // Regular completion - use completion date
+          if (monthsSinceCompletion >= 6) {
+            // 6+ months since completion - check-in is needed
+            checkIns.sixMonth = { needed: true, completed: false, completedBy: null, completedDate: null, isLegacy: false };
+          }
+          // Else: not yet due
+        }
+      }
+      // In-progress members (not completed) don't show check-ins at all
       
       return {
         cardId: card.id,
@@ -1448,7 +1650,9 @@ app.get('/api/dream-teams/:workflowId', async (req, res) => {
         movedToStepAt: card.attributes.moved_to_step_at,
         stage: card.attributes.stage,
         markedForRemoval: isPendingRemoval,
-        removalReason: isPendingRemoval ? pendingRemovalMap.get(personId) : null
+        removalReason: isPendingRemoval ? pendingRemovalMap.get(personId) : null,
+        monthsOnTeam,
+        checkIns
       };
     }).sort((a, b) => a.firstName.localeCompare(b.firstName));
     
@@ -1581,6 +1785,137 @@ app.post('/api/dream-teams/:workflowId/undo-removal', async (req, res) => {
   }
 });
 
+// Record a check-in for a team member
+app.post('/api/dream-teams/:workflowId/checkin', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    const { personId, checkInType, completedBy } = req.body;
+    
+    if (!personId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Person ID is required'
+      });
+    }
+    
+    if (!checkInType || !['2-month', '6-month'].includes(checkInType)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid check-in type (2-month or 6-month) is required'
+      });
+    }
+    
+    if (!completedBy || completedBy.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Completed by name is required'
+      });
+    }
+    
+    dreamTeamsTracking.recordCheckIn(workflowId, personId, checkInType, completedBy.trim());
+    
+    res.json({
+      success: true,
+      message: `${checkInType} check-in recorded successfully`
+    });
+  } catch (error) {
+    console.error(`Error recording check-in for workflow ${req.params.workflowId}:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to record check-in'
+    });
+  }
+});
+
+// Get leaders for a team
+app.get('/api/dream-teams/:workflowId/leaders', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    const leaders = dreamTeamsTracking.getTeamLeaders(workflowId);
+    
+    // Separate into directors and team leaders
+    const directors = leaders.filter(l => l.role === 'director');
+    const teamLeaders = leaders.filter(l => l.role === 'team_leader');
+    
+    res.json({
+      success: true,
+      data: {
+        directors,
+        teamLeaders
+      }
+    });
+  } catch (error) {
+    console.error(`Error fetching leaders for workflow ${req.params.workflowId}:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch team leaders'
+    });
+  }
+});
+
+// Add a leader to a team
+app.post('/api/dream-teams/:workflowId/leaders', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    const { personId, personName, role } = req.body;
+    
+    if (!personId || !personName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Person ID and name are required'
+      });
+    }
+    
+    if (!role || !['team_leader', 'director'].includes(role)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid role (team_leader or director) is required'
+      });
+    }
+    
+    dreamTeamsTracking.addLeader(workflowId, personId, personName.trim(), role);
+    
+    res.json({
+      success: true,
+      message: `${role === 'director' ? 'Director' : 'Team Leader'} added successfully`
+    });
+  } catch (error) {
+    console.error(`Error adding leader to workflow ${req.params.workflowId}:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to add leader'
+    });
+  }
+});
+
+// Remove a leader from a team
+app.delete('/api/dream-teams/:workflowId/leaders/:personId', async (req, res) => {
+  try {
+    const { workflowId, personId } = req.params;
+    const { role } = req.query;
+    
+    if (!role || !['team_leader', 'director'].includes(role as string)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid role (team_leader or director) is required as query parameter'
+      });
+    }
+    
+    dreamTeamsTracking.removeLeader(workflowId, personId, role as 'team_leader' | 'director');
+    
+    res.json({
+      success: true,
+      message: 'Leader removed successfully'
+    });
+  } catch (error) {
+    console.error(`Error removing leader from workflow ${req.params.workflowId}:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to remove leader'
+    });
+  }
+});
+
 // Cache clearing endpoint for Dream Teams testing (supports both GET and POST)
 app.all('/api/dream-teams-cache/clear', async (req, res) => {
   try {
@@ -1639,13 +1974,37 @@ app.all('/api/dream-teams-cache/clear', async (req, res) => {
         const reviewCount = (dbInstance.prepare('SELECT COUNT(*) as count FROM dream_team_reviews').get() as { count: number })?.count || 0;
         const removalCount = (dbInstance.prepare('SELECT COUNT(*) as count FROM dream_team_removals').get() as { count: number })?.count || 0;
         
-
+        // Check if checkins table exists and get count
+        let checkinCount = 0;
+        try {
+          checkinCount = (dbInstance.prepare('SELECT COUNT(*) as count FROM dream_team_checkins').get() as { count: number })?.count || 0;
+        } catch (e) {
+          // Table might not exist yet
+        }
         
         // Clear the tables
         const reviewResult = dbInstance.prepare('DELETE FROM dream_team_reviews').run();
         const removalResult = dbInstance.prepare('DELETE FROM dream_team_removals').run();
         
-        result.clearedDatabase = reviewCount + removalCount;
+        // Clear checkins table if it exists
+        try {
+          dbInstance.prepare('DELETE FROM dream_team_checkins').run();
+        } catch (e) {
+          // Table might not exist yet
+        }
+        
+        // Clear leaders table if it exists (only if explicitly requested via ?leaders=true)
+        let leaderCount = 0;
+        if (req.query.leaders === 'true' || req.body?.leaders === true) {
+          try {
+            const leaderResult = dbInstance.prepare('DELETE FROM dream_team_leaders').run();
+            leaderCount = leaderResult.changes;
+          } catch (e) {
+            // Table might not exist yet
+          }
+        }
+        
+        result.clearedDatabase = reviewCount + removalCount + checkinCount + leaderCount;
         dbInstance.close();
       } catch (error) {
         console.error('Error clearing database:', error);
@@ -7969,9 +8328,15 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           }
           .member-info {
             display: flex;
-            align-items: center;
-            gap: 15px;
+            flex-direction: column;
+            gap: 4px;
             flex: 1;
+          }
+          .member-name-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
           }
           .member-name {
             font-weight: 500;
@@ -7979,16 +8344,11 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           }
           
           @media (max-width: 600px) {
-            .member-info {
-              flex-direction: column;
-              align-items: flex-start;
-              gap: 8px;
-            }
             .member-name {
               white-space: nowrap;
               overflow: hidden;
               text-overflow: ellipsis;
-              width: 100%;
+              max-width: 200px;
             }
           }
           .pending-removal-indicator {
@@ -8013,34 +8373,113 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           }
           .join-date {
             color: #666;
-            font-size: 0.9em;
+            font-size: 0.85em;
             display: flex;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 4px;
+          }
+          
+          .date-label {
+            color: #888;
+          }
+          
+          body.dark-mode .date-label {
+            color: #999;
+          }
+          
+          .date-separator {
+            color: #ccc;
+            margin: 0 4px;
+          }
+          
+          body.dark-mode .date-separator {
+            color: #555;
+          }
+          
+          .date-group {
+            display: inline;
+          }
+          
+          .badges-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-left: 8px;
+          }
+          
+          /* Check-in status indicator (at a glance) */
+          .checkin-status {
+            display: inline-flex;
+            align-items: center;
             gap: 8px;
+            font-size: 0.85em;
+            font-weight: 500;
+            color: #666;
+            cursor: pointer;
+            padding: 4px 10px;
+            border-radius: 4px;
+            background-color: #f0f0f0;
+            transition: background-color 0.2s ease;
+          }
+          
+          .checkin-status:hover {
+            background-color: #e0e0e0;
+          }
+          
+          body.dark-mode .checkin-status {
+            background-color: #4a4a4a;
+            color: #e0e0e0;
+            border: 1px solid #666;
+          }
+          
+          body.dark-mode .checkin-status:hover {
+            background-color: #5a5a5a;
+          }
+          
+          .checkin-status .status-done {
+            color: #28a745;
+            font-weight: bold;
+          }
+          
+          body.dark-mode .checkin-status .status-done {
+            color: #5dd879;
+          }
+          
+          .checkin-status .status-pending {
+            color: #dc3545;
+            font-weight: bold;
+          }
+          
+          body.dark-mode .checkin-status .status-pending {
+            color: #ff6b6b;
+          }
+          
+          .checkin-status .expand-icon {
+            font-size: 0.8em;
+            color: #999;
+            transition: transform 0.2s ease;
+          }
+          
+          .checkin-status.expanded .expand-icon {
+            transform: rotate(180deg);
           }
           
           @media (max-width: 600px) {
             .join-date {
-              width: 100%;
-              display: grid;
-              grid-template-areas:
-                "date ."
-                "badges badges";
-              grid-template-columns: 1fr 60px; /* Match the button column width */
-              gap: 8px;
-              align-items: center;
+              flex-direction: column;
+              align-items: flex-start;
+              gap: 2px;
             }
-            .join-date .date {
-              grid-area: date;
+            .date-group {
+              display: block;
+            }
+            .date-separator {
+              display: none;
             }
             .badges-container {
-              grid-area: badges;
-              display: flex;
-              flex-wrap: wrap;
-              gap: 6px;
-              justify-content: flex-end;
+              margin-left: 0;
               margin-top: 4px;
-              padding-right: 0; /* Align with the edge */
             }
           }
           .new-member-indicator {
@@ -8066,6 +8505,173 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             margin-left: 8px;
             cursor: help;
           }
+          
+          .checkin-needed-indicator {
+            background-color: #e7f1ff;
+            color: #0958d9;
+            border: 1px solid #91caff;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.75em;
+            font-weight: 600;
+            margin-left: 8px;
+            cursor: help;
+          }
+          
+          body.dark-mode .checkin-needed-indicator {
+            background-color: #1a3a5c;
+            color: #8fcdff;
+            border-color: #2d6aa8;
+          }
+          
+          /* Dream Team Check-Ins Styles */
+          .checkins-section {
+            margin-top: 8px;
+            padding: 8px 12px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            display: none;
+          }
+          
+          .checkins-section.visible {
+            display: block;
+          }
+          
+          body.dark-mode .checkins-section {
+            background-color: #2d2d2d;
+          }
+          
+          .checkin-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 0;
+          }
+          
+          .checkin-item + .checkin-item {
+            padding-top: 2px;
+          }
+          
+          .checkin-checkbox {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+            accent-color: #28a745;
+          }
+          
+          .checkin-checkbox:disabled {
+            cursor: default;
+          }
+          
+          .checkin-label {
+            font-size: 0.8em;
+            color: #666;
+          }
+          
+          body.dark-mode .checkin-label {
+            color: #b0b0b0;
+          }
+          
+          .checkin-label.completed {
+            color: #28a745;
+          }
+          
+          body.dark-mode .checkin-label.completed {
+            color: #81c784;
+          }
+          
+          .checkin-label.needed {
+            color: #856404;
+          }
+          
+          body.dark-mode .checkin-label.needed {
+            color: #ffd54f;
+          }
+          
+          .checkin-completed-info {
+            font-size: 0.75em;
+            color: #999;
+          }
+          
+          body.dark-mode .checkin-completed-info {
+            color: #888;
+          }
+          
+          .checkin-form {
+            display: none;
+            margin-top: 4px;
+            margin-left: 22px;
+          }
+          
+          .checkin-form.visible {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          
+          .checkin-form input {
+            padding: 4px 8px;
+            border: 1px solid #ced4da;
+            border-radius: 3px;
+            font-size: 12px;
+            width: 120px;
+          }
+          
+          body.dark-mode .checkin-form input {
+            background-color: #2d2d2d;
+            color: #ffffff;
+            border-color: #555;
+          }
+          
+          .checkin-form button {
+            padding: 4px 10px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+          }
+          
+          .checkin-form button:hover {
+            background-color: #218838;
+          }
+          
+          .checkin-form button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+          }
+          
+          .checkin-form .cancel-btn {
+            background-color: transparent;
+            color: #6c757d;
+            padding: 4px 6px;
+          }
+          
+          .checkin-form .cancel-btn:hover {
+            color: #495057;
+            background-color: transparent;
+          }
+          
+          body.dark-mode .checkin-form .cancel-btn {
+            color: #999;
+          }
+          
+          body.dark-mode .checkin-form .cancel-btn:hover {
+            color: #ccc;
+          }
+          
+          @media (max-width: 600px) {
+            .checkin-form.visible {
+              flex-wrap: wrap;
+            }
+            
+            .checkin-form input {
+              width: 100px;
+            }
+          }
+          
           .add-member-button {
             display: inline-flex;
             align-items: center;
@@ -8404,6 +9010,275 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           .modal-btn.undo-confirm:hover {
             background-color: #218838;
           }
+          
+          /* Team Leadership Section */
+          .leadership-section {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border: 1px solid #dee2e6;
+            border-radius: 10px;
+            padding: 16px 20px;
+            margin-bottom: 20px;
+          }
+          
+          body.dark-mode .leadership-section {
+            background: linear-gradient(135deg, #2d2d2d 0%, #3d3d3d 100%);
+            border-color: #444;
+          }
+          
+          .leadership-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+          }
+          
+          .leadership-header h3 {
+            margin: 0;
+            font-size: 1em;
+            color: #495057;
+            font-weight: 600;
+          }
+          
+          body.dark-mode .leadership-header h3 {
+            color: #ccc;
+          }
+          
+          .edit-leadership-btn {
+            background: none;
+            border: 1px solid #6c757d;
+            color: #6c757d;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            cursor: pointer;
+            transition: all 0.2s ease;
+          }
+          
+          .edit-leadership-btn:hover {
+            background-color: #6c757d;
+            color: white;
+          }
+          
+          body.dark-mode .edit-leadership-btn {
+            border-color: #888;
+            color: #888;
+          }
+          
+          body.dark-mode .edit-leadership-btn:hover {
+            background-color: #888;
+            color: #1a1a1a;
+          }
+          
+          .leadership-content {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+          }
+          
+          .leadership-group {
+            flex: 1;
+            min-width: 150px;
+          }
+          
+          .leadership-group h4 {
+            margin: 0 0 6px 0;
+            font-size: 0.75em;
+            color: #868e96;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+          }
+          
+          body.dark-mode .leadership-group h4 {
+            color: #aaa;
+          }
+          
+          .leader-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+          }
+          
+          .leader-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.95em;
+            color: #333;
+          }
+          
+          body.dark-mode .leader-item {
+            color: #e0e0e0;
+          }
+          
+          .leader-item .remove-leader {
+            display: none;
+            background: none;
+            border: none;
+            color: #dc3545;
+            cursor: pointer;
+            padding: 0;
+            font-size: 1em;
+            line-height: 1;
+          }
+          
+          .leadership-section.editing .leader-item .remove-leader {
+            display: inline;
+          }
+          
+          .no-leaders {
+            color: #868e96;
+            font-style: italic;
+            font-size: 0.9em;
+          }
+          
+          body.dark-mode .no-leaders {
+            color: #888;
+          }
+          
+          .add-leader-form {
+            display: none;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #dee2e6;
+          }
+          
+          body.dark-mode .add-leader-form {
+            border-top-color: #444;
+          }
+          
+          .leadership-section.editing .add-leader-form {
+            display: block;
+          }
+          
+          .add-leader-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: flex-end;
+          }
+          
+          .add-leader-row .form-group {
+            flex: 1;
+            min-width: 150px;
+          }
+          
+          .add-leader-row label {
+            display: block;
+            font-size: 0.8em;
+            color: #6c757d;
+            margin-bottom: 4px;
+          }
+          
+          body.dark-mode .add-leader-row label {
+            color: #aaa;
+          }
+          
+          .add-leader-row input,
+          .add-leader-row select {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 0.9em;
+            box-sizing: border-box;
+          }
+          
+          body.dark-mode .add-leader-row input,
+          body.dark-mode .add-leader-row select {
+            background-color: #2d2d2d;
+            border-color: #555;
+            color: #fff;
+          }
+          
+          .add-leader-btn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            cursor: pointer;
+            white-space: nowrap;
+          }
+          
+          .add-leader-btn:hover {
+            background-color: #0056b3;
+          }
+          
+          .add-leader-btn:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+          }
+          
+          .person-search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 100;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            display: none;
+          }
+          
+          body.dark-mode .person-search-results {
+            background: #2d2d2d;
+            border-color: #555;
+          }
+          
+          .person-search-results.visible {
+            display: block;
+          }
+          
+          .person-search-result {
+            padding: 8px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+          }
+          
+          body.dark-mode .person-search-result {
+            border-bottom-color: #444;
+          }
+          
+          .person-search-result:last-child {
+            border-bottom: none;
+          }
+          
+          .person-search-result:hover {
+            background-color: #f0f0f0;
+          }
+          
+          body.dark-mode .person-search-result:hover {
+            background-color: #3d3d3d;
+          }
+          
+          .person-search-wrapper {
+            position: relative;
+          }
+          
+          @media (max-width: 600px) {
+            .leadership-content {
+              flex-direction: column;
+              gap: 15px;
+            }
+            
+            .add-leader-row {
+              flex-direction: column;
+            }
+            
+            .add-leader-row .form-group {
+              width: 100%;
+            }
+            
+            .add-leader-btn {
+              width: 100%;
+            }
+          }
         </style>
         <script>
           // Apply dark mode immediately to prevent flash
@@ -8427,6 +9302,44 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             <span><strong>⟵</strong></span>
               <span>Back to Teams</span>
             </a>
+          </div>
+          
+          <div id="leadershipSection" class="leadership-section" style="display: none;">
+            <div class="leadership-header">
+              <h3>Team Leadership</h3>
+              <button class="edit-leadership-btn" onclick="toggleLeadershipEdit()">Edit</button>
+            </div>
+            <div class="leadership-content">
+              <div class="leadership-group">
+                <h4>Director</h4>
+                <div id="directorsList" class="leader-list">
+                  <span class="no-leaders">None assigned</span>
+                </div>
+              </div>
+              <div class="leadership-group">
+                <h4>Team Leader</h4>
+                <div id="teamLeadersList" class="leader-list">
+                  <span class="no-leaders">None assigned</span>
+                </div>
+              </div>
+            </div>
+            <div class="add-leader-form">
+              <div class="add-leader-row">
+                <div class="form-group person-search-wrapper">
+                  <label>Search for person</label>
+                  <input type="text" id="leaderSearchInput" placeholder="Type a name..." autocomplete="off">
+                  <div id="personSearchResults" class="person-search-results"></div>
+                </div>
+                <div class="form-group" style="min-width: 120px; flex: 0.5;">
+                  <label>Role</label>
+                  <select id="leaderRoleSelect">
+                    <option value="team_leader">Team Leader</option>
+                    <option value="director">Director</option>
+                  </select>
+                </div>
+                <button class="add-leader-btn" id="addLeaderBtn" onclick="addLeader()" disabled>Add</button>
+              </div>
+            </div>
           </div>
           
           <div id="loadingContainer" class="loading">
@@ -8571,6 +9484,11 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
           let currentMemberForRemoval = null;
           let currentMemberForUndo = null;
           let currentConfirmCallback = null;
+          
+          // Leadership state
+          let selectedPerson = null;
+          let searchTimeout = null;
+          let isLeadershipEditMode = false;
 
           // Dark mode functionality
           document.addEventListener('DOMContentLoaded', function() {
@@ -8611,6 +9529,213 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             document.getElementById('confirmMessage').textContent = message;
             currentConfirmCallback = callback;
             document.getElementById('confirmModal').style.display = 'block';
+          }
+          
+          // Leadership functions
+          async function loadTeamLeaders() {
+            try {
+              const response = await fetch('/api/dream-teams/' + workflowId + '/leaders');
+              const result = await response.json();
+              
+              if (result.success) {
+                renderLeaders(result.data.directors, result.data.teamLeaders);
+                document.getElementById('leadershipSection').style.display = 'block';
+              }
+            } catch (error) {
+              console.error('Failed to load team leaders:', error);
+            }
+          }
+          
+          function renderLeaders(directors, teamLeaders) {
+            const directorsList = document.getElementById('directorsList');
+            const teamLeadersList = document.getElementById('teamLeadersList');
+            
+            // Update labels based on count
+            const directorLabel = directorsList.parentElement.querySelector('h4');
+            const teamLeaderLabel = teamLeadersList.parentElement.querySelector('h4');
+            directorLabel.textContent = directors.length >= 2 ? 'Directors' : 'Director';
+            teamLeaderLabel.textContent = teamLeaders.length >= 2 ? 'Team Leaders' : 'Team Leader';
+            
+            if (directors.length === 0) {
+              directorsList.innerHTML = '<span class="no-leaders">None assigned</span>';
+            } else {
+              directorsList.innerHTML = directors.map(function(d) {
+                return '<div class="leader-item" data-person-id="' + d.personId + '" data-role="director">' +
+                  '<span>' + escapeHtml(d.personName) + '</span>' +
+                  '<button class="remove-leader" onclick="removeLeader(\\'' + d.personId + '\\', \\'director\\', \\'' + escapeHtml(d.personName).replace(/'/g, "\\\\'") + '\\')">✕</button>' +
+                '</div>';
+              }).join('');
+            }
+            
+            if (teamLeaders.length === 0) {
+              teamLeadersList.innerHTML = '<span class="no-leaders">None assigned</span>';
+            } else {
+              teamLeadersList.innerHTML = teamLeaders.map(function(t) {
+                return '<div class="leader-item" data-person-id="' + t.personId + '" data-role="team_leader">' +
+                  '<span>' + escapeHtml(t.personName) + '</span>' +
+                  '<button class="remove-leader" onclick="removeLeader(\\'' + t.personId + '\\', \\'team_leader\\', \\'' + escapeHtml(t.personName).replace(/'/g, "\\\\'") + '\\')">✕</button>' +
+                '</div>';
+              }).join('');
+            }
+          }
+          
+          function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+          }
+          
+          function toggleLeadershipEdit() {
+            const section = document.getElementById('leadershipSection');
+            const btn = section.querySelector('.edit-leadership-btn');
+            isLeadershipEditMode = !isLeadershipEditMode;
+            
+            if (isLeadershipEditMode) {
+              section.classList.add('editing');
+              btn.textContent = 'Done';
+            } else {
+              section.classList.remove('editing');
+              btn.textContent = 'Edit';
+              // Clear search
+              document.getElementById('leaderSearchInput').value = '';
+              document.getElementById('personSearchResults').innerHTML = '';
+              document.getElementById('personSearchResults').classList.remove('visible');
+              selectedPerson = null;
+              document.getElementById('addLeaderBtn').disabled = true;
+            }
+          }
+          
+          // Person search for adding leaders
+          document.addEventListener('DOMContentLoaded', function() {
+            const searchInput = document.getElementById('leaderSearchInput');
+            const resultsContainer = document.getElementById('personSearchResults');
+            
+            if (searchInput) {
+              searchInput.addEventListener('input', function() {
+                const query = this.value.trim();
+                
+                // Clear previous timeout
+                if (searchTimeout) clearTimeout(searchTimeout);
+                
+                // Reset selection when typing
+                selectedPerson = null;
+                document.getElementById('addLeaderBtn').disabled = true;
+                
+                if (query.length < 2) {
+                  resultsContainer.innerHTML = '';
+                  resultsContainer.classList.remove('visible');
+                  return;
+                }
+                
+                // Debounce search
+                searchTimeout = setTimeout(async function() {
+                  try {
+                    const response = await fetch('/api/dream-teams/search-people?q=' + encodeURIComponent(query));
+                    const result = await response.json();
+                    
+                    if (result.success && result.data.length > 0) {
+                      resultsContainer.innerHTML = result.data.map(function(person) {
+                        return '<div class="person-search-result" data-id="' + person.id + '" data-name="' + escapeHtml(person.name) + '">' +
+                          escapeHtml(person.name) +
+                        '</div>';
+                      }).join('');
+                      resultsContainer.classList.add('visible');
+                      
+                      // Add click handlers
+                      resultsContainer.querySelectorAll('.person-search-result').forEach(function(el) {
+                        el.addEventListener('click', function() {
+                          selectedPerson = {
+                            id: this.getAttribute('data-id'),
+                            name: this.getAttribute('data-name')
+                          };
+                          searchInput.value = selectedPerson.name;
+                          resultsContainer.classList.remove('visible');
+                          document.getElementById('addLeaderBtn').disabled = false;
+                        });
+                      });
+                    } else {
+                      resultsContainer.innerHTML = '<div class="person-search-result" style="color: #888; cursor: default;">No results found</div>';
+                      resultsContainer.classList.add('visible');
+                    }
+                  } catch (error) {
+                    console.error('Search error:', error);
+                  }
+                }, 300);
+              });
+              
+              // Close results when clicking outside
+              document.addEventListener('click', function(e) {
+                if (!searchInput.contains(e.target) && !resultsContainer.contains(e.target)) {
+                  resultsContainer.classList.remove('visible');
+                }
+              });
+            }
+          });
+          
+          async function addLeader() {
+            if (!selectedPerson) return;
+            
+            const role = document.getElementById('leaderRoleSelect').value;
+            const btn = document.getElementById('addLeaderBtn');
+            
+            btn.disabled = true;
+            btn.textContent = 'Adding...';
+            
+            try {
+              const response = await fetch('/api/dream-teams/' + workflowId + '/leaders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  personId: selectedPerson.id,
+                  personName: selectedPerson.name,
+                  role: role
+                })
+              });
+              
+              const result = await response.json();
+              
+              if (result.success) {
+                // Reload leaders
+                await loadTeamLeaders();
+                
+                // Clear form
+                document.getElementById('leaderSearchInput').value = '';
+                selectedPerson = null;
+              } else {
+                showAlert('Error', result.error || 'Failed to add leader');
+              }
+            } catch (error) {
+              console.error('Error adding leader:', error);
+              showAlert('Error', 'Failed to add leader');
+            }
+            
+            btn.textContent = 'Add';
+            btn.disabled = true;
+          }
+          
+          async function removeLeader(personId, role, personName) {
+            showConfirm(
+              'Remove Leader',
+              'Are you sure you want to remove ' + personName + ' as a ' + (role === 'director' ? 'Director' : 'Team Leader') + '?',
+              async function() {
+                try {
+                  const response = await fetch('/api/dream-teams/' + workflowId + '/leaders/' + personId + '?role=' + role, {
+                    method: 'DELETE'
+                  });
+                  
+                  const result = await response.json();
+                  
+                  if (result.success) {
+                    await loadTeamLeaders();
+                  } else {
+                    showAlert('Error', result.error || 'Failed to remove leader');
+                  }
+                } catch (error) {
+                  console.error('Error removing leader:', error);
+                  showAlert('Error', 'Failed to remove leader');
+                }
+              }
+            );
           }
 
           async function loadTeamRoster() {
@@ -8678,13 +9803,35 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             
             const memberList = document.getElementById('memberList');
             memberList.innerHTML = sortedMembers.map(function(member) {
-              const joinDate = new Date(member.joinedAt).toLocaleDateString('en-US', {
+              // Format dates
+              const startedDate = new Date(member.joinedAt).toLocaleDateString('en-US', {
                 month: 'numeric',
                 day: 'numeric',
                 year: 'numeric'
               });
               
-              // Check if member joined within last 30 days
+              // Active date is when they completed onboarding (movedToStepAt), or same as started if not completed
+              const hasActiveDate = member.stage === 'completed' && member.movedToStepAt && member.movedToStepAt !== member.joinedAt;
+              const activeDate = hasActiveDate ? new Date(member.movedToStepAt).toLocaleDateString('en-US', {
+                month: 'numeric',
+                day: 'numeric',
+                year: 'numeric'
+              }) : null;
+              
+              // Build date display
+              let dateDisplay = '';
+              if (member.stage === 'completed') {
+                // Completed members: show both dates (use startedDate for completed if no movedToStepAt)
+                const completedDate = activeDate || startedDate;
+                dateDisplay = '<span class="date-group"><span class="date-label">Joined:</span> ' + startedDate + '</span>' + 
+                              '<span class="date-separator">•</span>' +
+                              '<span class="date-group"><span class="date-label">Completed:</span> ' + completedDate + '</span>';
+              } else {
+                // In-progress members: just show joined date
+                dateDisplay = '<span class="date-group"><span class="date-label">Joined:</span> ' + startedDate + '</span>';
+              }
+              
+              // Check if member joined within last 30 days (based on when they first joined/started onboarding)
               const thirtyDaysAgo = new Date();
               thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
               const memberJoinDate = new Date(member.joinedAt);
@@ -8699,20 +9846,156 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
               const incompleteIndicator = member.stage !== 'completed' ? 
                 '<span class="incomplete-indicator" title="Onboarding process not yet completed">In-Progress</span>' : '';
               
+              // Check if any check-in is needed
+              const hasCheckInNeeded = member.checkIns && (
+                (member.checkIns.twoMonth && member.checkIns.twoMonth.needed) ||
+                (member.checkIns.sixMonth && member.checkIns.sixMonth.needed)
+              );
+              const checkInNeededIndicator = hasCheckInNeeded ? 
+                '<span class="checkin-needed-indicator" title="This member has a check-in due">Time to Check-In!</span>' : '';
+              
               const removeButton = member.markedForRemoval ? 
                 '<div class="undo-button" data-member-id="' + member.personId + '" data-member-name="' + member.firstName + ' ' + member.lastName + '" title="Click to undo removal">Undo</div>' :
                 '<div class="remove-checkbox" data-member-id="' + member.personId + '" data-member-name="' + member.firstName + ' ' + member.lastName + '">✗</div>';
               
+              // Build check-ins section - only show if there are check-ins that are due or completed
+              let checkInsHtml = '';
+              if (member.checkIns) {
+                let checkInItems = '';
+                
+                // Helper to format date as M/D/YYYY
+                function formatCheckInDate(dateStr) {
+                  if (!dateStr) return '';
+                  const parts = dateStr.split('-');
+                  if (parts.length === 3) {
+                    return parseInt(parts[1]) + '/' + parseInt(parts[2]) + '/' + parts[0];
+                  }
+                  return dateStr;
+                }
+                
+                // 2-month check-in - only show if needed or completed (not if member < 2 months)
+                if (member.checkIns.twoMonth) {
+                  const twoMonth = member.checkIns.twoMonth;
+                  if (twoMonth.completed) {
+                    if (twoMonth.isLegacy) {
+                      // Legacy check-in - just show checkmark, no details
+                      checkInItems += '<div class="checkin-item">' +
+                        '<input type="checkbox" class="checkin-checkbox" checked disabled>' +
+                        '<span class="checkin-label completed">2-Month Check-In ✓</span>' +
+                      '</div>';
+                    } else {
+                      // Regular completed check-in with details
+                      const completedInfo = formatCheckInDate(twoMonth.completedDate) + ' by ' + (twoMonth.completedBy || '');
+                      checkInItems += '<div class="checkin-item">' +
+                        '<input type="checkbox" class="checkin-checkbox" checked disabled>' +
+                        '<span class="checkin-label completed">2-Month Check-In ✓</span>' +
+                        '<span class="checkin-completed-info">' + completedInfo + '</span>' +
+                      '</div>';
+                    }
+                  } else if (twoMonth.needed) {
+                    // Needs completion
+                    checkInItems += '<div class="checkin-item" data-checkin-type="2-month" data-person-id="' + member.personId + '">' +
+                      '<input type="checkbox" class="checkin-checkbox checkin-trigger">' +
+                      '<span class="checkin-label needed">2-Month Check-In</span>' +
+                    '</div>' +
+                    '<div class="checkin-form" data-checkin-type="2-month" data-person-id="' + member.personId + '">' +
+                      '<input type="text" class="checkin-completed-by" placeholder="Your name">' +
+                      '<button type="button" class="checkin-submit-btn">Save</button>' +
+                      '<button type="button" class="cancel-btn checkin-cancel-btn">✕</button>' +
+                    '</div>';
+                  }
+                }
+                
+                // 6-month check-in - only show if needed or completed (hide "not yet due")
+                if (member.checkIns.sixMonth) {
+                  const sixMonth = member.checkIns.sixMonth;
+                  if (sixMonth.completed) {
+                    if (sixMonth.isLegacy) {
+                      // Legacy check-in - just show checkmark, no details
+                      checkInItems += '<div class="checkin-item">' +
+                        '<input type="checkbox" class="checkin-checkbox" checked disabled>' +
+                        '<span class="checkin-label completed">6-Month Check-In ✓</span>' +
+                      '</div>';
+                    } else {
+                      // Regular completed check-in with details
+                      const completedInfo = formatCheckInDate(sixMonth.completedDate) + ' by ' + (sixMonth.completedBy || '');
+                      checkInItems += '<div class="checkin-item">' +
+                        '<input type="checkbox" class="checkin-checkbox" checked disabled>' +
+                        '<span class="checkin-label completed">6-Month Check-In ✓</span>' +
+                        '<span class="checkin-completed-info">' + completedInfo + '</span>' +
+                      '</div>';
+                    }
+                  } else if (sixMonth.needed) {
+                    // Needs completion (6 months reached)
+                    checkInItems += '<div class="checkin-item" data-checkin-type="6-month" data-person-id="' + member.personId + '">' +
+                      '<input type="checkbox" class="checkin-checkbox checkin-trigger">' +
+                      '<span class="checkin-label needed">6-Month Check-In</span>' +
+                    '</div>' +
+                    '<div class="checkin-form" data-checkin-type="6-month" data-person-id="' + member.personId + '">' +
+                      '<input type="text" class="checkin-completed-by" placeholder="Your name">' +
+                      '<button type="button" class="checkin-submit-btn">Save</button>' +
+                      '<button type="button" class="cancel-btn checkin-cancel-btn">✕</button>' +
+                    '</div>';
+                  }
+                  // Don't show anything if not yet due
+                }
+                
+                // Only add the section wrapper if there are items to show
+                if (checkInItems) {
+                  checkInsHtml = '<div class="checkins-section" data-person-id="' + member.personId + '">' + checkInItems + '</div>';
+                }
+              }
+              
+              // Build at-a-glance check-in status indicator
+              let checkInStatusHtml = '';
+              if (member.checkIns && (member.checkIns.twoMonth || member.checkIns.sixMonth)) {
+                const twoMonth = member.checkIns.twoMonth;
+                const sixMonth = member.checkIns.sixMonth;
+                
+                // Determine 2-month status
+                let twoMonthStatus = '';
+                if (twoMonth) {
+                  if (twoMonth.completed) {
+                    twoMonthStatus = '<span class="status-done">2✓</span>';
+                  } else if (twoMonth.needed) {
+                    twoMonthStatus = '<span class="status-pending">2✗</span>';
+                  }
+                }
+                
+                // Determine 6-month status
+                let sixMonthStatus = '';
+                if (sixMonth) {
+                  if (sixMonth.completed) {
+                    sixMonthStatus = '<span class="status-done">6✓</span>';
+                  } else if (sixMonth.needed) {
+                    sixMonthStatus = '<span class="status-pending">6✗</span>';
+                  }
+                  // Don't show anything if not yet due
+                }
+                
+                // Only show indicator if there's something to show
+                if (twoMonthStatus || sixMonthStatus) {
+                  checkInStatusHtml = '<span class="checkin-status" data-person-id="' + member.personId + '" title="Click to view check-in details">' +
+                    twoMonthStatus + sixMonthStatus +
+                    '<span class="expand-icon">▼</span>' +
+                  '</span>';
+                }
+              }
+              
               return '<div class="member-item" data-member-id="' + member.personId + '">' +
                        '<div class="member-info">' +
-                         '<div class="member-name">' + member.firstName + ' ' + member.lastName + '</div>' +
+                         '<div class="member-name-row">' +
+                           '<div class="member-name">' + member.firstName + ' ' + member.lastName + '</div>' +
+                           checkInStatusHtml +
+                         '</div>' +
                          '<div class="join-date">' + 
-                           '<span class="date">' + joinDate + '</span>' +
+                           '<span class="date">' + dateDisplay + '</span>' +
                            '<div class="badges-container">' +
-                             (newMemberIndicator || incompleteIndicator || pendingIndicator ? 
-                               [newMemberIndicator, incompleteIndicator, pendingIndicator].filter(Boolean).join('') : '') +
+                             (newMemberIndicator || incompleteIndicator || pendingIndicator || checkInNeededIndicator ? 
+                               [newMemberIndicator, incompleteIndicator, checkInNeededIndicator, pendingIndicator].filter(Boolean).join('') : '') +
                            '</div>' +
                          '</div>' +
+                         checkInsHtml +
                        '</div>' +
                        removeButton +
                      '</div>';
@@ -8720,6 +10003,9 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             
             // Re-setup checkbox listeners after updating the HTML
             setupCheckboxListeners();
+            
+            // Setup check-in listeners
+            setupCheckInListeners();
           }
 
           function displayTeamRoster() {
@@ -8838,6 +10124,116 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
                 document.getElementById('undoMessage').textContent = 
                   'Are you sure you want to undo the removal of ' + memberName + '?';
                 document.getElementById('undoModal').style.display = 'block';
+              });
+            });
+          }
+
+          function setupCheckInListeners() {
+            // Handle status indicator clicks to toggle check-in section
+            const statusIndicators = document.querySelectorAll('.checkin-status');
+            statusIndicators.forEach(function(indicator) {
+              indicator.addEventListener('click', function(e) {
+                e.stopPropagation(); // Prevent event bubbling
+                const personId = this.dataset.personId;
+                const section = document.querySelector('.checkins-section[data-person-id="' + personId + '"]');
+                
+                if (section) {
+                  // Simply toggle this section (allow multiple open)
+                  section.classList.toggle('visible');
+                  this.classList.toggle('expanded');
+                }
+              });
+            });
+            
+            // Handle checkbox clicks to show the form
+            const checkInTriggers = document.querySelectorAll('.checkin-trigger');
+            checkInTriggers.forEach(function(checkbox) {
+              checkbox.addEventListener('change', function() {
+                const checkinItem = this.closest('.checkin-item');
+                const personId = checkinItem.dataset.personId;
+                const checkInType = checkinItem.dataset.checkinType;
+                
+                // Find the corresponding form
+                const form = document.querySelector('.checkin-form[data-person-id="' + personId + '"][data-checkin-type="' + checkInType + '"]');
+                
+                if (this.checked) {
+                  form.classList.add('visible');
+                  form.querySelector('.checkin-completed-by').focus();
+                } else {
+                  form.classList.remove('visible');
+                  form.querySelector('.checkin-completed-by').value = '';
+                }
+              });
+            });
+            
+            // Handle form submission
+            const submitButtons = document.querySelectorAll('.checkin-submit-btn');
+            submitButtons.forEach(function(button) {
+              button.addEventListener('click', async function() {
+                const form = this.closest('.checkin-form');
+                const personId = form.dataset.personId;
+                const checkInType = form.dataset.checkinType;
+                const completedByInput = form.querySelector('.checkin-completed-by');
+                const completedBy = completedByInput.value.trim();
+                
+                if (!completedBy) {
+                  showAlert('Required Field', 'Please enter your name to complete this check-in.');
+                  completedByInput.focus();
+                  return;
+                }
+                
+                // Disable the button while submitting
+                button.disabled = true;
+                button.textContent = 'Saving...';
+                
+                try {
+                  const response = await fetch('/api/dream-teams/' + workflowId + '/checkin', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                      personId: personId,
+                      checkInType: checkInType,
+                      completedBy: completedBy
+                    })
+                  });
+                  
+                  const result = await response.json();
+                  
+                  if (result.success) {
+                    // Refresh the team roster to show updated state
+                    loadTeamRoster();
+                  } else {
+                    showAlert('Error', 'Failed to save check-in: ' + (result.error || 'Unknown error'));
+                    button.disabled = false;
+                    button.textContent = 'Submit';
+                  }
+                } catch (error) {
+                  console.error('Error saving check-in:', error);
+                  showAlert('Error', 'Failed to save check-in. Please try again.');
+                  button.disabled = false;
+                  button.textContent = 'Submit';
+                }
+              });
+            });
+            
+            // Handle cancel button
+            const cancelButtons = document.querySelectorAll('.checkin-cancel-btn');
+            cancelButtons.forEach(function(button) {
+              button.addEventListener('click', function() {
+                const form = this.closest('.checkin-form');
+                const personId = form.dataset.personId;
+                const checkInType = form.dataset.checkinType;
+                
+                // Find the corresponding checkbox and uncheck it
+                const checkinItem = document.querySelector('.checkin-item[data-person-id="' + personId + '"][data-checkin-type="' + checkInType + '"]');
+                const checkbox = checkinItem.querySelector('.checkin-checkbox');
+                checkbox.checked = false;
+                
+                // Hide the form and clear input
+                form.classList.remove('visible');
+                form.querySelector('.checkin-completed-by').value = '';
               });
             });
           }
@@ -9085,8 +10481,9 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             });
           });
 
-          // Load team roster on page load
+          // Load team roster and leaders on page load
           loadTeamRoster();
+          loadTeamLeaders();
         </script>
       </body>
       </html>
@@ -11523,10 +12920,287 @@ app.get('/life-groups/groups/:groupId/attendance', async (req, res) => {
   }
 });
 
+// Email transporter configuration
+const createEmailTransporter = () => {
+  // Check if email is configured
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    console.log('Email not configured - SMTP_HOST, SMTP_USER, or SMTP_PASS missing');
+    return null;
+  }
+  
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT || '587'),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    }
+  });
+};
+
+// Helper function to fetch email address for a person from PCO
+const fetchPersonEmail = async (personId: string, retries = 3): Promise<string | null> => {
+  try {
+    const response = await pcoClient.get(`/people/v2/people/${personId}`, {
+      params: { include: 'emails' }
+    });
+    
+    const emails = response.data.included?.filter((item: any) => item.type === 'Email') || [];
+    const primaryEmailObj = emails.find((email: any) => email.attributes.primary === true);
+    
+    if (primaryEmailObj) {
+      return primaryEmailObj.attributes.address;
+    } else if (emails.length > 0) {
+      return emails[0].attributes.address;
+    }
+    return null;
+  } catch (error: any) {
+    if (error.response?.status === 429 && retries > 0) {
+      const retryAfter = parseInt(error.response.headers['retry-after'] || '0');
+      const waitTime = retryAfter * 1000 || 3000 * Math.pow(2, 3 - retries);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+      return fetchPersonEmail(personId, retries - 1);
+    }
+    console.error(`Error fetching email for person ${personId}:`, error.message);
+    return null;
+  }
+};
+
+// Check for members with check-ins due today and send notifications
+async function sendCheckInNotifications() {
+  console.log(`[${new Date().toISOString()}] Checking for members with check-ins due today...`);
+  
+  const transporter = createEmailTransporter();
+  if (!transporter) {
+    console.log('Email notifications disabled - SMTP not configured');
+    return { notificationsSent: 0, skipped: 'Email not configured' };
+  }
+  
+  const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  // Teams that don't require check-ins
+  const teamsWithoutCheckIns = ['665166', '666583'];
+  
+  try {
+    // Get all Dream Team workflows
+    const workflows = await getDreamTeamWorkflows(false); // Use cached data from refresh
+    
+    interface CheckInNotification {
+      workflowId: string;
+      workflowName: string;
+      memberName: string;
+      memberId: string;
+      checkInType: '2-month' | '6-month';
+    }
+    
+    const notificationsToSend: CheckInNotification[] = [];
+    
+    // Process each workflow using cached data
+    for (const workflow of workflows) {
+      if (teamsWithoutCheckIns.includes(workflow.id)) continue;
+      
+      // Get workflow cards from cache (no API call if cached)
+      const { cards, people } = await getWorkflowCards(workflow.id, false);
+      
+      // Filter to only completed members
+      const completedCards = cards.filter((card: any) => card.attributes.stage === 'completed');
+      
+      // Build person map
+      const personMap = new Map<string, any>();
+      people.forEach((person: any) => personMap.set(person.id, person));
+      
+      // Get existing check-ins for this workflow (from local database - fast)
+      const workflowCheckIns = dreamTeamsTracking.getWorkflowCheckIns(workflow.id);
+      
+      // Process all cards without delays (no API calls here, just local data processing)
+      for (const card of completedCards) {
+        const personId = card.relationships.person.data.id;
+        const person = personMap.get(personId);
+        const memberName = person 
+          ? `${person.attributes.first_name} ${person.attributes.last_name}`
+          : 'Unknown Member';
+        
+        const originalJoinDate = new Date(card.attributes.created_at);
+        const completionDate = card.attributes.moved_to_step_at 
+          ? new Date(card.attributes.moved_to_step_at) 
+          : null;
+        
+        // Check if this was a bulk completion on 10/1/2025
+        const isBulkCompletion = completionDate && 
+          completionDate.getFullYear() === 2025 && 
+          completionDate.getMonth() === 9 && 
+          completionDate.getDate() === 1;
+        
+        // Get existing check-ins
+        const memberCheckIns = workflowCheckIns.get(personId) || [];
+        const hasTwoMonthCheckIn = memberCheckIns.some(c => c.checkInType === '2-month');
+        const hasSixMonthCheckIn = memberCheckIns.some(c => c.checkInType === '6-month');
+        
+        // Calculate the dates when check-ins become due
+        const effectiveStartDate = isBulkCompletion ? originalJoinDate : (completionDate || originalJoinDate);
+        
+        // 2-month check-in due date
+        const twoMonthDueDate = new Date(effectiveStartDate);
+        twoMonthDueDate.setMonth(twoMonthDueDate.getMonth() + 2);
+        twoMonthDueDate.setHours(0, 0, 0, 0);
+        
+        // 6-month check-in due date
+        const sixMonthDueDate = new Date(effectiveStartDate);
+        sixMonthDueDate.setMonth(sixMonthDueDate.getMonth() + 6);
+        sixMonthDueDate.setHours(0, 0, 0, 0);
+        
+        // Check if 2-month check-in is due TODAY
+        if (!hasTwoMonthCheckIn && twoMonthDueDate.getTime() === today.getTime()) {
+          // Skip legacy members (bulk completion with join date 2+ months before)
+          if (isBulkCompletion) {
+            const monthsBeforeBulk = (completionDate!.getFullYear() - originalJoinDate.getFullYear()) * 12 + 
+              (completionDate!.getMonth() - originalJoinDate.getMonth());
+            if (monthsBeforeBulk >= 2) continue;
+          }
+          
+          notificationsToSend.push({
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            memberName,
+            memberId: personId,
+            checkInType: '2-month'
+          });
+        }
+        
+        // Check if 6-month check-in is due TODAY
+        if (!hasSixMonthCheckIn && sixMonthDueDate.getTime() === today.getTime()) {
+          // Skip legacy members (bulk completion with join date 6+ months before)
+          if (isBulkCompletion) {
+            const monthsBeforeBulk = (completionDate!.getFullYear() - originalJoinDate.getFullYear()) * 12 + 
+              (completionDate!.getMonth() - originalJoinDate.getMonth());
+            if (monthsBeforeBulk >= 6) continue;
+          }
+          
+          notificationsToSend.push({
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            memberName,
+            memberId: personId,
+            checkInType: '6-month'
+          });
+        }
+      }
+    }
+    
+    console.log(`Found ${notificationsToSend.length} check-in(s) due today`);
+    
+    if (notificationsToSend.length === 0) {
+      return { notificationsSent: 0, message: 'No check-ins due today' };
+    }
+    
+    // Group notifications by workflow
+    const notificationsByWorkflow = new Map<string, CheckInNotification[]>();
+    for (const notification of notificationsToSend) {
+      const existing = notificationsByWorkflow.get(notification.workflowId) || [];
+      existing.push(notification);
+      notificationsByWorkflow.set(notification.workflowId, existing);
+    }
+    
+    let emailsSent = 0;
+    
+    // Send emails to team leaders/directors for each team
+    for (const [workflowId, notifications] of notificationsByWorkflow) {
+      const workflowName = notifications[0].workflowName;
+      
+      // Get leaders for this team
+      const leaders = dreamTeamsTracking.getTeamLeaders(workflowId);
+      
+      if (leaders.length === 0) {
+        console.log(`No leaders configured for ${workflowName} - skipping notifications`);
+        continue;
+      }
+      
+      // Fetch email addresses for each leader
+      const leaderEmails: string[] = [];
+      for (const leader of leaders) {
+        const email = await fetchPersonEmail(leader.personId);
+        if (email) {
+          leaderEmails.push(email);
+        }
+        await new Promise(resolve => setTimeout(resolve, 200)); // Rate limit protection
+      }
+      
+      if (leaderEmails.length === 0) {
+        console.log(`Could not fetch emails for leaders of ${workflowName} - skipping`);
+        continue;
+      }
+      
+      // Build email content
+      const memberList = notifications.map(n => 
+        `• ${n.memberName} - ${n.checkInType} check-in`
+      ).join('\n');
+      
+      const dreamTeamUrl = `${process.env.BASE_URL || 'https://qcc-hub.com'}/dream-teams/${workflowId}`;
+      
+      const emailSubject = `Dream Team Check-In${notifications.length > 1 ? 's' : ''} Due - ${workflowName}`;
+      const emailBody = `
+Hello ${workflowName} Leadership Team,
+
+The following team member${notifications.length > 1 ? 's have' : ' has'} a Dream Team check-in due soon:
+
+${memberList}
+
+Please complete ${notifications.length > 1 ? 'these check-ins' : 'this check-in'} by visiting your team page and clicking on the member's card to record the check-in:
+
+${dreamTeamUrl}
+
+Thank you for your dedication to our Dream Team members!
+
+- QCC Hub
+      `.trim();
+      
+      try {
+        const mailOptions: {
+          from: string | undefined;
+          to: string;
+          subject: string;
+          text: string;
+          bcc?: string;
+        } = {
+          from: fromEmail,
+          to: leaderEmails.join(', '),
+          subject: emailSubject,
+          text: emailBody
+        };
+        
+        // Add BCC for monitoring if configured
+        if (process.env.SMTP_BCC) {
+          mailOptions.bcc = process.env.SMTP_BCC;
+        }
+        
+        await transporter.sendMail(mailOptions);
+        
+        emailsSent++;
+        console.log(`Sent check-in notification email to ${workflowName} leaders: ${leaderEmails.join(', ')}${process.env.SMTP_BCC ? ` (BCC: ${process.env.SMTP_BCC})` : ''}`);
+      } catch (emailError) {
+        console.error(`Failed to send email to ${workflowName} leaders:`, emailError);
+      }
+    }
+    
+    return { 
+      notificationsSent: emailsSent, 
+      checkInsDue: notificationsToSend.length,
+      teamsNotified: emailsSent
+    };
+    
+  } catch (error) {
+    console.error('Error checking for check-in notifications:', error);
+    return { notificationsSent: 0, error: String(error) };
+  }
+}
+
 // Automatic data refresh function
 async function performAutomaticRefresh() {
   const startTime = Date.now();
-  console.log(`[${new Date().toISOString()}] Starting automatic overnight data refresh...`);
+  console.log(`[${new Date().toISOString()}] Starting automatic morning data refresh...`);
   
   try {
     const groupTypeIdFromEnv = process.env.PCO_GROUP_TYPE_ID;
@@ -11605,6 +13279,51 @@ async function performAutomaticRefresh() {
       errorCount++;
     }
     
+    // Refresh Dream Teams workflow data
+    console.log('Refreshing Dream Teams workflow data...');
+    try {
+      const dreamTeamWorkflows = await getDreamTeamWorkflows(true); // Force refresh
+      console.log(`Dream Teams workflows refreshed: ${dreamTeamWorkflows.length} teams`);
+      
+      // Also refresh individual workflow cards for each team
+      let dtSuccessCount = 0;
+      let dtErrorCount = 0;
+      
+      for (let i = 0; i < dreamTeamWorkflows.length; i++) {
+        const workflow = dreamTeamWorkflows[i];
+        try {
+          await getWorkflowCards(workflow.id, true); // Force refresh
+          dtSuccessCount++;
+          
+          // Add delay between workflows to be respectful to PCO API
+          if (i < dreamTeamWorkflows.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        } catch (error) {
+          console.error(`Failed to refresh Dream Team workflow ${workflow.id} (${workflow.name}):`, error);
+          dtErrorCount++;
+        }
+      }
+      
+      console.log(`Dream Teams refresh completed. Success: ${dtSuccessCount}, Errors: ${dtErrorCount}`);
+    } catch (error) {
+      console.error('Failed to refresh Dream Teams data:', error);
+      errorCount++;
+    }
+    
+    // Send check-in notifications after Dream Teams data is refreshed
+    if (process.env.CHECKIN_EMAIL_FLAG === 'true') {
+      console.log('Checking for Dream Team check-in notifications...');
+      try {
+        const notificationResult = await sendCheckInNotifications();
+        console.log(`Check-in notifications result:`, notificationResult);
+      } catch (error) {
+        console.error('Failed to send check-in notifications:', error);
+      }
+    } else {
+      console.log('Check-in notifications are disabled (CHECKIN_EMAIL_FLAG is not set to true)');
+    }
+    
     const duration = Math.round((Date.now() - startTime) / 1000);
     console.log(`[${new Date().toISOString()}] Automatic refresh completed in ${duration}s. Success: ${successCount}, Errors: ${errorCount}`);
     
@@ -11614,15 +13333,15 @@ async function performAutomaticRefresh() {
   }
 }
 
-// Schedule automatic refresh at 12:30 AM EST every day
+// Schedule automatic refresh at 6:00 AM EST every day
 // Cron format: minute hour day month dayOfWeek
 // Using timezone option to ensure it runs at EST regardless of server timezone
-cron.schedule('30 0 * * *', performAutomaticRefresh, {
+cron.schedule('0 6 * * *', performAutomaticRefresh, {
   scheduled: true,
   timezone: "America/New_York" // EST/EDT timezone
 });
 
-console.log('Automatic overnight refresh scheduled for 12:30 AM EST daily');
+console.log('Automatic morning refresh scheduled for 6:00 AM EST daily');
 
 // Start server
 app.listen(port, () => {

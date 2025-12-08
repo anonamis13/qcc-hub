@@ -144,6 +144,44 @@ function initializeDb() {
         ON dream_team_removals(workflow_id, processed)
       `);
       
+      // Create dream teams check-in tracking table
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS dream_team_checkins (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          workflow_id TEXT NOT NULL,
+          person_id TEXT NOT NULL,
+          checkin_type TEXT NOT NULL,
+          completed_by TEXT,
+          completed_date TEXT,
+          is_legacy BOOLEAN DEFAULT 0,
+          timestamp INTEGER NOT NULL,
+          UNIQUE(workflow_id, person_id, checkin_type)
+        )
+      `);
+      
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_dream_team_checkins_workflow_person 
+        ON dream_team_checkins(workflow_id, person_id)
+      `);
+      
+      // Create dream teams leadership table
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS dream_team_leaders (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          workflow_id TEXT NOT NULL,
+          person_id TEXT NOT NULL,
+          person_name TEXT NOT NULL,
+          role TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          UNIQUE(workflow_id, person_id, role)
+        )
+      `);
+      
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_dream_team_leaders_workflow 
+        ON dream_team_leaders(workflow_id)
+      `);
+      
       // Run initial cleanup
       cleanupOldData();
       
@@ -770,6 +808,208 @@ export const dreamTeamsTracking = {
       }
     } catch (error) {
       console.error(`Failed to undo removal for member ${memberId} in workflow ${workflowId}:`, error);
+      throw error;
+    }
+  },
+
+  // Record a check-in for a member
+  recordCheckIn: (workflowId: string, personId: string, checkInType: '2-month' | '6-month', completedBy: string): void => {
+    try {
+      const db = initializeDb();
+      const completedDate = getLocalDateString();
+      const timestamp = Date.now();
+      
+      const stmt = db.prepare(`
+        INSERT OR REPLACE INTO dream_team_checkins 
+        (workflow_id, person_id, checkin_type, completed_by, completed_date, is_legacy, timestamp)
+        VALUES (?, ?, ?, ?, ?, 0, ?)
+      `);
+      
+      stmt.run(workflowId, personId, checkInType, completedBy, completedDate, timestamp);
+    } catch (error) {
+      console.error(`Failed to record check-in for person ${personId} in workflow ${workflowId}:`, error);
+      throw error;
+    }
+  },
+
+  // Record a legacy check-in (for members who joined before the feature was implemented)
+  recordLegacyCheckIn: (workflowId: string, personId: string, checkInType: '2-month' | '6-month'): void => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      
+      const stmt = db.prepare(`
+        INSERT OR IGNORE INTO dream_team_checkins 
+        (workflow_id, person_id, checkin_type, completed_by, completed_date, is_legacy, timestamp)
+        VALUES (?, ?, ?, NULL, NULL, 1, ?)
+      `);
+      
+      stmt.run(workflowId, personId, checkInType, timestamp);
+    } catch (error) {
+      console.error(`Failed to record legacy check-in for person ${personId} in workflow ${workflowId}:`, error);
+      throw error;
+    }
+  },
+
+  // Get check-ins for a specific member in a workflow
+  getMemberCheckIns: (workflowId: string, personId: string): Array<{
+    checkInType: string;
+    completedBy: string | null;
+    completedDate: string | null;
+    isLegacy: boolean;
+  }> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT checkin_type as checkInType, completed_by as completedBy, 
+               completed_date as completedDate, is_legacy as isLegacy
+        FROM dream_team_checkins 
+        WHERE workflow_id = ? AND person_id = ?
+      `);
+      
+      return stmt.all(workflowId, personId) as Array<{
+        checkInType: string;
+        completedBy: string | null;
+        completedDate: string | null;
+        isLegacy: boolean;
+      }>;
+    } catch (error) {
+      console.error(`Failed to get check-ins for person ${personId} in workflow ${workflowId}:`, error);
+      return [];
+    }
+  },
+
+  // Get all check-ins for a workflow (for bulk loading)
+  getWorkflowCheckIns: (workflowId: string): Map<string, Array<{
+    checkInType: string;
+    completedBy: string | null;
+    completedDate: string | null;
+    isLegacy: boolean;
+  }>> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT person_id as personId, checkin_type as checkInType, 
+               completed_by as completedBy, completed_date as completedDate, 
+               is_legacy as isLegacy
+        FROM dream_team_checkins 
+        WHERE workflow_id = ?
+      `);
+      
+      const rows = stmt.all(workflowId) as Array<{
+        personId: string;
+        checkInType: string;
+        completedBy: string | null;
+        completedDate: string | null;
+        isLegacy: number;
+      }>;
+      
+      const checkInsMap = new Map<string, Array<{
+        checkInType: string;
+        completedBy: string | null;
+        completedDate: string | null;
+        isLegacy: boolean;
+      }>>();
+      
+      for (const row of rows) {
+        if (!checkInsMap.has(row.personId)) {
+          checkInsMap.set(row.personId, []);
+        }
+        checkInsMap.get(row.personId)!.push({
+          checkInType: row.checkInType,
+          completedBy: row.completedBy,
+          completedDate: row.completedDate,
+          isLegacy: row.isLegacy === 1
+        });
+      }
+      
+      return checkInsMap;
+    } catch (error) {
+      console.error(`Failed to get check-ins for workflow ${workflowId}:`, error);
+      return new Map();
+    }
+  },
+
+  // Add a leader to a team
+  addLeader: (workflowId: string, personId: string, personName: string, role: 'team_leader' | 'director'): void => {
+    try {
+      const db = initializeDb();
+      const createdAt = Date.now();
+      
+      const stmt = db.prepare(`
+        INSERT OR REPLACE INTO dream_team_leaders 
+        (workflow_id, person_id, person_name, role, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      
+      stmt.run(workflowId, personId, personName, role, createdAt);
+    } catch (error) {
+      console.error(`Failed to add leader ${personId} to workflow ${workflowId}:`, error);
+      throw error;
+    }
+  },
+
+  // Remove a leader from a team
+  removeLeader: (workflowId: string, personId: string, role: 'team_leader' | 'director'): void => {
+    try {
+      const db = initializeDb();
+      
+      const stmt = db.prepare(`
+        DELETE FROM dream_team_leaders 
+        WHERE workflow_id = ? AND person_id = ? AND role = ?
+      `);
+      
+      stmt.run(workflowId, personId, role);
+    } catch (error) {
+      console.error(`Failed to remove leader ${personId} from workflow ${workflowId}:`, error);
+      throw error;
+    }
+  },
+
+  // Get all leaders for a team
+  getTeamLeaders: (workflowId: string): Array<{
+    id: number;
+    personId: string;
+    personName: string;
+    role: string;
+    createdAt: number;
+  }> => {
+    try {
+      const db = initializeDb();
+      const stmt = db.prepare(`
+        SELECT id, person_id as personId, person_name as personName, role, created_at as createdAt
+        FROM dream_team_leaders 
+        WHERE workflow_id = ?
+        ORDER BY role DESC, person_name ASC
+      `);
+      
+      return stmt.all(workflowId) as Array<{
+        id: number;
+        personId: string;
+        personName: string;
+        role: string;
+        createdAt: number;
+      }>;
+    } catch (error) {
+      console.error(`Failed to get leaders for workflow ${workflowId}:`, error);
+      return [];
+    }
+  },
+
+  // Update a leader's name (in case it changed in PCO)
+  updateLeaderName: (workflowId: string, personId: string, newName: string): void => {
+    try {
+      const db = initializeDb();
+      
+      const stmt = db.prepare(`
+        UPDATE dream_team_leaders 
+        SET person_name = ?
+        WHERE workflow_id = ? AND person_id = ?
+      `);
+      
+      stmt.run(newName, workflowId, personId);
+    } catch (error) {
+      console.error(`Failed to update leader name for ${personId} in workflow ${workflowId}:`, error);
       throw error;
     }
   }
