@@ -13023,6 +13023,45 @@ async function sendCheckInNotifications() {
       // Get existing check-ins for this workflow (from local database - fast)
       const workflowCheckIns = dreamTeamsTracking.getWorkflowCheckIns(workflow.id);
       
+      // SPECIAL TEST WORKFLOW: 610176 always sends notifications for all members
+      if (workflow.id === '610176') {
+        for (const card of completedCards) {
+          const personId = card.relationships.person.data.id;
+          const person = personMap.get(personId);
+          const memberName = person 
+            ? `${person.attributes.first_name} ${person.attributes.last_name}`
+            : 'Unknown Member';
+          
+          // Get existing check-ins
+          const memberCheckIns = workflowCheckIns.get(personId) || [];
+          const hasTwoMonthCheckIn = memberCheckIns.some(c => c.checkInType === '2-month');
+          const hasSixMonthCheckIn = memberCheckIns.some(c => c.checkInType === '6-month');
+          
+          // Add 2-month check-in notification if not already completed
+          if (!hasTwoMonthCheckIn) {
+            notificationsToSend.push({
+              workflowId: workflow.id,
+              workflowName: workflow.name,
+              memberName,
+              memberId: personId,
+              checkInType: '2-month'
+            });
+          }
+          
+          // Add 6-month check-in notification if not already completed
+          if (!hasSixMonthCheckIn) {
+            notificationsToSend.push({
+              workflowId: workflow.id,
+              workflowName: workflow.name,
+              memberName,
+              memberId: personId,
+              checkInType: '6-month'
+            });
+          }
+        }
+        continue; // Skip normal processing for this test workflow
+      }
+      
       // Process all cards without delays (no API calls here, just local data processing)
       for (const card of completedCards) {
         const personId = card.relationships.person.data.id;
@@ -13146,23 +13185,81 @@ async function sendCheckInNotifications() {
         `• ${n.memberName} - ${n.checkInType} check-in`
       ).join('\n');
       
+      // Extract first names from Team Leaders, fallback to Directors if none
+      let leadersToGreet = leaders.filter(leader => leader.role === 'team_leader');
+      if (leadersToGreet.length === 0) {
+        // No Team Leaders, use Directors instead
+        leadersToGreet = leaders.filter(leader => leader.role === 'director');
+      }
+      
+      const firstNames = leadersToGreet.map(leader => {
+        const name = leader.personName.trim();
+        const firstName = name.split(' ')[0];
+        return firstName;
+      });
+      
+      // Format greeting with first names
+      let greeting = 'Hey ';
+      if (firstNames.length === 1) {
+        greeting += `${firstNames[0]}!`;
+      } else if (firstNames.length === 2) {
+        greeting += `${firstNames[0]} and ${firstNames[1]}!`;
+      } else if (firstNames.length > 2) {
+        // 3 or more: "John, Sarah, and Mike!"
+        greeting += firstNames.slice(0, -1).join(', ') + `, and ${firstNames[firstNames.length - 1]}!`;
+      } else {
+        // No leaders at all (shouldn't happen), fallback to generic greeting
+        greeting = 'Hello!';
+      }
+      
       const dreamTeamUrl = `${process.env.BASE_URL || 'https://qcc-hub.com'}/dream-teams/${workflowId}`;
       
       const emailSubject = `Dream Team Check-In${notifications.length > 1 ? 's' : ''} Due - ${workflowName}`;
-      const emailBody = `
-Hello ${workflowName} Leadership Team,
+      
+      // Plain text version (fallback)
+      const emailBodyText = `
+${greeting}
 
-The following team member${notifications.length > 1 ? 's have' : ' has'} a Dream Team check-in due soon:
+You're receiving this email to let you know that the following ${notifications.length > 1 ? 'people have' : 'person has'} been serving on your team for a little while, and ${notifications.length > 1 ? 'are' : 'is'} due for a check-in!
 
 ${memberList}
 
-Please complete ${notifications.length > 1 ? 'these check-ins' : 'this check-in'} by visiting your team page and clicking on the member's card to record the check-in:
+As a reminder, here are the guidelines for how to accomplish this check-in >> https://drive.google.com/file/d/1Uim22MdjIzYw-vuj8R-Y6nibCinAXhZN/view?usp=sharing
 
-${dreamTeamUrl}
+This should be completed within 2 weeks from today. Please respond back to this email if you have any questions!
 
-Thank you for your dedication to our Dream Team members!
+Once your check-in${notifications.length > 1 ? 's are' : ' is'} completed, please mark that next to the person's name on your Dream Team Health Report here >> ${dreamTeamUrl}
 
-- QCC Hub
+Thank you SO MUCH for loving and caring for our Dream Team well! 
+
+Hannah Whorton
+Next Steps Director
+      `.trim();
+      
+      // HTML version (with formatting)
+      const memberListHtml = notifications.map(n => 
+        `<li>${n.memberName} - ${n.checkInType} check-in</li>`
+      ).join('');
+      
+      const emailBodyHtml = `
+<p>${greeting}</p>
+
+<p>You're receiving this email to let you know that the following ${notifications.length > 1 ? 'people have' : 'person has'} been serving on your team for a little while, and ${notifications.length > 1 ? 'are' : 'is'} due for a check-in!</p>
+
+<ul>
+${memberListHtml}
+</ul>
+
+<p>As a reminder, here are the guidelines for how to accomplish this check-in &gt;&gt; <a href="https://drive.google.com/file/d/1Uim22MdjIzYw-vuj8R-Y6nibCinAXhZN/view?usp=sharing">Google Drive Link</a></p>
+
+<p><strong>This should be completed within 2 weeks from today.</strong> Please respond back to this email if you have any questions!</p>
+
+<p>Once your check-in${notifications.length > 1 ? 's are' : ' is'} completed, please mark that next to the person's name on your Dream Team Health Report here &gt;&gt; <a href="${dreamTeamUrl}">${workflowName} Team Roster</a></p>
+
+<p>Thank you SO MUCH for loving and caring for our Dream Team well!</p>
+
+<p>Hannah Whorton<br>
+Next Steps Director</p>
       `.trim();
       
       try {
@@ -13171,12 +13268,14 @@ Thank you for your dedication to our Dream Team members!
           to: string;
           subject: string;
           text: string;
+          html: string;
           bcc?: string;
         } = {
           from: fromEmail,
           to: leaderEmails.join(', '),
           subject: emailSubject,
-          text: emailBody
+          text: emailBodyText,
+          html: emailBodyHtml
         };
         
         // Add BCC for monitoring if configured
