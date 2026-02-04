@@ -11767,6 +11767,10 @@ app.get('/replenishment-requests', async (req, res) => {
             display: block;
           }
           
+          .add-item-section.section-collapsed {
+            display: none !important;
+          }
+          
           .add-item-btn {
             background-color: #28a745;
             color: white;
@@ -12896,12 +12900,18 @@ app.get('/replenishment-requests', async (req, res) => {
             if (gridElement.style.display === 'none') {
               gridElement.style.display = 'grid';
               iconElement.classList.remove('collapsed');
-              if (addItemSection) addItemSection.style.display = 'block';
+              // Remove the collapsed class so CSS can handle visibility based on edit mode
+              if (addItemSection) {
+                addItemSection.classList.remove('section-collapsed');
+              }
               localStorage.setItem('replenishment-inventory-' + sectionSlug, 'open');
             } else {
               gridElement.style.display = 'none';
               iconElement.classList.add('collapsed');
-              if (addItemSection) addItemSection.style.display = 'none';
+              // Add collapsed class to hide the button regardless of edit mode
+              if (addItemSection) {
+                addItemSection.classList.add('section-collapsed');
+              }
               localStorage.setItem('replenishment-inventory-' + sectionSlug, 'closed');
             }
           }
@@ -13011,7 +13021,7 @@ app.get('/replenishment-requests', async (req, res) => {
                     gridElement.style.display = 'none';
                     iconElement.classList.add('collapsed');
                     const addItemSection = section.querySelector('.add-item-section');
-                    if (addItemSection) addItemSection.style.display = 'none';
+                    if (addItemSection) addItemSection.classList.add('section-collapsed');
                   }
                 }
               }
