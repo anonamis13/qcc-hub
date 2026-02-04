@@ -1,9 +1,14 @@
 Upcoming Features
 =================
-collapsible teams/hubs
-starred/favorite teams
-include physical location of item if more than one location
 
 
 Completed Features
 ==================
+new request button doesn't work
+remove new request tab and leave only the new request button
+Edit Stock button doesn't work and also resets to first tab view
+main tab "Mark as" buttons don't work
+collapsible serve areas
+starred/favorite serve areas
+include physical location of item if more than one location
+way to add/edit/remove serve areas and inventory items

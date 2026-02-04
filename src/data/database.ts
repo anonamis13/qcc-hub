@@ -1043,6 +1043,7 @@ export const replenishmentRequests = {
           current_stock INTEGER DEFAULT 0,
           min_threshold INTEGER DEFAULT 10,
           unit TEXT DEFAULT 'units',
+          location TEXT,
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL,
           is_active BOOLEAN DEFAULT 1,
@@ -1050,6 +1051,13 @@ export const replenishmentRequests = {
           UNIQUE(department_id, name)
         )
       `);
+      
+      // Add location column if it doesn't exist (for existing databases)
+      try {
+        db.exec(`ALTER TABLE replenishment_items ADD COLUMN location TEXT`);
+      } catch (error) {
+        // Column already exists, ignore error
+      }
       
       // Create requests table
       db.exec(`
@@ -1202,21 +1210,19 @@ export const replenishmentRequests = {
   getDepartments: (): Array<{
     id: number;
     name: string;
-    description: string | null;
     created_at: number;
     updated_at: number;
   }> => {
     try {
       const db = initializeDb();
       const stmt = db.prepare(`
-        SELECT id, name, description, created_at, updated_at
+        SELECT id, name, created_at, updated_at
         FROM replenishment_departments
         ORDER BY name ASC
       `);
       return stmt.all() as Array<{
         id: number;
         name: string;
-        description: string | null;
         created_at: number;
         updated_at: number;
       }>;
@@ -1275,6 +1281,7 @@ export const replenishmentRequests = {
     department_name: string;
     name: string;
     description: string | null;
+    location: string | null;
     current_stock: number;
     min_threshold: number;
     unit: string;
@@ -1290,6 +1297,7 @@ export const replenishmentRequests = {
           d.name as department_name,
           i.name, 
           i.description, 
+          i.location,
           i.current_stock, 
           i.min_threshold, 
           i.unit, 
@@ -1305,6 +1313,7 @@ export const replenishmentRequests = {
         department_name: string;
         name: string;
         description: string | null;
+        location: string | null;
         current_stock: number;
         min_threshold: number;
         unit: string;
@@ -1591,6 +1600,236 @@ export const replenishmentRequests = {
       stmt.run(newStock, timestamp, itemId);
     } catch (error) {
       console.error(`Error updating stock for item ${itemId}:`, error);
+      throw error;
+    }
+  },
+  
+  // Delete a request
+  deleteRequest: (requestId: number, deletionReason?: string | null): void => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      const deletedDate = getLocalDateString();
+      
+      // Get the current request details before deletion
+      const getStmt = db.prepare(`
+        SELECT item_id, department_id, quantity_requested, status, requested_by, requested_date,
+               ordered_by, ordered_date, delivered_by, delivered_date, notes
+        FROM replenishment_requests 
+        WHERE id = ?
+      `);
+      const request = getStmt.get(requestId) as any;
+      
+      if (!request) {
+        throw new Error(`Request ${requestId} not found`);
+      }
+      
+      // If status is 'requested', actually delete it (no need to keep in history)
+      if (request.status === 'requested') {
+        // Delete from status log
+        const deleteLogStmt = db.prepare(`
+          DELETE FROM replenishment_status_log
+          WHERE request_id = ?
+        `);
+        deleteLogStmt.run(requestId);
+        
+        // Delete the request
+        const deleteStmt = db.prepare(`
+          DELETE FROM replenishment_requests
+          WHERE id = ?
+        `);
+        deleteStmt.run(requestId);
+      } else {
+        // For 'ordered' or 'delivered' status, mark as deleted and preserve in history
+        // Log the deletion in the status log
+        const logStmt = db.prepare(`
+          INSERT INTO replenishment_status_log
+          (request_id, old_status, new_status, changed_by, changed_at, notes, timestamp)
+          VALUES (?, ?, 'deleted', 'System', ?, ?, ?)
+        `);
+        logStmt.run(
+          requestId, 
+          request.status, 
+          deletedDate, 
+          deletionReason || 'Request deleted',
+          timestamp
+        );
+        
+        // Update request status to 'deleted' instead of actually deleting
+        // This preserves history
+        const updateStmt = db.prepare(`
+          UPDATE replenishment_requests 
+          SET status = 'deleted', notes = ?, updated_at = ?
+          WHERE id = ?
+        `);
+        
+        const finalNotes = deletionReason 
+          ? `${request.notes || ''}\n\n[DELETED: ${deletionReason}]`.trim()
+          : `${request.notes || ''}\n\n[DELETED]`.trim();
+          
+        updateStmt.run(finalNotes, timestamp, requestId);
+      }
+    } catch (error) {
+      console.error(`Error deleting request ${requestId}:`, error);
+      throw error;
+    }
+  },
+  
+  // ===== DEPARTMENT CRUD OPERATIONS =====
+  
+  // Create a new department
+  createDepartment: (name: string): number => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      
+      const stmt = db.prepare(`
+        INSERT INTO replenishment_departments (name, created_at, updated_at)
+        VALUES (?, ?, ?)
+      `);
+      
+      const result = stmt.run(name, timestamp, timestamp);
+      return result.lastInsertRowid as number;
+    } catch (error) {
+      console.error('Error creating department:', error);
+      throw error;
+    }
+  },
+  
+  // Update a department
+  updateDepartment: (departmentId: number, name: string): void => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      
+      const stmt = db.prepare(`
+        UPDATE replenishment_departments
+        SET name = ?, updated_at = ?
+        WHERE id = ?
+      `);
+      
+      stmt.run(name, timestamp, departmentId);
+    } catch (error) {
+      console.error(`Error updating department ${departmentId}:`, error);
+      throw error;
+    }
+  },
+  
+  // Delete a department (and all its items)
+  deleteDepartment: (departmentId: number): void => {
+    try {
+      const db = initializeDb();
+      
+      // Delete all items in this department
+      const deleteItemsStmt = db.prepare(`
+        DELETE FROM replenishment_items
+        WHERE department_id = ?
+      `);
+      deleteItemsStmt.run(departmentId);
+      
+      // Delete the department
+      const deleteDeptStmt = db.prepare(`
+        DELETE FROM replenishment_departments
+        WHERE id = ?
+      `);
+      deleteDeptStmt.run(departmentId);
+    } catch (error) {
+      console.error(`Error deleting department ${departmentId}:`, error);
+      throw error;
+    }
+  },
+  
+  // ===== ITEM CRUD OPERATIONS =====
+  
+  // Create a new item
+  createItem: (
+    departmentId: number,
+    name: string,
+    description: string,
+    location: string,
+    currentStock: number,
+    minThreshold: number,
+    unit: string
+  ): number => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      
+      const stmt = db.prepare(`
+        INSERT INTO replenishment_items 
+        (department_id, name, description, location, current_stock, min_threshold, unit, created_at, updated_at, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      `);
+      
+      const result = stmt.run(
+        departmentId,
+        name,
+        description || null,
+        location || null,
+        currentStock,
+        minThreshold,
+        unit,
+        timestamp,
+        timestamp
+      );
+      return result.lastInsertRowid as number;
+    } catch (error) {
+      console.error('Error creating item:', error);
+      throw error;
+    }
+  },
+  
+  // Update an item
+  updateItem: (
+    itemId: number,
+    name: string,
+    description: string,
+    location: string,
+    currentStock: number,
+    minThreshold: number,
+    unit: string
+  ): void => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      
+      const stmt = db.prepare(`
+        UPDATE replenishment_items
+        SET name = ?, description = ?, location = ?, current_stock = ?, min_threshold = ?, unit = ?, updated_at = ?
+        WHERE id = ?
+      `);
+      
+      stmt.run(
+        name,
+        description || null,
+        location || null,
+        currentStock,
+        minThreshold,
+        unit,
+        timestamp,
+        itemId
+      );
+    } catch (error) {
+      console.error(`Error updating item ${itemId}:`, error);
+      throw error;
+    }
+  },
+  
+  // Delete an item (soft delete by setting is_active to 0)
+  deleteItem: (itemId: number): void => {
+    try {
+      const db = initializeDb();
+      const timestamp = Date.now();
+      
+      const stmt = db.prepare(`
+        UPDATE replenishment_items
+        SET is_active = 0, updated_at = ?
+        WHERE id = ?
+      `);
+      
+      stmt.run(timestamp, itemId);
+    } catch (error) {
+      console.error(`Error deleting item ${itemId}:`, error);
       throw error;
     }
   }

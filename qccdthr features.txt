@@ -30,3 +30,4 @@ nightly refresh not working
 add leaders to teams
 add directors to teams
 notify leader/director after 2/6 months
+Add BNP (now Outreach) back to allowing Check-Ins

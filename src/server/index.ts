@@ -1550,7 +1550,7 @@ app.get('/api/dream-teams/:workflowId', async (req, res) => {
       };
       
       // Teams that don't require check-ins
-      const teamsWithoutCheckIns = ['665166', '666583'];
+      const teamsWithoutCheckIns = ['665166'];
       const skipCheckIns = teamsWithoutCheckIns.includes(workflowId);
       
       // Only process check-ins for completed members (and not for excluded teams)
@@ -10627,6 +10627,27 @@ app.post('/api/replenishment/requests/:requestId/status', async (req, res) => {
   }
 });
 
+// Delete request
+app.delete('/api/replenishment/requests/:requestId', async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { reason } = req.body;
+    
+    replenishmentRequests.deleteRequest(
+      parseInt(requestId),
+      reason || null
+    );
+    
+    res.json({ 
+      success: true, 
+      message: 'Request deleted successfully' 
+    });
+  } catch (error) {
+    console.error('Error deleting request:', error);
+    res.status(500).json({ error: 'Failed to delete request' });
+  }
+});
+
 // Get request history (audit log)
 app.get('/api/replenishment/requests/:requestId/history', async (req, res) => {
   try {
@@ -10660,6 +10681,126 @@ app.post('/api/replenishment/items/:itemId/stock', async (req, res) => {
   } catch (error) {
     console.error('Error updating item stock:', error);
     res.status(500).json({ error: 'Failed to update item stock' });
+  }
+});
+
+// ===== DEPARTMENT MANAGEMENT ENDPOINTS =====
+
+// Create a new department
+app.post('/api/replenishment/departments', async (req, res) => {
+  try {
+    const { name } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ error: 'Serve Area name is required' });
+    }
+    
+    const departmentId = replenishmentRequests.createDepartment(name);
+    res.json({ success: true, departmentId });
+  } catch (error) {
+    console.error('Error creating department:', error);
+    res.status(500).json({ error: 'Failed to create department' });
+  }
+});
+
+// Update a department
+app.put('/api/replenishment/departments/:departmentId', async (req, res) => {
+  try {
+    const { departmentId } = req.params;
+    const { name } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ error: 'Serve Area name is required' });
+    }
+    
+    replenishmentRequests.updateDepartment(parseInt(departmentId), name);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating department:', error);
+    res.status(500).json({ error: 'Failed to update department' });
+  }
+});
+
+// Delete a department
+app.delete('/api/replenishment/departments/:departmentId', async (req, res) => {
+  try {
+    const { departmentId } = req.params;
+    
+    replenishmentRequests.deleteDepartment(parseInt(departmentId));
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting department:', error);
+    res.status(500).json({ error: 'Failed to delete department' });
+  }
+});
+
+// ===== ITEM MANAGEMENT ENDPOINTS =====
+
+// Create a new item
+app.post('/api/replenishment/items', async (req, res) => {
+  try {
+    const { departmentId, name, description, location, currentStock, minThreshold, unit } = req.body;
+    
+    if (!departmentId || !name || currentStock === undefined || minThreshold === undefined || !unit) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: departmentId, name, currentStock, minThreshold, unit' 
+      });
+    }
+    
+    const itemId = replenishmentRequests.createItem(
+      parseInt(departmentId),
+      name,
+      description || '',
+      location || '',
+      parseInt(currentStock),
+      parseInt(minThreshold),
+      unit
+    );
+    res.json({ success: true, itemId });
+  } catch (error) {
+    console.error('Error creating item:', error);
+    res.status(500).json({ error: 'Failed to create item' });
+  }
+});
+
+// Update an item
+app.put('/api/replenishment/items/:itemId', async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    const { name, description, location, currentStock, minThreshold, unit } = req.body;
+    
+    if (!name || currentStock === undefined || minThreshold === undefined || !unit) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: name, currentStock, minThreshold, unit' 
+      });
+    }
+    
+    replenishmentRequests.updateItem(
+      parseInt(itemId),
+      name,
+      description || '',
+      location || '',
+      parseInt(currentStock),
+      parseInt(minThreshold),
+      unit
+    );
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating item:', error);
+    res.status(500).json({ error: 'Failed to update item' });
+  }
+});
+
+// Delete an item
+app.delete('/api/replenishment/items/:itemId', async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    
+    replenishmentRequests.deleteItem(parseInt(itemId));
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting item:', error);
+    res.status(500).json({ error: 'Failed to delete item' });
   }
 });
 
@@ -10795,6 +10936,55 @@ app.get('/replenishment-requests', async (req, res) => {
             border-bottom-color: #555;
           }
           
+          body.dark-mode .status-header:hover {
+            background-color: #3d3d3d;
+          }
+          
+          body.dark-mode .inventory-section h3:hover {
+            background-color: #3d3d3d;
+          }
+          
+          body.dark-mode .serve-area-star {
+            color: #e0e0e0;
+          }
+          
+          body.dark-mode .serve-area-star.favorited {
+            color: #ffc107;
+            text-shadow: 0 0 3px rgba(0,0,0,0.4);
+          }
+          
+          body.dark-mode .edit-mode-toggle {
+            background-color: #495057;
+          }
+          
+          body.dark-mode .edit-mode-toggle:hover {
+            background-color: #3d4349;
+          }
+          
+          body.dark-mode .edit-mode-toggle.active {
+            background-color: #9d7bd8;
+          }
+          
+          body.dark-mode .edit-mode-toggle.active:hover {
+            background-color: #8a6bc4;
+          }
+          
+          body.dark-mode .add-serve-area-btn {
+            background-color: #2d8a3e;
+          }
+          
+          body.dark-mode .add-serve-area-btn:hover {
+            background-color: #256d32;
+          }
+          
+          body.dark-mode .add-item-btn {
+            background-color: #2d8a3e;
+          }
+          
+          body.dark-mode .add-item-btn:hover {
+            background-color: #256d32;
+          }
+          
           body.dark-mode .form-container {
             background-color: #3d3d3d;
           }
@@ -10827,8 +11017,72 @@ app.get('/replenishment-requests', async (req, res) => {
             border-color: #ff9800;
           }
           
+          body.dark-mode .low-stock-alert h3 {
+            color: #ffc107;
+          }
+          
+          body.dark-mode .low-stock-item {
+            background-color: #3d3d3d;
+          }
+          
           body.dark-mode .empty-state {
-            color: #888;
+            color: #aaa;
+          }
+          
+          body.dark-mode .detail-row .label {
+            color: #bbb;
+          }
+          
+          body.dark-mode .detail-row {
+            color: #ddd;
+          }
+          
+          body.dark-mode .form-group label {
+            color: #ddd;
+          }
+          
+          body.dark-mode .inventory-threshold {
+            color: #bbb;
+          }
+          
+          body.dark-mode .inventory-description {
+            color: #999;
+          }
+          
+          body.dark-mode .stock-unit {
+            color: #bbb;
+          }
+          
+          body.dark-mode .inventory-section h3 {
+            color: #9d7bd8;
+          }
+          
+          body.dark-mode .stock-number {
+            color: #9d7bd8;
+          }
+          
+          body.dark-mode .modal-content p {
+            color: #bbb !important;
+          }
+          
+          body.dark-mode #editCurrentStock {
+            color: #bbb !important;
+          }
+          
+          body.dark-mode #editItemName {
+            color: #fff;
+          }
+          
+          body.dark-mode .badge {
+            color: #333;
+          }
+          
+          body.dark-mode .collapse-icon {
+            color: #ddd;
+          }
+          
+          body.dark-mode .collapse-icon.collapsed {
+            color: #9d7bd8;
           }
           
           .container {
@@ -11108,6 +11362,16 @@ app.get('/replenishment-requests', async (req, res) => {
             padding: 12px;
             border-bottom: 2px solid #e9ecef;
             margin-bottom: 15px;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background-color 0.2s ease;
+          }
+          
+          .status-header:hover {
+            background-color: #f8f9fa;
           }
           
           .status-header.requested {
@@ -11122,6 +11386,17 @@ app.get('/replenishment-requests', async (req, res) => {
             color: #28a745;
           }
           
+          .collapse-icon {
+            font-size: 0.8em;
+            transition: transform 0.3s ease, color 0.3s ease;
+            color: #6f42c1;
+          }
+          
+          .collapse-icon.collapsed {
+            transform: rotate(-90deg);
+            color: #495057;
+          }
+          
           .request-cards {
             display: flex;
             flex-direction: column;
@@ -11134,13 +11409,6 @@ app.get('/replenishment-requests', async (req, res) => {
             border-radius: 8px;
             padding: 15px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-          }
-          
-          .request-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
           }
           
           .request-details {
@@ -11206,6 +11474,43 @@ app.get('/replenishment-requests', async (req, res) => {
           
           .status-button-stocked:hover {
             background-color: #198754;
+          }
+          
+          .delete-icon {
+            width: 24px;
+            height: 24px;
+            background-color: #dc3545;
+            color: white;
+            border: 2px solid #dc3545;
+            border-radius: 4px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            margin-left: 8px;
+            user-select: none;
+          }
+          
+          .delete-icon:hover {
+            background-color: #c82333;
+            border-color: #c82333;
+          }
+          
+          .request-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            gap: 8px;
+          }
+          
+          .request-header-right {
+            display: flex;
+            align-items: center;
+            gap: 4px;
           }
           
           .empty-state {
@@ -11279,6 +11584,203 @@ app.get('/replenishment-requests', async (req, res) => {
           .inventory-section h3 {
             margin-bottom: 15px;
             color: #6f42c1;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            border-radius: 4px;
+            transition: background-color 0.2s ease;
+          }
+          
+          .inventory-section h3:hover {
+            background-color: #f8f9fa;
+          }
+          
+          .serve-area-star {
+            font-size: 20px;
+            color: #ccc;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+          }
+          
+          .serve-area-star:hover {
+            transform: scale(1.2);
+          }
+          
+          .serve-area-star.favorited {
+            color: #ffc107;
+            text-shadow: 0 0 3px rgba(0,0,0,0.2);
+          }
+          
+          /* Edit Mode Styles */
+          .edit-mode-toggle {
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-bottom: 15px;
+            transition: all 0.2s ease;
+          }
+          
+          .edit-mode-toggle:hover {
+            background-color: #5a6268;
+          }
+          
+          .edit-mode-toggle.active {
+            background-color: #9d7bd8;
+          }
+          
+          .edit-mode-toggle.active:hover {
+            background-color: #8a6bc4;
+          }
+          
+          .edit-controls {
+            display: none;
+            align-items: center;
+            gap: 8px;
+          }
+          
+          .edit-mode .edit-controls {
+            display: flex;
+          }
+          
+          .edit-icon, .add-icon {
+            cursor: pointer;
+            font-size: 16px;
+            padding: 4px 6px;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+          }
+          
+          .edit-icon {
+            color: #007bff;
+          }
+          
+          .edit-icon:hover {
+            background-color: rgba(0, 123, 255, 0.1);
+            transform: scale(1.1);
+          }
+          
+          .add-icon {
+            color: #28a745;
+            font-size: 18px;
+          }
+          
+          .add-icon:hover {
+            background-color: rgba(40, 167, 69, 0.1);
+            transform: scale(1.1);
+          }
+          
+          .dept-delete-icon {
+            cursor: pointer;
+            font-size: 16px;
+            color: #dc3545;
+            padding: 4px 6px;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+          }
+          
+          .dept-delete-icon:hover {
+            background-color: rgba(220, 53, 69, 0.1);
+            transform: scale(1.1);
+          }
+          
+          .item-edit-icon, .item-delete-icon {
+            position: absolute;
+            top: 8px;
+            font-size: 14px;
+            padding: 4px 6px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: none;
+          }
+          
+          .edit-mode .item-edit-icon, .edit-mode .item-delete-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+          }
+          
+          .item-edit-icon {
+            right: 30px;
+            color: #007bff;
+          }
+          
+          .item-edit-icon:hover {
+            background-color: rgba(0, 123, 255, 0.1);
+            transform: scale(1.1);
+          }
+          
+          .item-delete-icon {
+            right: 8px;
+            color: #dc3545;
+          }
+          
+          .item-delete-icon:hover {
+            background-color: rgba(220, 53, 69, 0.1);
+            transform: scale(1.1);
+          }
+          
+          .add-serve-area-btn {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-bottom: 15px;
+            margin-left: 10px;
+            transition: all 0.2s ease;
+            display: none;
+          }
+          
+          .edit-mode .add-serve-area-btn {
+            display: inline-block;
+          }
+          
+          .add-serve-area-btn:hover {
+            background-color: #218838;
+          }
+          
+          .add-item-section {
+            display: none;
+            margin-bottom: 15px;
+          }
+          
+          .edit-mode .add-item-section {
+            display: block;
+          }
+          
+          .add-item-btn {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s ease;
+            width: 100%;
+          }
+          
+          .add-item-btn:hover {
+            background-color: #218838;
           }
           
           .inventory-grid {
@@ -11294,6 +11796,7 @@ app.get('/replenishment-requests', async (req, res) => {
             padding: 15px;
             text-align: center;
             transition: all 0.3s ease;
+            position: relative;
           }
           
           .inventory-card.low-stock {
@@ -11316,6 +11819,10 @@ app.get('/replenishment-requests', async (req, res) => {
             padding: 2px 6px;
             border-radius: 8px;
             font-size: 11px;
+          }
+          
+          .edit-mode .warning-badge {
+            display: none;
           }
           
           .inventory-stock {
@@ -11546,7 +12053,7 @@ app.get('/replenishment-requests', async (req, res) => {
               <h1>Queen City Church - Replenishment Requests</h1>
             </div>
             <div class="action-buttons">
-              <button class="new-request-button" disabled>
+              <button class="new-request-button">
                 New Request
               </button>
             </div>
@@ -11569,26 +12076,32 @@ app.get('/replenishment-requests', async (req, res) => {
           <!-- Tab Navigation -->
           <div class="tabs">
             <button class="tab-button active" data-tab="requests">Active Requests</button>
-            <button class="tab-button" data-tab="new-request">New Request</button>
             <button class="tab-button" data-tab="inventory">Inventory</button>
             <button class="tab-button" data-tab="history">History</button>
           </div>
           
           <!-- Active Requests Tab -->
           <div id="requests-tab" class="tab-content active">
+            <h2 style="margin-bottom: 20px;">Active Requests</h2>
             <div class="requests-by-status">
               <div class="status-column">
-                <h3 class="status-header requested">📝 Requested (${requestedCount})</h3>
+                <h3 class="status-header requested" onclick="toggleStatusColumn('requested')">
+                  <span>📝 Requested (${requestedCount})</span>
+                  <span class="collapse-icon" id="requested-icon">▼</span>
+                </h3>
                 <div class="request-cards" id="requested-cards">
                   ${allRequests.filter(r => r.status === 'requested').map(req => `
                     <div class="request-card" data-request-id="${req.id}">
                       <div class="request-header">
                         <strong>${req.item_name}</strong>
-                        <span class="badge">${req.quantity_requested} ${req.unit}</span>
+                        <div class="request-header-right">
+                          <span class="badge">${req.quantity_requested} ${req.unit}</span>
+                          <span class="delete-icon" onclick="deleteRequest(${req.id}, '${req.status}', '${req.item_name}')" title="Delete request">✗</span>
+                        </div>
                       </div>
                       <div class="request-details">
                         <div class="detail-row">
-                          <span class="label">Department:</span>
+                          <span class="label">Serve Area:</span>
                           <span>${req.department_name}</span>
                         </div>
                         <div class="detail-row">
@@ -11610,17 +12123,23 @@ app.get('/replenishment-requests', async (req, res) => {
               </div>
               
               <div class="status-column">
-                <h3 class="status-header ordered">📦 Ordered (${orderedCount})</h3>
+                <h3 class="status-header ordered" onclick="toggleStatusColumn('ordered')">
+                  <span>📦 Ordered (${orderedCount})</span>
+                  <span class="collapse-icon" id="ordered-icon">▼</span>
+                </h3>
                 <div class="request-cards" id="ordered-cards">
                   ${allRequests.filter(r => r.status === 'ordered').map(req => `
                     <div class="request-card" data-request-id="${req.id}">
                       <div class="request-header">
                         <strong>${req.item_name}</strong>
-                        <span class="badge">${req.quantity_requested} ${req.unit}</span>
+                        <div class="request-header-right">
+                          <span class="badge">${req.quantity_requested} ${req.unit}</span>
+                          <span class="delete-icon" onclick="deleteRequest(${req.id}, '${req.status}', '${req.item_name}')" title="Delete request">✗</span>
+                        </div>
                       </div>
                       <div class="request-details">
                         <div class="detail-row">
-                          <span class="label">Department:</span>
+                          <span class="label">Serve Area:</span>
                           <span>${req.department_name}</span>
                         </div>
                         <div class="detail-row">
@@ -11641,17 +12160,23 @@ app.get('/replenishment-requests', async (req, res) => {
               </div>
               
               <div class="status-column">
-                <h3 class="status-header delivered">🚚 Delivered (${deliveredCount})</h3>
+                <h3 class="status-header delivered" onclick="toggleStatusColumn('delivered')">
+                  <span>🚚 Delivered (${deliveredCount})</span>
+                  <span class="collapse-icon" id="delivered-icon">▼</span>
+                </h3>
                 <div class="request-cards" id="delivered-cards">
                   ${allRequests.filter(r => r.status === 'delivered').map(req => `
                     <div class="request-card" data-request-id="${req.id}">
                       <div class="request-header">
                         <strong>${req.item_name}</strong>
-                        <span class="badge">${req.quantity_requested} ${req.unit}</span>
+                        <div class="request-header-right">
+                          <span class="badge">${req.quantity_requested} ${req.unit}</span>
+                          <span class="delete-icon" onclick="deleteRequest(${req.id}, '${req.status}', '${req.item_name}')" title="Delete request">✗</span>
+                        </div>
                       </div>
                       <div class="request-details">
                         <div class="detail-row">
-                          <span class="label">Department:</span>
+                          <span class="label">Serve Area:</span>
                           <span>${req.department_name}</span>
                         </div>
                         <div class="detail-row">
@@ -11673,13 +12198,14 @@ app.get('/replenishment-requests', async (req, res) => {
             </div>
           </div>
           
-          <!-- New Request Tab -->
-          <div id="new-request-tab" class="tab-content">
-            <div class="form-container">
+          <!-- New Request Modal -->
+          <div id="newRequestModal" class="modal">
+            <div class="modal-content">
+              <span class="close-modal" onclick="closeNewRequestModal()">&times;</span>
               <h2>Submit New Request</h2>
               <form id="newRequestForm">
                 <div class="form-group">
-                  <label for="requestDepartment">Department *</label>
+                  <label for="requestDepartment">Serve Area *</label>
                   <select id="requestDepartment" required>
                     <option value="">Select a department...</option>
                     ${departments.map(dept => `<option value="${dept.id}">${dept.name}</option>`).join('')}
@@ -11708,22 +12234,49 @@ app.get('/replenishment-requests', async (req, res) => {
                   <textarea id="requestNotes" rows="3" placeholder="Any additional information..."></textarea>
                 </div>
                 
-                <button type="submit" class="submit-button">Submit Request</button>
+                <div class="modal-actions">
+                  <button type="button" class="cancel-button" onclick="closeNewRequestModal()">Cancel</button>
+                  <button type="submit" class="submit-button">Submit Request</button>
+                </div>
               </form>
             </div>
           </div>
           
           <!-- Inventory Tab -->
           <div id="inventory-tab" class="tab-content">
-            <h2>Current Inventory</h2>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+              <h2 style="margin: 20;">Current Inventory</h2>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <button class="add-serve-area-btn" onclick="openAddServeAreaModal()">Add New Serve Area</button>
+                <button class="edit-mode-toggle" onclick="toggleEditMode()">Edit Mode: OFF</button>
+              </div>
+            </div>
             ${departments.map(dept => {
               const deptItems = items.filter(item => item.department_id === dept.id);
+              const deptSlug = dept.name.toLowerCase().replace(/\s+/g, '-');
               return `
-                <div class="inventory-section">
-                  <h3>${dept.name}</h3>
-                  <div class="inventory-grid">
+                <div class="inventory-section" data-dept-id="${dept.id}" data-dept-name="${dept.name.replace(/"/g, '&quot;')}">
+                  <h3 onclick="toggleInventorySection('${deptSlug}')">
+                    <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+                      <span>${dept.name}</span>
+                      <span class="serve-area-star" onclick="event.stopPropagation(); toggleServeAreaFavorite('${deptSlug}', '${dept.name}')" id="${deptSlug}-star" title="Favorite this serve area">☆</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <span class="edit-controls">
+                        <span class="edit-icon" onclick="event.stopPropagation(); editServeArea(${dept.id}, '${dept.name.replace(/'/g, "\\'")}')" title="Edit Serve Area">✏️</span>
+                        <span class="dept-delete-icon" onclick="event.stopPropagation(); deleteServeArea(${dept.id}, '${dept.name.replace(/'/g, "\\'")}')" title="Delete Serve Area">🗑️</span>
+                      </span>
+                      <span class="collapse-icon" id="${deptSlug}-icon" onclick="event.stopPropagation(); toggleInventorySection('${deptSlug}')">▼</span>
+                    </div>
+                  </h3>
+                  <div class="add-item-section">
+                    <button class="add-item-btn" onclick="openAddItemModal(${dept.id}, '${dept.name.replace(/'/g, "\\'")}')">Add Item to ${dept.name}</button>
+                  </div>
+                  <div class="inventory-grid" id="${deptSlug}-grid">
                     ${deptItems.map(item => `
-                      <div class="inventory-card ${item.needs_replenishment ? 'low-stock' : ''}" data-item-id="${item.id}">
+                      <div class="inventory-card ${item.needs_replenishment ? 'low-stock' : ''}" data-item-id="${item.id}" data-item-name="${item.name.replace(/"/g, '&quot;')}" data-item-desc="${(item.description || '').replace(/"/g, '&quot;')}" data-item-location="${(item.location || '').replace(/"/g, '&quot;')}" data-item-stock="${item.current_stock}" data-item-threshold="${item.min_threshold}" data-item-unit="${item.unit}">
+                        <span class="item-edit-icon" onclick="editItem(${item.id}, ${dept.id}, '${item.name.replace(/'/g, "\\'")}', '${(item.description || '').replace(/'/g, "\\'")}', '${(item.location || '').replace(/'/g, "\\'")}', ${item.current_stock}, ${item.min_threshold}, '${item.unit}')" title="Edit Item">✏️</span>
+                        <span class="item-delete-icon" onclick="deleteItem(${item.id}, '${item.name.replace(/'/g, "\\'")}')" title="Delete Item">🗑️</span>
                         <div class="inventory-header">
                           <strong>${item.name}</strong>
                           ${item.needs_replenishment ? '<span class="warning-badge">⚠️ Low</span>' : ''}
@@ -11735,8 +12288,9 @@ app.get('/replenishment-requests', async (req, res) => {
                         <div class="inventory-threshold">
                           Min: ${item.min_threshold} ${item.unit}
                         </div>
+                        ${item.location ? `<div class="inventory-description">Location: ${item.location}</div>` : ''}
                         ${item.description ? `<div class="inventory-description">${item.description}</div>` : ''}
-                        <button class="edit-stock-button" onclick="editStock(${item.id}, '${item.name}', ${item.current_stock}, '${item.unit}')">
+                        <button class="edit-stock-button" onclick="editStock(${item.id}, '${item.name.replace(/'/g, "\\'")}', ${item.current_stock}, '${item.unit}')">
                           Edit Stock
                         </button>
                       </div>
@@ -11749,17 +12303,19 @@ app.get('/replenishment-requests', async (req, res) => {
           
           <!-- History Tab -->
           <div id="history-tab" class="tab-content">
-            <h2>Completed Requests</h2>
+            <h2 style="margin-bottom: 20px;">Completed & Deleted Requests</h2>
             <div class="history-list">
-              ${allRequests.filter(r => r.status === 'stocked').map(req => `
+              ${allRequests.filter(r => r.status === 'stocked' || r.status === 'deleted').map(req => `
                 <div class="history-card">
                   <div class="history-header">
                     <strong>${req.item_name}</strong>
-                    <span class="badge success">✓ Stocked</span>
+                    ${req.status === 'stocked' 
+                      ? '<span class="badge success">✓ Stocked</span>' 
+                      : '<span class="badge" style="background-color: #dc3545; color: white;">✗ Deleted</span>'}
                   </div>
                   <div class="history-details">
                     <div class="detail-row">
-                      <span class="label">Department:</span>
+                      <span class="label">Serve Area:</span>
                       <span>${req.department_name}</span>
                     </div>
                     <div class="detail-row">
@@ -11770,13 +12326,26 @@ app.get('/replenishment-requests', async (req, res) => {
                       <span class="label">Requested by:</span>
                       <span>${req.requested_by} on ${req.requested_date}</span>
                     </div>
-                    <div class="detail-row">
-                      <span class="label">Completed:</span>
-                      <span>${req.stocked_date} by ${req.stocked_by}</span>
-                    </div>
+                    ${req.status === 'stocked' ? `
+                      <div class="detail-row">
+                        <span class="label">Completed by:</span>
+                        <span>${req.stocked_by} on ${req.stocked_date}</span>
+                      </div>
+                    ` : ''}
+                    ${req.notes && req.notes.includes('[DELETED:') ? `
+                      <div class="detail-row">
+                        <span class="label">Deletion Reason:</span>
+                        <span style="color: #dc3545;">${req.notes.split('[DELETED:')[1]?.split(']')[0]?.trim() || 'No reason provided'}</span>
+                      </div>
+                    ` : req.notes && req.notes.includes('[DELETED]') ? `
+                      <div class="detail-row">
+                        <span class="label">Deletion Reason:</span>
+                        <span style="color: #dc3545;">No reason provided</span>
+                      </div>
+                    ` : ''}
                   </div>
                 </div>
-              `).join('') || '<p class="empty-state">No completed requests yet</p>'}
+              `).join('') || '<p class="empty-state">No completed or deleted requests yet</p>'}
             </div>
           </div>
           
@@ -11824,6 +12393,109 @@ app.get('/replenishment-requests', async (req, res) => {
               </form>
             </div>
           </div>
+          
+          <!-- Deletion Reason Modal -->
+          <div id="deletionReasonModal" class="modal">
+            <div class="modal-content">
+              <span class="close-modal" onclick="closeDeletionModal()">&times;</span>
+              <h2>Delete Request</h2>
+              <p id="deletionModalMessage" style="margin-bottom: 20px; color: #666;"></p>
+              <form id="deletionReasonForm">
+                <div class="form-group">
+                  <label for="deletionReason">Reason for Deletion *</label>
+                  <textarea id="deletionReason" rows="3" required placeholder="Reason for Deletion"></textarea>
+                </div>
+                <div class="modal-actions">
+                  <button type="button" class="cancel-button" onclick="closeDeletionModal()">Cancel</button>
+                  <button type="submit" class="submit-button" style="background-color: #dc3545;">Delete Request</button>
+                </div>
+              </form>
+            </div>
+          </div>
+          
+          <!-- Confirmation Modal -->
+          <div id="confirmationModal" class="modal">
+            <div class="modal-content">
+              <span class="close-modal" onclick="closeConfirmationModal()">&times;</span>
+              <h2 id="confirmationModalTitle">Confirm Action</h2>
+              <p id="confirmationModalMessage" style="margin-bottom: 20px; color: #666;"></p>
+              <div class="modal-actions">
+                <button type="button" class="cancel-button" onclick="closeConfirmationModal()">Cancel</button>
+                <button type="button" class="submit-button" id="confirmationModalConfirm" style="background-color: #dc3545;">OK</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Alert/Message Modal -->
+          <div id="alertModal" class="modal">
+            <div class="modal-content">
+              <span class="close-modal" onclick="closeAlertModal()">&times;</span>
+              <h2 id="alertModalTitle">Message</h2>
+              <p id="alertModalMessage" style="margin-bottom: 20px; color: #666;"></p>
+              <div class="modal-actions">
+                <button type="button" class="submit-button" id="alertModalOk" onclick="closeAlertModal()">OK</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Add/Edit Serve Area Modal -->
+          <div id="serveAreaModal" class="modal">
+            <div class="modal-content">
+              <span class="close-modal" onclick="closeServeAreaModal()">&times;</span>
+              <h2 id="serveAreaModalTitle">Add Serve Area</h2>
+              <form id="serveAreaForm" onsubmit="submitServeAreaForm(event)">
+                <input type="hidden" id="serveAreaId" value="">
+                <div class="form-group">
+                  <label for="serveAreaName">Serve Area Name *</label>
+                  <input type="text" id="serveAreaName" required>
+                </div>
+                <div class="modal-actions">
+                  <button type="button" class="cancel-button" onclick="closeServeAreaModal()">Cancel</button>
+                  <button type="submit" class="submit-button">Save</button>
+                </div>
+              </form>
+            </div>
+          </div>
+          
+          <!-- Add/Edit Item Modal -->
+          <div id="itemModal" class="modal">
+            <div class="modal-content">
+              <span class="close-modal" onclick="closeItemModal()">&times;</span>
+              <h2 id="itemModalTitle">Add Item</h2>
+              <form id="itemForm" onsubmit="submitItemForm(event)">
+                <input type="hidden" id="itemId" value="">
+                <input type="hidden" id="itemDepartmentId" value="">
+                <div class="form-group">
+                  <label for="itemName">Item Name *</label>
+                  <input type="text" id="itemName" required>
+                </div>
+                <div class="form-group">
+                  <label for="itemDescription">Description</label>
+                  <textarea id="itemDescription" rows="2"></textarea>
+                </div>
+                <div class="form-group">
+                  <label for="itemLocation">Location</label>
+                  <input type="text" id="itemLocation" placeholder="e.g., Supply Closet A, Shelf 3">
+                </div>
+                <div class="form-group">
+                  <label for="itemCurrentStock">Current Stock *</label>
+                  <input type="number" id="itemCurrentStock" min="0" required>
+                </div>
+                <div class="form-group">
+                  <label for="itemMinThreshold">Low Stock Threshold *</label>
+                  <input type="number" id="itemMinThreshold" min="0" required>
+                </div>
+                <div class="form-group">
+                  <label for="itemUnit">Unit *</label>
+                  <input type="text" id="itemUnit" placeholder="e.g., units, boxes, cards" required>
+                </div>
+                <div class="modal-actions">
+                  <button type="button" class="cancel-button" onclick="closeItemModal()">Cancel</button>
+                  <button type="submit" class="submit-button">Save</button>
+                </div>
+              </form>
+            </div>
+          </div>
         </div>
         
         <script>
@@ -11842,6 +12514,22 @@ app.get('/replenishment-requests', async (req, res) => {
           function closeEditModal() {
             document.getElementById('editStockModal').classList.remove('show');
             currentEditItemId = null;
+          }
+          
+          function openNewRequestModal() {
+            document.getElementById('newRequestModal').classList.add('show');
+            // Focus on the first field
+            setTimeout(() => {
+              document.getElementById('requestDepartment').focus();
+            }, 100);
+          }
+          
+          function closeNewRequestModal() {
+            document.getElementById('newRequestModal').classList.remove('show');
+            // Reset form
+            document.getElementById('newRequestForm').reset();
+            document.getElementById('requestItem').disabled = true;
+            document.getElementById('requestItem').innerHTML = '<option value="">Select a department first...</option>';
           }
           
           function openNameModal(title, message) {
@@ -11871,6 +12559,523 @@ app.get('/replenishment-requests', async (req, res) => {
             }
           }
           
+          function openDeletionModal(message) {
+            return new Promise((resolve, reject) => {
+              document.getElementById('deletionModalMessage').textContent = message;
+              document.getElementById('deletionReason').value = '';
+              document.getElementById('deletionReasonModal').classList.add('show');
+              
+              // Focus on the textarea
+              setTimeout(() => {
+                document.getElementById('deletionReason').focus();
+              }, 100);
+              
+              // Store the promise resolver
+              window._deletionModalResolve = resolve;
+              window._deletionModalReject = reject;
+            });
+          }
+          
+          function closeDeletionModal() {
+            document.getElementById('deletionReasonModal').classList.remove('show');
+            if (window._deletionModalReject) {
+              window._deletionModalReject('cancelled');
+              window._deletionModalResolve = null;
+              window._deletionModalReject = null;
+            }
+          }
+          
+          function openConfirmationModal(title, message) {
+            return new Promise((resolve, reject) => {
+              document.getElementById('confirmationModalTitle').textContent = title;
+              document.getElementById('confirmationModalMessage').textContent = message;
+              document.getElementById('confirmationModal').classList.add('show');
+              
+              // Store the promise resolver
+              window._confirmationModalResolve = resolve;
+              window._confirmationModalReject = reject;
+            });
+          }
+          
+          function closeConfirmationModal() {
+            document.getElementById('confirmationModal').classList.remove('show');
+            if (window._confirmationModalReject) {
+              window._confirmationModalReject('cancelled');
+              window._confirmationModalResolve = null;
+              window._confirmationModalReject = null;
+            }
+          }
+          
+          function showAlert(title, message) {
+            return new Promise((resolve) => {
+              document.getElementById('alertModalTitle').textContent = title;
+              document.getElementById('alertModalMessage').textContent = message;
+              document.getElementById('alertModal').classList.add('show');
+              
+              // Store the promise resolver
+              window._alertModalResolve = resolve;
+            });
+          }
+          
+          function closeAlertModal() {
+            document.getElementById('alertModal').classList.remove('show');
+            if (window._alertModalResolve) {
+              window._alertModalResolve(true);
+              window._alertModalResolve = null;
+            }
+          }
+          
+          // ===== EDIT MODE FUNCTIONALITY =====
+          
+          let isEditMode = false;
+          
+          function toggleEditMode() {
+            isEditMode = !isEditMode;
+            const toggleBtn = document.querySelector('.edit-mode-toggle');
+            const inventoryTab = document.getElementById('inventory-tab');
+            
+            if (isEditMode) {
+              toggleBtn.textContent = 'Edit Mode: ON';
+              toggleBtn.classList.add('active');
+              inventoryTab.classList.add('edit-mode');
+              localStorage.setItem('replenishment-edit-mode', 'on');
+            } else {
+              toggleBtn.textContent = 'Edit Mode: OFF';
+              toggleBtn.classList.remove('active');
+              inventoryTab.classList.remove('edit-mode');
+              localStorage.setItem('replenishment-edit-mode', 'off');
+            }
+          }
+          
+          // Restore Edit Mode state on page load
+          function restoreEditMode() {
+            const savedEditMode = localStorage.getItem('replenishment-edit-mode');
+            if (savedEditMode === 'on') {
+              isEditMode = false; // Set to false so toggle will turn it on
+              toggleEditMode();
+            }
+          }
+          
+          // ===== SERVE AREA (DEPARTMENT) CRUD =====
+          
+          let currentServeAreaId = null;
+          
+          function openAddServeAreaModal() {
+            currentServeAreaId = null;
+            document.getElementById('serveAreaModalTitle').textContent = 'Add New Serve Area';
+            document.getElementById('serveAreaId').value = '';
+            document.getElementById('serveAreaName').value = '';
+            document.getElementById('serveAreaModal').classList.add('show');
+          }
+          
+          function editServeArea(deptId, deptName) {
+            currentServeAreaId = deptId;
+            document.getElementById('serveAreaModalTitle').textContent = 'Edit Serve Area';
+            document.getElementById('serveAreaId').value = deptId;
+            document.getElementById('serveAreaName').value = deptName;
+            document.getElementById('serveAreaModal').classList.add('show');
+          }
+          
+          function closeServeAreaModal() {
+            document.getElementById('serveAreaModal').classList.remove('show');
+            currentServeAreaId = null;
+          }
+          
+          async function submitServeAreaForm(event) {
+            event.preventDefault();
+            
+            const name = document.getElementById('serveAreaName').value.trim();
+            
+            if (!name) {
+              await showAlert('Error', 'Serve Area name is required');
+              return;
+            }
+            
+            try {
+              const url = currentServeAreaId 
+                ? \`/api/replenishment/departments/\${currentServeAreaId}\`
+                : '/api/replenishment/departments';
+              const method = currentServeAreaId ? 'PUT' : 'POST';
+              
+              const response = await fetch(url, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+              });
+              
+              const data = await response.json();
+              
+              if (data.success) {
+                closeServeAreaModal();
+                await showAlert('Success', currentServeAreaId ? 'Serve Area updated successfully' : 'Serve Area created successfully');
+                localStorage.setItem('replenishment-active-tab', 'inventory');
+                window.location.reload();
+              } else {
+                await showAlert('Error', data.error || 'Failed to save Serve Area');
+              }
+            } catch (error) {
+              console.error('Error saving serve area:', error);
+              await showAlert('Error', 'Failed to save Serve Area');
+            }
+          }
+          
+          async function deleteServeArea(deptId, deptName) {
+            const confirmed = await openConfirmationModal(
+              'Delete Serve Area',
+              \`Are you sure you want to delete "\${deptName}"? This will also delete ALL items in this serve area.\`
+            );
+            
+            if (!confirmed) return;
+            
+            try {
+              const response = await fetch(\`/api/replenishment/departments/\${deptId}\`, {
+                method: 'DELETE'
+              });
+              
+              const data = await response.json();
+              
+              if (data.success) {
+                await showAlert('Success', 'Serve Area deleted successfully');
+                localStorage.setItem('replenishment-active-tab', 'inventory');
+                window.location.reload();
+              } else {
+                await showAlert('Error', data.error || 'Failed to delete Serve Area');
+              }
+            } catch (error) {
+              console.error('Error deleting serve area:', error);
+              await showAlert('Error', 'Failed to delete Serve Area');
+            }
+          }
+          
+          // ===== ITEM CRUD =====
+          
+          let currentItemId = null;
+          let currentItemDepartmentId = null;
+          
+          function openAddItemModal(deptId, deptName) {
+            currentItemId = null;
+            currentItemDepartmentId = deptId;
+            document.getElementById('itemModalTitle').textContent = \`Add Item to \${deptName}\`;
+            document.getElementById('itemId').value = '';
+            document.getElementById('itemDepartmentId').value = deptId;
+            document.getElementById('itemName').value = '';
+            document.getElementById('itemDescription').value = '';
+            document.getElementById('itemLocation').value = '';
+            document.getElementById('itemCurrentStock').value = '0';
+            document.getElementById('itemMinThreshold').value = '10';
+            document.getElementById('itemUnit').value = '';
+            document.getElementById('itemModal').classList.add('show');
+          }
+          
+          function editItem(itemId, deptId, name, description, location, stock, threshold, unit) {
+            currentItemId = itemId;
+            currentItemDepartmentId = deptId;
+            document.getElementById('itemModalTitle').textContent = 'Edit Item';
+            document.getElementById('itemId').value = itemId;
+            document.getElementById('itemDepartmentId').value = deptId;
+            document.getElementById('itemName').value = name;
+            document.getElementById('itemDescription').value = description || '';
+            document.getElementById('itemLocation').value = location || '';
+            document.getElementById('itemCurrentStock').value = stock;
+            document.getElementById('itemMinThreshold').value = threshold;
+            document.getElementById('itemUnit').value = unit;
+            document.getElementById('itemModal').classList.add('show');
+          }
+          
+          function closeItemModal() {
+            document.getElementById('itemModal').classList.remove('show');
+            currentItemId = null;
+            currentItemDepartmentId = null;
+          }
+          
+          async function submitItemForm(event) {
+            event.preventDefault();
+            
+            const name = document.getElementById('itemName').value.trim();
+            const description = document.getElementById('itemDescription').value.trim();
+            const location = document.getElementById('itemLocation').value.trim();
+            const currentStock = parseInt(document.getElementById('itemCurrentStock').value);
+            const minThreshold = parseInt(document.getElementById('itemMinThreshold').value);
+            const unit = document.getElementById('itemUnit').value.trim();
+            
+            if (!name || isNaN(currentStock) || isNaN(minThreshold) || !unit) {
+              await showAlert('Error', 'Please fill in all required fields');
+              return;
+            }
+            
+            try {
+              const url = currentItemId 
+                ? \`/api/replenishment/items/\${currentItemId}\`
+                : '/api/replenishment/items';
+              const method = currentItemId ? 'PUT' : 'POST';
+              
+              const body = {
+                name,
+                description,
+                location,
+                currentStock,
+                minThreshold,
+                unit
+              };
+              
+              if (!currentItemId) {
+                body.departmentId = currentItemDepartmentId;
+              }
+              
+              const response = await fetch(url, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+              });
+              
+              const data = await response.json();
+              
+              if (data.success) {
+                closeItemModal();
+                await showAlert('Success', currentItemId ? 'Item updated successfully' : 'Item created successfully');
+                localStorage.setItem('replenishment-active-tab', 'inventory');
+                window.location.reload();
+              } else {
+                await showAlert('Error', data.error || 'Failed to save item');
+              }
+            } catch (error) {
+              console.error('Error saving item:', error);
+              await showAlert('Error', 'Failed to save item');
+            }
+          }
+          
+          async function deleteItem(itemId, itemName) {
+            const confirmed = await openConfirmationModal(
+              'Delete Item',
+              \`Are you sure you want to delete "\${itemName}"? This item will still appear in request history.\`
+            );
+            
+            if (!confirmed) return;
+            
+            try {
+              const response = await fetch(\`/api/replenishment/items/\${itemId}\`, {
+                method: 'DELETE'
+              });
+              
+              const data = await response.json();
+              
+              if (data.success) {
+                await showAlert('Success', 'Item deleted successfully');
+                localStorage.setItem('replenishment-active-tab', 'inventory');
+                window.location.reload();
+              } else {
+                await showAlert('Error', data.error || 'Failed to delete item');
+              }
+            } catch (error) {
+              console.error('Error deleting item:', error);
+              await showAlert('Error', 'Failed to delete item');
+            }
+          }
+          
+          // Collapsible functionality
+          function toggleStatusColumn(status) {
+            const cardsElement = document.getElementById(status + '-cards');
+            const iconElement = document.getElementById(status + '-icon');
+            
+            if (cardsElement.style.display === 'none') {
+              cardsElement.style.display = 'flex';
+              iconElement.classList.remove('collapsed');
+              localStorage.setItem('replenishment-status-' + status, 'open');
+            } else {
+              cardsElement.style.display = 'none';
+              iconElement.classList.add('collapsed');
+              localStorage.setItem('replenishment-status-' + status, 'closed');
+            }
+          }
+          
+          function toggleInventorySection(sectionSlug) {
+            const gridElement = document.getElementById(sectionSlug + '-grid');
+            const iconElement = document.getElementById(sectionSlug + '-icon');
+            const addItemSection = gridElement.closest('.inventory-section').querySelector('.add-item-section');
+            
+            if (gridElement.style.display === 'none') {
+              gridElement.style.display = 'grid';
+              iconElement.classList.remove('collapsed');
+              if (addItemSection) addItemSection.style.display = 'block';
+              localStorage.setItem('replenishment-inventory-' + sectionSlug, 'open');
+            } else {
+              gridElement.style.display = 'none';
+              iconElement.classList.add('collapsed');
+              if (addItemSection) addItemSection.style.display = 'none';
+              localStorage.setItem('replenishment-inventory-' + sectionSlug, 'closed');
+            }
+          }
+          
+          // Serve Area favorites management
+          let serveAreaFavorites = new Set();
+          
+          function loadServeAreaFavorites() {
+            try {
+              const saved = localStorage.getItem('replenishment-serve-area-favorites');
+              if (saved) {
+                serveAreaFavorites = new Set(JSON.parse(saved));
+              }
+            } catch (error) {
+              console.error('Error loading serve area favorites:', error);
+              serveAreaFavorites = new Set();
+            }
+          }
+          
+          function saveServeAreaFavorites() {
+            try {
+              localStorage.setItem('replenishment-serve-area-favorites', JSON.stringify([...serveAreaFavorites]));
+            } catch (error) {
+              console.error('Error saving serve area favorites:', error);
+            }
+          }
+          
+          function toggleServeAreaFavorite(sectionSlug, sectionName) {
+            const starElement = document.getElementById(sectionSlug + '-star');
+            const isFavorited = serveAreaFavorites.has(sectionSlug);
+            
+            if (isFavorited) {
+              serveAreaFavorites.delete(sectionSlug);
+              starElement.classList.remove('favorited');
+              starElement.textContent = '☆';
+            } else {
+              serveAreaFavorites.add(sectionSlug);
+              starElement.classList.add('favorited');
+              starElement.textContent = '★';
+            }
+            
+            saveServeAreaFavorites();
+            reorderInventorySections();
+          }
+          
+          function reorderInventorySections() {
+            const inventoryTab = document.getElementById('inventory-tab');
+            const headerDiv = inventoryTab.querySelector('div[style*="justify-content: space-between"]');
+            const sections = Array.from(inventoryTab.querySelectorAll('.inventory-section'));
+            
+            // Sort: favorites first, then alphabetically
+            sections.sort((a, b) => {
+              const aSlug = a.querySelector('h3 .collapse-icon').id.replace('-icon', '');
+              const bSlug = b.querySelector('h3 .collapse-icon').id.replace('-icon', '');
+              
+              const aFavorited = serveAreaFavorites.has(aSlug);
+              const bFavorited = serveAreaFavorites.has(bSlug);
+              
+              // Favorites first
+              if (aFavorited && !bFavorited) return -1;
+              if (!aFavorited && bFavorited) return 1;
+              
+              // Then alphabetically by name (get first span inside the div)
+              const aNameElement = a.querySelector('h3 div span:first-child');
+              const bNameElement = b.querySelector('h3 div span:first-child');
+              const aName = aNameElement ? aNameElement.textContent.trim() : '';
+              const bName = bNameElement ? bNameElement.textContent.trim() : '';
+              return aName.localeCompare(bName);
+            });
+            
+            // Clear and re-append in new order
+            sections.forEach(section => section.remove());
+            sections.forEach(section => {
+              inventoryTab.appendChild(section);
+            });
+            
+            // Keep header div at the top
+            if (headerDiv) {
+              inventoryTab.insertBefore(headerDiv, inventoryTab.firstChild);
+            }
+          }
+          
+          // Restore collapse states from localStorage
+          function restoreCollapseStates() {
+            // Restore status column states
+            ['requested', 'ordered', 'delivered'].forEach(status => {
+              const state = localStorage.getItem('replenishment-status-' + status);
+              if (state === 'closed') {
+                const cardsElement = document.getElementById(status + '-cards');
+                const iconElement = document.getElementById(status + '-icon');
+                if (cardsElement && iconElement) {
+                  cardsElement.style.display = 'none';
+                  iconElement.classList.add('collapsed');
+                }
+              }
+            });
+            
+            // Restore inventory section states (dynamically get all sections)
+            document.querySelectorAll('.inventory-section').forEach(section => {
+              const gridElement = section.querySelector('.inventory-grid');
+              if (gridElement && gridElement.id) {
+                const sectionSlug = gridElement.id.replace('-grid', '');
+                const state = localStorage.getItem('replenishment-inventory-' + sectionSlug);
+                if (state === 'closed') {
+                  const iconElement = document.getElementById(sectionSlug + '-icon');
+                  if (iconElement) {
+                    gridElement.style.display = 'none';
+                    iconElement.classList.add('collapsed');
+                    const addItemSection = section.querySelector('.add-item-section');
+                    if (addItemSection) addItemSection.style.display = 'none';
+                  }
+                }
+              }
+            });
+            
+            // Restore and apply serve area favorites
+            loadServeAreaFavorites();
+            serveAreaFavorites.forEach(slug => {
+              const starElement = document.getElementById(slug + '-star');
+              if (starElement) {
+                starElement.classList.add('favorited');
+                starElement.textContent = '★';
+              }
+            });
+            
+            // Reorder sections based on favorites
+            if (serveAreaFavorites.size > 0) {
+              reorderInventorySections();
+            }
+          }
+          
+          async function deleteRequest(requestId, status, itemName) {
+            try {
+              let deletionReason = null;
+              
+              // If status is 'ordered' or 'delivered', require a reason
+              if (status === 'ordered' || status === 'delivered') {
+                deletionReason = await openDeletionModal(
+                  \`You are about to delete the request for "\${itemName}" which has already been \${status}. Please provide a reason:\`
+                );
+              } else {
+                // For 'requested' status, just confirm
+                await openConfirmationModal(
+                  'Delete Request',
+                  \`Are you sure you want to delete the request for "\${itemName}"?\`
+                );
+              }
+              
+              const response = await fetch(\`/api/replenishment/requests/\${requestId}\`, {
+                method: 'DELETE',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  reason: deletionReason
+                })
+              });
+              
+              const result = await response.json();
+              
+              if (result.success) {
+                await showAlert('Success', 'Request deleted successfully!');
+                window.location.reload();
+              } else {
+                await showAlert('Error', result.error || 'Failed to delete request');
+              }
+            } catch (error) {
+              if (error !== 'cancelled') {
+                console.error('Error deleting request:', error);
+                await showAlert('Error', 'Failed to delete request. Please try again.');
+              }
+            }
+          }
+          
           async function updateStatus(requestId, newStatus, itemName) {
             try {
               const userName = await openNameModal(
@@ -11892,15 +13097,15 @@ app.get('/replenishment-requests', async (req, res) => {
               const result = await response.json();
               
               if (result.success) {
-                alert(\`Successfully marked as \${newStatus}!\`);
+                await showAlert('Success', \`Successfully marked as \${newStatus}!\`);
                 window.location.reload();
               } else {
-                alert('Error: ' + (result.error || 'Failed to update status'));
+                await showAlert('Error', result.error || 'Failed to update status');
               }
             } catch (error) {
               if (error !== 'cancelled') {
                 console.error('Error updating status:', error);
-                alert('Failed to update status. Please try again.');
+                await showAlert('Error', 'Failed to update status. Please try again.');
               }
             }
           }
@@ -11938,17 +13143,33 @@ app.get('/replenishment-requests', async (req, res) => {
           const tabButtons = document.querySelectorAll('.tab-button');
           const tabContents = document.querySelectorAll('.tab-content');
           
+          // Function to switch to a specific tab
+          function activateTab(tabName) {
+            // Remove active class from all tabs
+            tabButtons.forEach(btn => btn.classList.remove('active'));
+            tabContents.forEach(content => content.classList.remove('active'));
+            
+            // Add active class to specified tab
+            const targetButton = document.querySelector(\`[data-tab="\${tabName}"]\`);
+            if (targetButton) {
+              targetButton.classList.add('active');
+              document.getElementById(tabName + '-tab').classList.add('active');
+              
+              // Save to localStorage
+              localStorage.setItem('replenishment-active-tab', tabName);
+            }
+          }
+          
+          // Restore previously active tab on page load
+          const savedTab = localStorage.getItem('replenishment-active-tab');
+          if (savedTab) {
+            activateTab(savedTab);
+          }
+          
           tabButtons.forEach(button => {
             button.addEventListener('click', () => {
               const tabName = button.getAttribute('data-tab');
-              
-              // Remove active class from all tabs
-              tabButtons.forEach(btn => btn.classList.remove('active'));
-              tabContents.forEach(content => content.classList.remove('active'));
-              
-              // Add active class to clicked tab
-              button.classList.add('active');
-              document.getElementById(tabName + '-tab').classList.add('active');
+              activateTab(tabName);
             });
           });
           
@@ -12002,34 +13223,23 @@ app.get('/replenishment-requests', async (req, res) => {
               const result = await response.json();
               
               if (result.success) {
-                alert('Request submitted successfully!');
+                closeNewRequestModal();
+                await showAlert('Success', 'Request submitted successfully!');
                 window.location.reload();
               } else {
-                alert('Error: ' + (result.error || 'Failed to submit request'));
+                await showAlert('Error', result.error || 'Failed to submit request');
               }
             } catch (error) {
               console.error('Error submitting request:', error);
-              alert('Failed to submit request. Please try again.');
+              await showAlert('Error', 'Failed to submit request. Please try again.');
             }
           });
           
-          // Refresh button
-          const refreshBtn = document.getElementById('refreshBtn');
-          refreshBtn.disabled = false;
-          refreshBtn.addEventListener('click', function() {
-            window.location.reload();
-          });
-          
-          // New request button - switch to tab
+          // New request button - open modal
           const newRequestButton = document.querySelector('.new-request-button');
           newRequestButton.disabled = false;
           newRequestButton.addEventListener('click', function() {
-            // Activate the new request tab
-            tabButtons.forEach(btn => {
-              if (btn.getAttribute('data-tab') === 'new-request') {
-                btn.click();
-              }
-            });
+            openNewRequestModal();
           });
           
           // Handle edit stock form submission
@@ -12053,14 +13263,14 @@ app.get('/replenishment-requests', async (req, res) => {
               const result = await response.json();
               
               if (result.success) {
-                alert('Stock updated successfully!');
+                await showAlert('Success', 'Stock updated successfully!');
                 window.location.reload();
               } else {
-                alert('Error: ' + (result.error || 'Failed to update stock'));
+                await showAlert('Error', result.error || 'Failed to update stock');
               }
             } catch (error) {
               console.error('Error updating stock:', error);
-              alert('Failed to update stock. Please try again.');
+              await showAlert('Error', 'Failed to update stock. Please try again.');
             }
           });
           
@@ -12075,6 +13285,80 @@ app.get('/replenishment-requests', async (req, res) => {
               window._nameModalResolve = null;
               window._nameModalReject = null;
               document.getElementById('nameInputModal').classList.remove('show');
+            }
+          });
+          
+          // Handle deletion reason form submission
+          const deletionReasonForm = document.getElementById('deletionReasonForm');
+          deletionReasonForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const reason = document.getElementById('deletionReason').value.trim();
+            if (reason && window._deletionModalResolve) {
+              window._deletionModalResolve(reason);
+              window._deletionModalResolve = null;
+              window._deletionModalReject = null;
+              document.getElementById('deletionReasonModal').classList.remove('show');
+            }
+          });
+          
+          // Handle confirmation modal confirm button
+          const confirmationModalConfirm = document.getElementById('confirmationModalConfirm');
+          confirmationModalConfirm.addEventListener('click', function() {
+            if (window._confirmationModalResolve) {
+              window._confirmationModalResolve(true);
+              window._confirmationModalResolve = null;
+              window._confirmationModalReject = null;
+              document.getElementById('confirmationModal').classList.remove('show');
+            }
+          });
+          
+          // Close modals when clicking outside
+          document.getElementById('newRequestModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+              closeNewRequestModal();
+            }
+          });
+          
+          document.getElementById('editStockModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+              closeEditModal();
+            }
+          });
+          
+          document.getElementById('nameInputModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+              closeNameModal();
+            }
+          });
+          
+          document.getElementById('deletionReasonModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+              closeDeletionModal();
+            }
+          });
+          
+          document.getElementById('confirmationModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+              closeConfirmationModal();
+            }
+          });
+          
+          document.getElementById('alertModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+              closeAlertModal();
+            }
+          });
+          
+          document.getElementById('serveAreaModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+              closeServeAreaModal();
+            }
+          });
+          
+          document.getElementById('itemModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+              closeItemModal();
             }
           });
           
@@ -12103,6 +13387,12 @@ app.get('/replenishment-requests', async (req, res) => {
               }
             }
           });
+          
+          // Restore collapse states on page load
+          restoreCollapseStates();
+          
+          // Restore Edit Mode state on page load
+          restoreEditMode();
         </script>
       </body>
       </html>
@@ -12990,7 +14280,7 @@ async function sendCheckInNotifications() {
   today.setHours(0, 0, 0, 0);
   
   // Teams that don't require check-ins
-  const teamsWithoutCheckIns = ['665166', '666583'];
+  const teamsWithoutCheckIns = ['665166'];
   
   try {
     // Get all Dream Team workflows
