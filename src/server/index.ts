@@ -10757,8 +10757,16 @@ app.post('/api/replenishment/items', async (req, res) => {
       unit
     );
     res.json({ success: true, itemId });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error creating item:', error);
+    
+    // Check if it's a duplicate name error
+    if (error.message && error.message.includes('already exists')) {
+      return res.status(409).json({ 
+        error: error.message
+      });
+    }
+    
     res.status(500).json({ error: 'Failed to create item' });
   }
 });
@@ -12711,6 +12719,7 @@ app.get('/replenishment-requests', async (req, res) => {
                 localStorage.setItem('replenishment-active-tab', 'inventory');
                 window.location.reload();
               } else {
+                closeServeAreaModal();
                 await showAlert('Error', data.error || 'Failed to save Serve Area');
               }
             } catch (error) {
@@ -12836,6 +12845,7 @@ app.get('/replenishment-requests', async (req, res) => {
                 localStorage.setItem('replenishment-active-tab', 'inventory');
                 window.location.reload();
               } else {
+                closeItemModal();
                 await showAlert('Error', data.error || 'Failed to save item');
               }
             } catch (error) {
