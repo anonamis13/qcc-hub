@@ -1751,57 +1751,54 @@ export const replenishmentRequests = {
     minThreshold: number,
     unit: string
   ): number => {
-    try {
-      const db = initializeDb();
-      const timestamp = Date.now();
-      
-      // Check if an inactive item with this name already exists in this department
-      const checkStmt = db.prepare(`
-        SELECT id, is_active FROM replenishment_items 
-        WHERE department_id = ? AND name = ?
-      `);
-      const existing = checkStmt.get(departmentId, name) as { id: number; is_active: number } | undefined;
-      
-      if (existing) {
-        if (existing.is_active === 0) {
-          // Reactivate the deleted item with new details
-          const updateStmt = db.prepare(`
-            UPDATE replenishment_items
-            SET description = ?, location = ?, current_stock = ?, min_threshold = ?, unit = ?, 
-                updated_at = ?, is_active = 1
-            WHERE id = ?
-          `);
-          updateStmt.run(description || null, location || null, currentStock, minThreshold, unit, timestamp, existing.id);
-          return existing.id;
-        } else {
-          // Item already exists and is active
-          throw new Error('An item with this name already exists in this serve area');
-        }
+    const db = initializeDb();
+    const timestamp = Date.now();
+    
+    // Check if an inactive item with this name already exists in this department
+    const checkStmt = db.prepare(`
+      SELECT id, is_active FROM replenishment_items 
+      WHERE department_id = ? AND name = ?
+    `);
+    const existing = checkStmt.get(departmentId, name) as { id: number; is_active: number } | undefined;
+    
+    if (existing) {
+      if (existing.is_active === 0) {
+        // Reactivate the deleted item with new details
+        const updateStmt = db.prepare(`
+          UPDATE replenishment_items
+          SET description = ?, location = ?, current_stock = ?, min_threshold = ?, unit = ?, 
+              updated_at = ?, is_active = 1
+          WHERE id = ?
+        `);
+        updateStmt.run(description || null, location || null, currentStock, minThreshold, unit, timestamp, existing.id);
+        return existing.id;
+      } else {
+        // Item already exists and is active - throw error with special marker
+        const error = new Error('An item with this name already exists in this serve area') as any;
+        error.isDuplicateError = true;
+        throw error;
       }
-      
-      // Create new item
-      const stmt = db.prepare(`
-        INSERT INTO replenishment_items 
-        (department_id, name, description, location, current_stock, min_threshold, unit, created_at, updated_at, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-      `);
-      
-      const result = stmt.run(
-        departmentId,
-        name,
-        description || null,
-        location || null,
-        currentStock,
-        minThreshold,
-        unit,
-        timestamp,
-        timestamp
-      );
-      return result.lastInsertRowid as number;
-    } catch (error) {
-      console.error('Error creating item:', error);
-      throw error;
     }
+    
+    // Create new item
+    const stmt = db.prepare(`
+      INSERT INTO replenishment_items 
+      (department_id, name, description, location, current_stock, min_threshold, unit, created_at, updated_at, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `);
+    
+    const result = stmt.run(
+      departmentId,
+      name,
+      description || null,
+      location || null,
+      currentStock,
+      minThreshold,
+      unit,
+      timestamp,
+      timestamp
+    );
+    return result.lastInsertRowid as number;
   },
   
   // Update an item

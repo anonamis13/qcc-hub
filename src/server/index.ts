@@ -10758,15 +10758,15 @@ app.post('/api/replenishment/items', async (req, res) => {
     );
     res.json({ success: true, itemId });
   } catch (error: any) {
-    console.error('Error creating item:', error);
-    
-    // Check if it's a duplicate name error
-    if (error.message && error.message.includes('already exists')) {
+    // Check if it's a duplicate name error (user-facing error, don't log)
+    if (error.isDuplicateError) {
       return res.status(409).json({ 
         error: error.message
       });
     }
     
+    // Unexpected error - log it
+    console.error('Error creating item:', error);
     res.status(500).json({ error: 'Failed to create item' });
   }
 });
