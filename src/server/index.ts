@@ -12525,6 +12525,9 @@ app.get('/replenishment-requests', async (req, res) => {
           }
           
           function openNewRequestModal() {
+            // Turn off Edit Mode when creating a new request
+            turnOffEditMode();
+            
             document.getElementById('newRequestModal').classList.add('show');
             // Focus on the first field
             setTimeout(() => {
@@ -12646,20 +12649,16 @@ app.get('/replenishment-requests', async (req, res) => {
               toggleBtn.textContent = 'Edit Mode: ON';
               toggleBtn.classList.add('active');
               inventoryTab.classList.add('edit-mode');
-              localStorage.setItem('replenishment-edit-mode', 'on');
             } else {
               toggleBtn.textContent = 'Edit Mode: OFF';
               toggleBtn.classList.remove('active');
               inventoryTab.classList.remove('edit-mode');
-              localStorage.setItem('replenishment-edit-mode', 'off');
             }
           }
           
-          // Restore Edit Mode state on page load
-          function restoreEditMode() {
-            const savedEditMode = localStorage.getItem('replenishment-edit-mode');
-            if (savedEditMode === 'on') {
-              isEditMode = false; // Set to false so toggle will turn it on
+          // Turn off Edit Mode when user navigates away
+          function turnOffEditMode() {
+            if (isEditMode) {
               toggleEditMode();
             }
           }
@@ -13161,6 +13160,11 @@ app.get('/replenishment-requests', async (req, res) => {
           
           // Function to switch to a specific tab
           function activateTab(tabName) {
+            // Turn off Edit Mode when navigating away from Inventory tab
+            if (tabName !== 'inventory') {
+              turnOffEditMode();
+            }
+            
             // Remove active class from all tabs
             tabButtons.forEach(btn => btn.classList.remove('active'));
             tabContents.forEach(content => content.classList.remove('active'));
@@ -13385,9 +13389,6 @@ app.get('/replenishment-requests', async (req, res) => {
           
           // Restore collapse states on page load
           restoreCollapseStates();
-          
-          // Restore Edit Mode state on page load
-          restoreEditMode();
         </script>
       </body>
       </html>
