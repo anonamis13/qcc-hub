@@ -12716,6 +12716,10 @@ app.get('/replenishment-requests', async (req, res) => {
                 closeServeAreaModal();
                 await showAlert('Success', currentServeAreaId ? 'Serve Area updated successfully' : 'Serve Area created successfully');
                 localStorage.setItem('replenishment-active-tab', 'inventory');
+                // Preserve Edit Mode through reload
+                if (isEditMode) {
+                  localStorage.setItem('replenishment-restore-edit-mode', 'true');
+                }
                 window.location.reload();
               } else {
                 closeServeAreaModal();
@@ -12745,6 +12749,10 @@ app.get('/replenishment-requests', async (req, res) => {
               if (data.success) {
                 await showAlert('Success', 'Serve Area deleted successfully');
                 localStorage.setItem('replenishment-active-tab', 'inventory');
+                // Preserve Edit Mode through reload
+                if (isEditMode) {
+                  localStorage.setItem('replenishment-restore-edit-mode', 'true');
+                }
                 window.location.reload();
               } else {
                 await showAlert('Error', data.error || 'Failed to delete Serve Area');
@@ -12842,6 +12850,10 @@ app.get('/replenishment-requests', async (req, res) => {
                 closeItemModal();
                 await showAlert('Success', currentItemId ? 'Item updated successfully' : 'Item created successfully');
                 localStorage.setItem('replenishment-active-tab', 'inventory');
+                // Preserve Edit Mode through reload
+                if (isEditMode) {
+                  localStorage.setItem('replenishment-restore-edit-mode', 'true');
+                }
                 window.location.reload();
               } else {
                 closeItemModal();
@@ -12871,6 +12883,10 @@ app.get('/replenishment-requests', async (req, res) => {
               if (data.success) {
                 await showAlert('Success', 'Item deleted successfully');
                 localStorage.setItem('replenishment-active-tab', 'inventory');
+                // Preserve Edit Mode through reload
+                if (isEditMode) {
+                  localStorage.setItem('replenishment-restore-edit-mode', 'true');
+                }
                 window.location.reload();
               } else {
                 await showAlert('Error', data.error || 'Failed to delete item');
@@ -13389,6 +13405,13 @@ app.get('/replenishment-requests', async (req, res) => {
           
           // Restore collapse states on page load
           restoreCollapseStates();
+          
+          // Restore Edit Mode if it was active during an inventory operation
+          const shouldRestoreEditMode = localStorage.getItem('replenishment-restore-edit-mode');
+          if (shouldRestoreEditMode === 'true') {
+            localStorage.removeItem('replenishment-restore-edit-mode');
+            toggleEditMode();
+          }
         </script>
       </body>
       </html>
