@@ -11763,12 +11763,8 @@ app.get('/replenishment-requests', async (req, res) => {
             margin-bottom: 15px;
           }
           
-          .edit-mode .add-item-section {
+          .edit-mode .add-item-section:not(.section-collapsed) {
             display: block;
-          }
-          
-          .add-item-section.section-collapsed {
-            display: none !important;
           }
           
           .add-item-btn {
@@ -13323,54 +13319,33 @@ app.get('/replenishment-requests', async (req, res) => {
             }
           });
           
-          // Close modals when clicking outside
-          document.getElementById('newRequestModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-              closeNewRequestModal();
-            }
-          });
+          // Helper function to add proper click-outside-to-close behavior
+          // Only closes if both mousedown and mouseup happen outside the modal content
+          function addModalClickOutsideHandler(modalElement, closeFunction) {
+            let mouseDownTarget = null;
+            
+            modalElement.addEventListener('mousedown', function(e) {
+              mouseDownTarget = e.target;
+            });
+            
+            modalElement.addEventListener('click', function(e) {
+              // Only close if both mousedown and click happened on the modal backdrop
+              if (e.target === this && mouseDownTarget === this) {
+                closeFunction();
+              }
+              mouseDownTarget = null;
+            });
+          }
           
-          document.getElementById('editStockModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-              closeEditModal();
-            }
-          });
-          
-          document.getElementById('nameInputModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-              closeNameModal();
-            }
-          });
-          
-          document.getElementById('deletionReasonModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-              closeDeletionModal();
-            }
-          });
-          
-          document.getElementById('confirmationModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-              closeConfirmationModal();
-            }
-          });
-          
-          document.getElementById('alertModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-              closeAlertModal();
-            }
-          });
-          
-          document.getElementById('serveAreaModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-              closeServeAreaModal();
-            }
-          });
-          
-          document.getElementById('itemModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-              closeItemModal();
-            }
-          });
+          // Close modals when clicking outside (both mousedown and mouseup must be outside)
+          addModalClickOutsideHandler(document.getElementById('newRequestModal'), closeNewRequestModal);
+          addModalClickOutsideHandler(document.getElementById('editStockModal'), closeEditModal);
+          addModalClickOutsideHandler(document.getElementById('nameInputModal'), closeNameModal);
+          addModalClickOutsideHandler(document.getElementById('deletionReasonModal'), closeDeletionModal);
+          addModalClickOutsideHandler(document.getElementById('confirmationModal'), closeConfirmationModal);
+          addModalClickOutsideHandler(document.getElementById('alertModal'), closeAlertModal);
+          addModalClickOutsideHandler(document.getElementById('serveAreaModal'), closeServeAreaModal);
+          addModalClickOutsideHandler(document.getElementById('itemModal'), closeItemModal);
           
           // Close modal when clicking outside
           window.addEventListener('click', function(event) {
