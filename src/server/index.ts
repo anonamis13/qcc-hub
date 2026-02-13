@@ -163,12 +163,40 @@ app.get('/api/check-cache', async (req, res) => {
   }
 });
 
-// Add new endpoint to get cache timestamp
+// Add new endpoint to get cache timestamp with context
 app.get('/api/cache-info', async (req, res) => {
   try {
-    const cacheKey = 'all_groups';
-    const timestamp = await cache.getTimestamp(cacheKey);
-    res.json({ timestamp });
+    const showAll = req.query.showAll === 'true';
+    const groupsTimestamp = await cache.getTimestamp('all_groups');
+    
+    // Get a sample of event cache timestamps to find the oldest one
+    // Check a few groups to get representative cache age
+    const groupsResponse = await cache.get('all_groups') as any;
+    let oldestEventCache: number | null = null;
+    
+    if (groupsResponse && Array.isArray(groupsResponse.data)) {
+      // Check first 5 groups for their event cache timestamps
+      const sampleGroups = groupsResponse.data.slice(0, 5);
+      for (const group of sampleGroups) {
+        const eventCacheKey = `events_${group.id}_${showAll}`;
+        const eventTimestamp = await cache.getTimestamp(eventCacheKey);
+        if (eventTimestamp && (!oldestEventCache || eventTimestamp < oldestEventCache)) {
+          oldestEventCache = eventTimestamp;
+        }
+      }
+    }
+    
+    // Return the oldest relevant timestamp (groups or events)
+    const relevantTimestamp = oldestEventCache && groupsTimestamp && oldestEventCache < groupsTimestamp 
+      ? oldestEventCache 
+      : groupsTimestamp;
+    
+    res.json({ 
+      timestamp: relevantTimestamp,
+      groupsTimestamp,
+      eventsTimestamp: oldestEventCache,
+      showingAllYears: showAll
+    });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get cache info' });
   }
@@ -2879,6 +2907,11 @@ app.get('/life-groups', async (req, res) => {
               color: #e0e0e0;
             }
             
+            body.dark-mode #lastUpdate {
+              /* Color will be set dynamically based on age */
+              /* Yellow and red have good contrast in dark mode */
+            }
+            
             body.dark-mode .chart-container {
               background-color: #2d2d2d;
             }
@@ -4431,14 +4464,29 @@ app.get('/life-groups', async (req, res) => {
               });
             }
 
-            async function updateLastUpdateTime() {
+            async function updateLastUpdateTime(showAll = false) {
               try {
-                const response = await fetch('/api/cache-info');
+                const url = showAll ? '/api/cache-info?showAll=true' : '/api/cache-info';
+                const response = await fetch(url);
                 if (!response.ok) throw new Error('Failed to fetch cache info');
-                const { timestamp } = await response.json();
+                const { timestamp, showingAllYears } = await response.json();
                 if (timestamp) {
-                  lastUpdate.textContent = \`Last updated: \${formatLastUpdateTime(timestamp)}\`;
+                  const ageInHours = (Date.now() - timestamp) / (1000 * 60 * 60);
+                  const ageInDays = ageInHours / 24;
+                  
+                  // Determine color based on age
+                  let color = '#666'; // Default gray
+                  if (ageInDays > 10) {
+                    color = '#dc3545'; // Red for > 10 days
+                  } else if (ageInHours > 48) {
+                    color = '#ffc107'; // Yellow for > 48 hours
+                  }
+                  
+                  const label = showingAllYears ? 'All Years Data' : 'Current Year Data';
+                  lastUpdate.textContent = \`Last updated: \${formatLastUpdateTime(timestamp)} (\${label})\`;
+                  lastUpdate.style.color = color;
                   lastUpdate.style.display = 'block';
+                  lastUpdate.style.fontWeight = (ageInDays > 10 || ageInHours > 48) ? 'bold' : 'normal';
                 }
               } catch (error) {
                 console.error('Error fetching cache info:', error);
@@ -4632,10 +4680,16 @@ app.get('/life-groups', async (req, res) => {
                   try {
                     // For historical refresh, we need to fetch both current year and all historical data
                     if (isHistoricalRefresh) {
-                      // First fetch all historical attendance data to populate cache
+                      // Fetch all historical attendance data to populate cache
                       const historicalResponse = await fetch(\`/life-groups/groups/\${group.id}/attendance?showAll=true&forceRefresh=true\`);
                       if (!historicalResponse.ok) {
                         console.warn(\`Failed to fetch historical data for group \${group.id}\`);
+                      }
+                      
+                      // Also fetch current year data to ensure both caches are in sync
+                      const currentYearResponse = await fetch(\`/life-groups/groups/\${group.id}/attendance?showAll=false&forceRefresh=true\`);
+                      if (!currentYearResponse.ok) {
+                        console.warn(\`Failed to fetch current year data for group \${group.id}\`);
                       }
                     }
                     
@@ -4821,7 +4875,8 @@ app.get('/life-groups', async (req, res) => {
                   setupSortFilterControls();
                 }, 100);
                 
-                await updateLastUpdateTime();
+                const showAllYears = document.getElementById('showAllYears')?.checked || false;
+                await updateLastUpdateTime(showAllYears);
                 clearInterval(timerInterval); // Stop the timer
               } catch (error) {
                 console.error('Error refreshing data:', error);
@@ -4866,7 +4921,8 @@ app.get('/life-groups', async (req, res) => {
                 if (hasCachedData) {
                   // Always load cached data
                   loadGroups();
-                  await updateLastUpdateTime();
+                  const showAllYears = document.getElementById('showAllYears')?.checked || false;
+                  await updateLastUpdateTime(showAllYears);
                   loadDataBtn.innerHTML = buttonHtml;
                   loadDataBtn.style.backgroundColor = '#007bff';
                 } else {
@@ -4919,7 +4975,8 @@ app.get('/life-groups', async (req, res) => {
                 
                 // Note: Chart is loaded automatically by applyCurrentSortAndFilter() in displayGroups()
                 // so we don't need to call loadAggregateData() explicitly here
-                await updateLastUpdateTime();
+                const showAllYears = document.getElementById('showAllYears')?.checked || false;
+                await updateLastUpdateTime(showAllYears);
               } catch (error) {
                 console.error('Error:', error);
                 loadDataBtn.disabled = false;
@@ -5883,6 +5940,8 @@ app.get('/life-groups', async (req, res) => {
                 console.error('Error loading chart data:', error);
               } finally {
                 if (loadingMessage) loadingMessage.style.display = 'none';
+                // Update timestamp display based on current toggle state
+                updateLastUpdateTime(showAllYears);
               }
             });
 

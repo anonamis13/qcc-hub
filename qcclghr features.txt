@@ -1,5 +1,8 @@
 Upcoming Features
 =================
+Find solution for all-years graph getting too large
+	Side-Scrolling?
+	Only show 2-years at a time?
 
 ?month-over-month and year-over-year percentage
 ?YA groups functionality
