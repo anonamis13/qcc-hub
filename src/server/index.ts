@@ -10124,7 +10124,12 @@ app.get('/dream-teams/:workflowId', async (req, res) => {
             const pastMembersList = document.getElementById('pastMembersList');
             
             if (teamData.pastMembers && teamData.pastMembers.length > 0) {
-              pastMembersList.innerHTML = teamData.pastMembers.map(function(member) {
+              // Sort past members by removal date, descending (most recent first)
+              const sortedPastMembers = teamData.pastMembers.slice().sort(function(a, b) {
+                return new Date(b.removalDate).getTime() - new Date(a.removalDate).getTime();
+              });
+              
+              pastMembersList.innerHTML = sortedPastMembers.map(function(member) {
                 const removalDate = new Date(member.removalDate).toLocaleDateString('en-US', {
                   month: 'numeric',
                   day: 'numeric',
