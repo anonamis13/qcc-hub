@@ -12271,6 +12271,60 @@ app.get('/replenishment-requests', async (req, res) => {
             gap: 10px;
           }
           
+          .pagination-controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            margin-top: 30px;
+            padding: 20px 0;
+          }
+          
+          .pagination-btn {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+          }
+          
+          .pagination-btn:hover:not(:disabled) {
+            background-color: #0056b3;
+            transform: translateY(-1px);
+          }
+          
+          .pagination-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+            opacity: 0.6;
+          }
+          
+          .pagination-info {
+            font-size: 15px;
+            font-weight: 500;
+            color: #495057;
+          }
+          
+          body.dark-mode .pagination-btn {
+            background-color: #0d6efd;
+          }
+          
+          body.dark-mode .pagination-btn:hover:not(:disabled) {
+            background-color: #0b5ed7;
+          }
+          
+          body.dark-mode .pagination-btn:disabled {
+            background-color: #555;
+          }
+          
+          body.dark-mode .pagination-info {
+            color: #ccc;
+          }
+          
           /* Responsive design */
           @media (max-width: 1024px) {
             .requests-by-status {
@@ -12579,13 +12633,13 @@ app.get('/replenishment-requests', async (req, res) => {
           <!-- History Tab -->
           <div id="history-tab" class="tab-content">
             <h2 style="margin-bottom: 20px;">Completed & Deleted Requests</h2>
-            <div class="history-list">
+            <div class="history-list" id="history-list">
               ${allRequests.filter(r => r.status === 'stocked' || r.status === 'deleted').map(req => `
                 <div class="history-card">
                   <div class="history-header">
                     <strong>${req.item_name}</strong>
-                    ${req.status === 'stocked' 
-                      ? '<span class="badge success">✓ Stocked</span>' 
+                    ${req.status === 'stocked'
+                      ? '<span class="badge success">✓ Stocked</span>'
                       : '<span class="badge" style="background-color: #dc3545; color: white;">✗ Deleted</span>'}
                   </div>
                   <div class="history-details">
@@ -12621,6 +12675,11 @@ app.get('/replenishment-requests', async (req, res) => {
                   </div>
                 </div>
               `).join('') || '<p class="empty-state">No completed or deleted requests yet</p>'}
+            </div>
+            <div class="pagination-controls" id="history-pagination" style="display: none;">
+              <button class="pagination-btn" id="history-prev-btn" onclick="changeHistoryPage(-1)">← Previous</button>
+              <span class="pagination-info" id="history-page-info">Page 1 of 1</span>
+              <button class="pagination-btn" id="history-next-btn" onclick="changeHistoryPage(1)">Next →</button>
             </div>
           </div>
           
@@ -12799,6 +12858,11 @@ app.get('/replenishment-requests', async (req, res) => {
           let pendingStatusUpdate = null;
           let confirmModalResolver = null;
           
+          // History pagination variables
+          let historyCurrentPage = 1;
+          let historyItemsPerPage = 50;
+          let allHistoryCards = [];
+
           function showConfirmModal(title, message) {
             return new Promise((resolve) => {
               confirmModalResolver = resolve;
@@ -12913,6 +12977,49 @@ app.get('/replenishment-requests', async (req, res) => {
               window._nameModalReject('cancelled');
               window._nameModalResolve = null;
               window._nameModalReject = null;
+            }
+          }
+          
+          // History pagination functions
+          function initializeHistoryPagination() {
+            const historyList = document.getElementById('history-list');
+            allHistoryCards = Array.from(historyList.querySelectorAll('.history-card'));
+            
+            if (allHistoryCards.length > historyItemsPerPage) {
+              document.getElementById('history-pagination').style.display = 'flex';
+              displayHistoryPage(1);
+            }
+          }
+          
+          function displayHistoryPage(pageNum) {
+            historyCurrentPage = pageNum;
+            const startIdx = (pageNum - 1) * historyItemsPerPage;
+            const endIdx = startIdx + historyItemsPerPage;
+            const totalPages = Math.ceil(allHistoryCards.length / historyItemsPerPage);
+            
+            // Hide all cards
+            allHistoryCards.forEach(card => card.style.display = 'none');
+            
+            // Show cards for current page
+            for (let i = startIdx; i < endIdx && i < allHistoryCards.length; i++) {
+              allHistoryCards[i].style.display = 'block';
+            }
+            
+            // Update pagination controls
+            document.getElementById('history-page-info').textContent = \`Page \${pageNum} of \${totalPages}\`;
+            document.getElementById('history-prev-btn').disabled = pageNum === 1;
+            document.getElementById('history-next-btn').disabled = pageNum === totalPages;
+            
+            // Scroll to top of history section
+            document.getElementById('history-tab').scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+          
+          function changeHistoryPage(direction) {
+            const totalPages = Math.ceil(allHistoryCards.length / historyItemsPerPage);
+            const newPage = historyCurrentPage + direction;
+            
+            if (newPage >= 1 && newPage <= totalPages) {
+              displayHistoryPage(newPage);
             }
           }
           
@@ -13604,6 +13711,9 @@ app.get('/replenishment-requests', async (req, res) => {
             activateTab(savedTab);
           }
           
+          // Initialize history pagination
+          initializeHistoryPagination();
+
           tabButtons.forEach(button => {
             button.addEventListener('click', () => {
               const tabName = button.getAttribute('data-tab');
