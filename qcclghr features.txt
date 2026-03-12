@@ -3,6 +3,7 @@ Upcoming Features
 Find solution for all-years graph getting too large
 	Side-Scrolling?
 	Only show 2-years at a time?
+On a family group page, add new column for parent attendance rate for days which only half of the total members are expected to attend
 
 ?month-over-month and year-over-year percentage
 ?YA groups functionality

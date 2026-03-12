@@ -1,7 +1,6 @@
 Upcoming Features
 =================
 
-
 Completed Features
 ==================
 new request button doesn't work
@@ -12,3 +11,7 @@ collapsible serve areas
 starred/favorite serve areas
 include physical location of item if more than one location
 way to add/edit/remove serve areas and inventory items
+Add a url section of an item to paste links to order it
+Copy item button in Edit Mode to easily make a similar item
+Last edited time, to know how recently a stock has been updated
+add outlines around serve area edit/delete buttons

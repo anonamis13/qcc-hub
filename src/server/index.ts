@@ -10803,32 +10803,34 @@ app.delete('/api/replenishment/departments/:departmentId', async (req, res) => {
 // Create a new item
 app.post('/api/replenishment/items', async (req, res) => {
   try {
-    const { departmentId, name, description, location, currentStock, minThreshold, unit } = req.body;
-    
+    const { departmentId, name, description, location, url, currentStock, minThreshold, unit, lastUpdatedStock } = req.body;
+
     if (!departmentId || !name || currentStock === undefined || minThreshold === undefined || !unit) {
-      return res.status(400).json({ 
-        error: 'Missing required fields: departmentId, name, currentStock, minThreshold, unit' 
+      return res.status(400).json({
+        error: 'Missing required fields: departmentId, name, currentStock, minThreshold, unit'
       });
     }
-    
+
     const itemId = replenishmentRequests.createItem(
       parseInt(departmentId),
       name,
       description || '',
       location || '',
+      url || '',
       parseInt(currentStock),
       parseInt(minThreshold),
-      unit
+      unit,
+      lastUpdatedStock || Date.now()
     );
     res.json({ success: true, itemId });
   } catch (error: any) {
     // Check if it's a duplicate name error (user-facing error, don't log)
     if (error.isDuplicateError) {
-      return res.status(409).json({ 
+      return res.status(409).json({
         error: error.message
       });
     }
-    
+
     // Unexpected error - log it
     console.error('Error creating item:', error);
     res.status(500).json({ error: 'Failed to create item' });
@@ -10839,22 +10841,24 @@ app.post('/api/replenishment/items', async (req, res) => {
 app.put('/api/replenishment/items/:itemId', async (req, res) => {
   try {
     const { itemId } = req.params;
-    const { name, description, location, currentStock, minThreshold, unit } = req.body;
-    
+    const { name, description, location, url, currentStock, minThreshold, unit, lastUpdatedStock } = req.body;
+
     if (!name || currentStock === undefined || minThreshold === undefined || !unit) {
-      return res.status(400).json({ 
-        error: 'Missing required fields: name, currentStock, minThreshold, unit' 
+      return res.status(400).json({
+        error: 'Missing required fields: name, currentStock, minThreshold, unit'
       });
     }
-    
+
     replenishmentRequests.updateItem(
       parseInt(itemId),
       name,
       description || '',
       location || '',
+      url || '',
       parseInt(currentStock),
       parseInt(minThreshold),
-      unit
+      unit,
+      lastUpdatedStock || Date.now()
     );
     res.json({ success: true });
   } catch (error) {
@@ -11116,11 +11120,15 @@ app.get('/replenishment-requests', async (req, res) => {
           body.dark-mode .inventory-threshold {
             color: #bbb;
           }
-          
+
           body.dark-mode .inventory-description {
             color: #999;
           }
-          
+
+          body.dark-mode .inventory-last-updated {
+            color: #aaa;
+          }
+
           body.dark-mode .stock-unit {
             color: #bbb;
           }
@@ -11528,6 +11536,11 @@ app.get('/replenishment-requests', async (req, res) => {
             transition: background-color 0.3s ease;
           }
           
+          .request-button-row .status-button {
+            width: auto;
+            flex: 1;
+          }
+          
           .status-button-delivered {
             background-color: #6f42c1;
           }
@@ -11546,6 +11559,45 @@ app.get('/replenishment-requests', async (req, res) => {
           
           .status-button-stocked:hover {
             background-color: #198754;
+          }
+          
+          .request-button-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+          }
+          
+          .order-link-btn-small {
+            padding: 8px 12px;
+            background-color: white;
+            color: #007bff;
+            border: 2px solid #007bff;
+            border-radius: 4px;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            white-space: nowrap;
+          }
+          
+          .order-link-btn-small:hover {
+            background-color: #007bff;
+            color: white;
+          }
+          
+          body.dark-mode .order-link-btn-small {
+            background-color: #2d2d2d;
+            color: white !important;
+            border-color: #007bff;
+          }
+          
+          body.dark-mode .order-link-btn-small:hover {
+            background-color: #007bff;
           }
           
           .delete-icon {
@@ -11737,75 +11789,145 @@ app.get('/replenishment-requests', async (req, res) => {
           
           .edit-icon {
             color: #007bff;
+            width: 28px;
+            height: 28px;
+            border: 2px solid #007bff;
+            background-color: white;
+            z-index: 10;
           }
-          
+
           .edit-icon:hover {
-            background-color: rgba(0, 123, 255, 0.1);
-            transform: scale(1.1);
+            background-color: #007bff;
+            color: white;
+            transform: scale(1.05);
           }
-          
+
           .add-icon {
             color: #28a745;
             font-size: 18px;
           }
-          
+
           .add-icon:hover {
             background-color: rgba(40, 167, 69, 0.1);
             transform: scale(1.1);
           }
-          
+
           .dept-delete-icon {
             cursor: pointer;
             font-size: 16px;
             color: #dc3545;
+            width: 28px;
+            height: 28px;
+            border: 2px solid #dc3545;
+            background-color: white;
             padding: 4px 6px;
             border-radius: 4px;
             transition: all 0.2s ease;
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            z-index: 10;
           }
-          
+
           .dept-delete-icon:hover {
-            background-color: rgba(220, 53, 69, 0.1);
-            transform: scale(1.1);
+            background-color: #dc3545;
+            color: white;
+            transform: scale(1.05);
           }
           
-          .item-edit-icon, .item-delete-icon {
+          body.dark-mode .edit-icon,
+          body.dark-mode .dept-delete-icon {
+            background-color: #2d2d2d;
+          }
+          
+          body.dark-mode .edit-icon:hover {
+            background-color: #0d6efd;
+            border-color: #0d6efd;
+            color: white;
+          }
+          
+          body.dark-mode .dept-delete-icon:hover {
+            background-color: #dc3545;
+            border-color: #dc3545;
+            color: white;
+          }
+          
+          .item-edit-icon, .item-delete-icon, .item-copy-icon {
             position: absolute;
             top: 8px;
-            font-size: 14px;
-            padding: 4px 6px;
-            border-radius: 4px;
+            font-size: 18px;
+            width: 32px;
+            height: 32px;
+            border: 2px solid;
+            border-radius: 6px;
             cursor: pointer;
             transition: all 0.2s ease;
             display: none;
+            background-color: white;
+            z-index: 10;
           }
-          
-          .edit-mode .item-edit-icon, .edit-mode .item-delete-icon {
+
+          .edit-mode .item-edit-icon, .edit-mode .item-delete-icon, .edit-mode .item-copy-icon {
             display: inline-flex;
             align-items: center;
             justify-content: center;
           }
-          
+
           .item-edit-icon {
-            right: 30px;
+            right: 82px;
             color: #007bff;
+            border-color: #007bff;
           }
           
           .item-edit-icon:hover {
-            background-color: rgba(0, 123, 255, 0.1);
-            transform: scale(1.1);
+            background-color: #007bff;
+            color: white;
+            transform: scale(1.05);
+          }
+
+          .item-copy-icon {
+            right: 45px;
+            color: #28a745;
+            border-color: #28a745;
+          }
+          
+          .item-copy-icon:hover {
+            background-color: #28a745;
+            color: white;
+            transform: scale(1.05);
           }
           
           .item-delete-icon {
             right: 8px;
             color: #dc3545;
+            border-color: #dc3545;
           }
           
           .item-delete-icon:hover {
-            background-color: rgba(220, 53, 69, 0.1);
-            transform: scale(1.1);
+            background-color: #dc3545;
+            color: white;
+            transform: scale(1.05);
+          }
+
+          body.dark-mode .item-edit-icon,
+          body.dark-mode .item-delete-icon,
+          body.dark-mode .item-copy-icon {
+            background-color: #2d2d2d;
+          }
+
+          body.dark-mode .item-edit-icon:hover {
+            background-color: #0d6efd;
+            border-color: #0d6efd;
+          }
+
+          body.dark-mode .item-copy-icon:hover {
+            background-color: #28a745;
+            border-color: #28a745;
+          }
+
+          body.dark-mode .item-delete-icon:hover {
+            background-color: #dc3545;
+            border-color: #dc3545;
           }
           
           .add-serve-area-btn {
@@ -11869,6 +11991,23 @@ app.get('/replenishment-requests', async (req, res) => {
             text-align: center;
             transition: all 0.3s ease;
             position: relative;
+            display: flex;
+            flex-direction: column;
+            min-height: 200px;
+            cursor: pointer;
+          }
+          
+          .inventory-card:hover {
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            transform: translateY(-2px);
+          }
+          
+          .edit-mode .inventory-card {
+            padding-top: 50px;
+          }
+          
+          .edit-mode .inventory-card:hover {
+            transform: none;
           }
           
           .inventory-card.low-stock {
@@ -11919,17 +12058,25 @@ app.get('/replenishment-requests', async (req, res) => {
             font-size: 12px;
             margin-top: 10px;
           }
+
+          .inventory-last-updated {
+            color: #888;
+            font-size: 12px;
+            margin-top: 4px;
+          }
           
           .inventory-description {
             color: #888;
             font-size: 12px;
             margin-top: 8px;
+            margin-bottom: 8px;
             font-style: italic;
           }
           
           .edit-stock-button {
-            width: 100%;
-            margin-top: 10px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             padding: 8px 12px;
             background-color: #6f42c1;
             color: white;
@@ -11939,12 +12086,57 @@ app.get('/replenishment-requests', async (req, res) => {
             font-size: 13px;
             font-weight: 500;
             transition: background-color 0.3s ease;
+            flex: 1;
+            height: 37px;
+            box-sizing: border-box;
           }
-          
+
           .edit-stock-button:hover {
             background-color: #5a32a3;
           }
-          
+
+          .inventory-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: auto;
+            padding-top: 8px;
+            width: 100%;
+          }
+
+          .order-link-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 12px;
+            background-color: white;
+            color: #007bff !important;
+            text-decoration: none;
+            border: 2px solid #007bff;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            flex: 1;
+            height: 37px;
+            box-sizing: border-box;
+          }
+
+          .order-link-btn:hover {
+            background-color: #007bff;
+            color: white !important;
+          }
+
+          body.dark-mode .order-link-btn {
+            background-color: #3d3d3d;
+            color: white !important;
+            border-color: #0d6efd;
+          }
+
+          body.dark-mode .order-link-btn:hover {
+            background-color: #0d6efd;
+            color: white !important;
+          }
+
           /* Modal styles */
           .modal {
             display: none;
@@ -12186,9 +12378,12 @@ app.get('/replenishment-requests', async (req, res) => {
                         </div>
                         ${req.notes ? `<div class="detail-row"><span class="label">Notes:</span><span>${req.notes}</span></div>` : ''}
                       </div>
-                      <button class="status-button" onclick="updateStatus(${req.id}, 'ordered', '${req.item_name}')">
-                        Mark as Ordered ✓
-                      </button>
+                      <div class="request-button-row">
+                        <button class="status-button" onclick="updateStatus(${req.id}, 'ordered', '${req.item_name}')">
+                          Mark as Ordered ✓
+                        </button>
+                        ${req.url ? `<a href="${req.url}" target="_blank" class="order-link-btn-small">Order More</a>` : ''}
+                      </div>
                     </div>
                   `).join('') || '<p class="empty-state">No requested items</p>'}
                 </div>
@@ -12345,10 +12540,14 @@ app.get('/replenishment-requests', async (req, res) => {
                     <button class="add-item-btn" onclick="openAddItemModal(${dept.id}, '${dept.name.replace(/'/g, "\\'")}')">Add Item to ${dept.name}</button>
                   </div>
                   <div class="inventory-grid" id="${deptSlug}-grid">
-                    ${deptItems.map(item => `
-                      <div class="inventory-card ${item.needs_replenishment ? 'low-stock' : ''}" data-item-id="${item.id}" data-item-name="${item.name.replace(/"/g, '&quot;')}" data-item-desc="${(item.description || '').replace(/"/g, '&quot;')}" data-item-location="${(item.location || '').replace(/"/g, '&quot;')}" data-item-stock="${item.current_stock}" data-item-threshold="${item.min_threshold}" data-item-unit="${item.unit}">
-                        <span class="item-edit-icon" onclick="editItem(${item.id}, ${dept.id}, '${item.name.replace(/'/g, "\\'")}', '${(item.description || '').replace(/'/g, "\\'")}', '${(item.location || '').replace(/'/g, "\\'")}', ${item.current_stock}, ${item.min_threshold}, '${item.unit}')" title="Edit Item">✏️</span>
-                        <span class="item-delete-icon" onclick="deleteItem(${item.id}, '${item.name.replace(/'/g, "\\'")}')" title="Delete Item">🗑️</span>
+                    ${deptItems.map(item => {
+                      const lastUpdated = item.last_updated_stock || Date.now();
+                      const lastUpdatedDate = new Date(lastUpdated).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
+                      return `
+                      <div class="inventory-card ${item.needs_replenishment ? 'low-stock' : ''}" data-item-id="${item.id}" data-item-name="${item.name.replace(/"/g, '&quot;')}" data-item-desc="${(item.description || '').replace(/"/g, '&quot;')}" data-item-location="${(item.location || '').replace(/"/g, '&quot;')}" data-item-url="${(item.url || '').replace(/"/g, '&quot;')}" data-item-stock="${item.current_stock}" data-item-threshold="${item.min_threshold}" data-item-unit="${item.unit}" data-item-last-updated="${lastUpdated}" data-dept-id="${dept.id}" onclick="handleCardClick(event, ${item.id}, ${dept.id}, '${item.name.replace(/'/g, "\\'")}', '${item.unit}')">
+                        <span class="item-edit-icon" onclick="event.stopPropagation(); editItem(${item.id}, ${dept.id}, '${item.name.replace(/'/g, "\\'")}', '${(item.description || '').replace(/'/g, "\\'")}', '${(item.location || '').replace(/'/g, "\\'")}', '${(item.url || '').replace(/'/g, "\\'")}', ${item.current_stock}, ${item.min_threshold}, '${item.unit}', ${lastUpdated})" title="Edit Item">✏️</span>
+                        <span class="item-copy-icon" onclick="event.stopPropagation(); copyItem(${dept.id}, '${item.name.replace(/'/g, "\\'")}', '${(item.description || '').replace(/'/g, "\\'")}', '${(item.location || '').replace(/'/g, "\\'")}', '${(item.url || '').replace(/'/g, "\\'")}', ${item.current_stock}, ${item.min_threshold}, '${item.unit}', ${lastUpdated})" title="Copy Item">📑</span>
+                        <span class="item-delete-icon" onclick="event.stopPropagation(); deleteItem(${item.id}, '${item.name.replace(/'/g, "\\'")}')" title="Delete Item">🗑️</span>
                         <div class="inventory-header">
                           <strong>${item.name}</strong>
                           ${item.needs_replenishment ? '<span class="warning-badge">⚠️ Low</span>' : ''}
@@ -12360,13 +12559,17 @@ app.get('/replenishment-requests', async (req, res) => {
                         <div class="inventory-threshold">
                           Min: ${item.min_threshold} ${item.unit}
                         </div>
+                        <div class="inventory-last-updated">Last Updated: ${lastUpdatedDate}</div>
                         ${item.location ? `<div class="inventory-description">Location: ${item.location}</div>` : ''}
                         ${item.description ? `<div class="inventory-description">${item.description}</div>` : ''}
-                        <button class="edit-stock-button" onclick="editStock(${item.id}, '${item.name.replace(/'/g, "\\'")}', ${item.current_stock}, '${item.unit}')">
-                          Edit Stock
-                        </button>
+                        <div class="inventory-buttons">
+                          ${item.url ? `<a href="${item.url}" target="_blank" rel="noopener noreferrer" class="order-link-btn" title="Order Online" onclick="event.stopPropagation()">Order More</a>` : ''}
+                          <button class="edit-stock-button" onclick="event.stopPropagation(); editStock(${item.id}, '${item.name.replace(/'/g, "\\'")}', ${item.current_stock}, '${item.unit}')">
+                            Edit Stock
+                          </button>
+                        </div>
                       </div>
-                    `).join('')}
+                    `;}).join('')}
                   </div>
                 </div>
               `;
@@ -12550,6 +12753,10 @@ app.get('/replenishment-requests', async (req, res) => {
                   <input type="text" id="itemLocation" placeholder="e.g., Supply Closet A, Shelf 3">
                 </div>
                 <div class="form-group">
+                  <label for="itemUrl">Order URL</label>
+                  <input type="url" id="itemUrl" placeholder="e.g., https://www.amazon.com/...">
+                </div>
+                <div class="form-group">
                   <label for="itemCurrentStock">Current Stock *</label>
                   <input type="number" id="itemCurrentStock" min="0" required>
                 </div>
@@ -12561,11 +12768,27 @@ app.get('/replenishment-requests', async (req, res) => {
                   <label for="itemUnit">Unit *</label>
                   <input type="text" id="itemUnit" placeholder="e.g., units, boxes, cards" required>
                 </div>
+                <div class="form-group">
+                  <label for="itemLastUpdated">Last Updated (Stock Count Date)</label>
+                  <input type="date" id="itemLastUpdated">
+                </div>
                 <div class="modal-actions">
                   <button type="button" class="cancel-button" onclick="closeItemModal()">Cancel</button>
                   <button type="submit" class="submit-button">Save</button>
                 </div>
               </form>
+            </div>
+          </div>
+          
+          <!-- Confirmation Modal -->
+          <div id="confirmModal" class="modal">
+            <div class="modal-content" style="max-width: 400px;">
+              <h2 id="confirmModalTitle">Confirm Action</h2>
+              <p id="confirmModalMessage" style="margin: 20px 0; font-size: 16px;"></p>
+              <div class="modal-actions">
+                <button type="button" class="cancel-button" onclick="closeConfirmModal(false)">Cancel</button>
+                <button type="button" class="submit-button" onclick="closeConfirmModal(true)">Confirm</button>
+              </div>
             </div>
           </div>
         </div>
@@ -12574,6 +12797,24 @@ app.get('/replenishment-requests', async (req, res) => {
           // Define global functions first for onclick handlers
           let currentEditItemId = null;
           let pendingStatusUpdate = null;
+          let confirmModalResolver = null;
+          
+          function showConfirmModal(title, message) {
+            return new Promise((resolve) => {
+              confirmModalResolver = resolve;
+              document.getElementById('confirmModalTitle').textContent = title;
+              document.getElementById('confirmModalMessage').textContent = message;
+              document.getElementById('confirmModal').classList.add('show');
+            });
+          }
+          
+          function closeConfirmModal(confirmed) {
+            document.getElementById('confirmModal').classList.remove('show');
+            if (confirmModalResolver) {
+              confirmModalResolver(confirmed);
+              confirmModalResolver = null;
+            }
+          }
           
           function editStock(itemId, itemName, currentStock, unit) {
             currentEditItemId = itemId;
@@ -12588,15 +12829,56 @@ app.get('/replenishment-requests', async (req, res) => {
             currentEditItemId = null;
           }
           
-          function openNewRequestModal() {
+          function openNewRequestModal(prefilledDeptId = null, prefilledItemId = null) {
             // Turn off Edit Mode when creating a new request
             turnOffEditMode();
             
+            // Reset form first
+            document.getElementById('newRequestForm').reset();
+            document.getElementById('requestItem').disabled = true;
+            document.getElementById('requestItem').innerHTML = '<option value="">Select a department first...</option>';
+            
+            // If we have prefilled values, populate them
+            if (prefilledDeptId && prefilledItemId) {
+              document.getElementById('requestDepartment').value = prefilledDeptId;
+              
+              // Trigger department change to load items
+              const deptSelect = document.getElementById('requestDepartment');
+              const event = new Event('change');
+              deptSelect.dispatchEvent(event);
+              
+              // Wait a moment for items to load, then select the item
+              setTimeout(() => {
+                document.getElementById('requestItem').value = prefilledItemId;
+                // Focus on quantity field
+                document.getElementById('requestQuantity').focus();
+              }, 50);
+            } else {
+              // Focus on the first field
+              setTimeout(() => {
+                document.getElementById('requestDepartment').focus();
+              }, 100);
+            }
+            
             document.getElementById('newRequestModal').classList.add('show');
-            // Focus on the first field
-            setTimeout(() => {
-              document.getElementById('requestDepartment').focus();
-            }, 100);
+          }
+          
+          async function handleCardClick(event, itemId, deptId, itemName, itemUnit) {
+            // Don't open modal if we're in edit mode
+            const inventoryTab = document.getElementById('inventory-tab');
+            if (inventoryTab && inventoryTab.classList.contains('edit-mode')) {
+              return;
+            }
+
+            // Ask user if they want to create a request
+            const confirmed = await showConfirmModal(
+              'Create Request',
+              \`Would you like to create a new request for \${itemName}?\`
+            );
+            
+            if (confirmed) {
+              openNewRequestModal(deptId, itemId);
+            }
           }
           
           function closeNewRequestModal() {
@@ -12841,13 +13123,22 @@ app.get('/replenishment-requests', async (req, res) => {
             document.getElementById('itemName').value = '';
             document.getElementById('itemDescription').value = '';
             document.getElementById('itemLocation').value = '';
+            document.getElementById('itemUrl').value = '';
             document.getElementById('itemCurrentStock').value = '0';
             document.getElementById('itemMinThreshold').value = '10';
             document.getElementById('itemUnit').value = '';
+            
+            // Set last updated to today by default
+            const today = new Date();
+            const dateStr = today.getFullYear() + '-' + 
+                           String(today.getMonth() + 1).padStart(2, '0') + '-' + 
+                           String(today.getDate()).padStart(2, '0');
+            document.getElementById('itemLastUpdated').value = dateStr;
+            
             document.getElementById('itemModal').classList.add('show');
           }
           
-          function editItem(itemId, deptId, name, description, location, stock, threshold, unit) {
+          function editItem(itemId, deptId, name, description, location, url, stock, threshold, unit, lastUpdated) {
             currentItemId = itemId;
             currentItemDepartmentId = deptId;
             document.getElementById('itemModalTitle').textContent = 'Edit Item';
@@ -12856,12 +13147,45 @@ app.get('/replenishment-requests', async (req, res) => {
             document.getElementById('itemName').value = name;
             document.getElementById('itemDescription').value = description || '';
             document.getElementById('itemLocation').value = location || '';
+            document.getElementById('itemUrl').value = url || '';
             document.getElementById('itemCurrentStock').value = stock;
             document.getElementById('itemMinThreshold').value = threshold;
             document.getElementById('itemUnit').value = unit;
+            
+            // Set the last updated date field
+            const date = new Date(lastUpdated || Date.now());
+            const dateStr = date.getFullYear() + '-' + 
+                           String(date.getMonth() + 1).padStart(2, '0') + '-' + 
+                           String(date.getDate()).padStart(2, '0');
+            document.getElementById('itemLastUpdated').value = dateStr;
+            
             document.getElementById('itemModal').classList.add('show');
           }
-          
+
+          function copyItem(deptId, name, description, location, url, stock, threshold, unit, lastUpdated) {
+            currentItemId = null;
+            currentItemDepartmentId = deptId;
+            document.getElementById('itemModalTitle').textContent = 'Copy Item (New)';
+            document.getElementById('itemId').value = '';
+            document.getElementById('itemDepartmentId').value = deptId;
+            document.getElementById('itemName').value = name + ' (Copy)';
+            document.getElementById('itemDescription').value = description || '';
+            document.getElementById('itemLocation').value = location || '';
+            document.getElementById('itemUrl').value = url || '';
+            document.getElementById('itemCurrentStock').value = stock;
+            document.getElementById('itemMinThreshold').value = threshold;
+            document.getElementById('itemUnit').value = unit;
+            
+            // Set the last updated date field (copy the date too)
+            const date = new Date(lastUpdated || Date.now());
+            const dateStr = date.getFullYear() + '-' + 
+                           String(date.getMonth() + 1).padStart(2, '0') + '-' + 
+                           String(date.getDate()).padStart(2, '0');
+            document.getElementById('itemLastUpdated').value = dateStr;
+            
+            document.getElementById('itemModal').classList.add('show');
+          }
+
           function closeItemModal() {
             document.getElementById('itemModal').classList.remove('show');
             currentItemId = null;
@@ -12870,39 +13194,53 @@ app.get('/replenishment-requests', async (req, res) => {
           
           async function submitItemForm(event) {
             event.preventDefault();
-            
+
             const name = document.getElementById('itemName').value.trim();
             const description = document.getElementById('itemDescription').value.trim();
             const location = document.getElementById('itemLocation').value.trim();
+            const url = document.getElementById('itemUrl').value.trim();
             const currentStock = parseInt(document.getElementById('itemCurrentStock').value);
             const minThreshold = parseInt(document.getElementById('itemMinThreshold').value);
             const unit = document.getElementById('itemUnit').value.trim();
-            
+            const lastUpdatedStr = document.getElementById('itemLastUpdated').value;
+
             if (!name || isNaN(currentStock) || isNaN(minThreshold) || !unit) {
               await showAlert('Error', 'Please fill in all required fields');
               return;
             }
-            
+
             try {
-              const url = currentItemId 
+              const apiUrl = currentItemId
                 ? \`/api/replenishment/items/\${currentItemId}\`
                 : '/api/replenishment/items';
               const method = currentItemId ? 'PUT' : 'POST';
-              
+
+              // Convert date string to timestamp (parse as local date, not UTC)
+              let lastUpdatedTimestamp;
+              if (lastUpdatedStr) {
+                const [year, month, day] = lastUpdatedStr.split('-').map(Number);
+                const localDate = new Date(year, month - 1, day); // month is 0-indexed
+                lastUpdatedTimestamp = localDate.getTime();
+              } else {
+                lastUpdatedTimestamp = Date.now();
+              }
+
               const body = {
                 name,
                 description,
                 location,
+                url,
                 currentStock,
                 minThreshold,
-                unit
+                unit,
+                lastUpdatedStock: lastUpdatedTimestamp
               };
-              
+
               if (!currentItemId) {
                 body.departmentId = currentItemDepartmentId;
               }
-              
-              const response = await fetch(url, {
+
+              const response = await fetch(apiUrl, {
                 method: method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
@@ -13270,6 +13608,34 @@ app.get('/replenishment-requests', async (req, res) => {
             button.addEventListener('click', () => {
               const tabName = button.getAttribute('data-tab');
               activateTab(tabName);
+            });
+          });
+          
+          // Click outside modal to close functionality
+          const modals = document.querySelectorAll('.modal');
+          modals.forEach(modal => {
+            modal.addEventListener('click', function(event) {
+              // Only close if clicking directly on the modal backdrop (not on modal-content or its children)
+              if (event.target === modal) {
+                // Determine which modal was clicked and call its close function
+                const modalId = modal.id;
+                
+                if (modalId === 'newRequestModal') {
+                  closeNewRequestModal();
+                } else if (modalId === 'editStockModal') {
+                  closeEditModal();
+                } else if (modalId === 'nameInputModal') {
+                  closeNameModal();
+                } else if (modalId === 'serveAreaModal') {
+                  closeServeAreaModal();
+                } else if (modalId === 'itemModal') {
+                  closeItemModal();
+                } else if (modalId === 'deletionModal') {
+                  closeDeletionModal();
+                } else if (modalId === 'confirmModal') {
+                  closeConfirmModal(false);
+                }
+              }
             });
           });
           

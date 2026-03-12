@@ -1058,6 +1058,28 @@ export const replenishmentRequests = {
       } catch (error) {
         // Column already exists, ignore error
       }
+
+      // Add url column if it doesn't exist (for existing databases)
+      try {
+        db.exec(`ALTER TABLE replenishment_items ADD COLUMN url TEXT`);
+      } catch (error) {
+        // Column already exists, ignore error
+      }
+
+      // Add last_updated_stock column if it doesn't exist (for existing databases)
+      try {
+        db.exec(`ALTER TABLE replenishment_items ADD COLUMN last_updated_stock INTEGER`);
+      } catch (error) {
+        // Column already exists, ignore error
+      }
+
+      // Set default last_updated_stock to current time for existing items that don't have it
+      try {
+        const now = Date.now();
+        db.exec(`UPDATE replenishment_items SET last_updated_stock = ${now} WHERE last_updated_stock IS NULL`);
+      } catch (error) {
+        // Ignore error
+      }
       
       // Create requests table
       db.exec(`
@@ -1282,10 +1304,12 @@ export const replenishmentRequests = {
     name: string;
     description: string | null;
     location: string | null;
+    url: string | null;
     current_stock: number;
     min_threshold: number;
     unit: string;
     is_active: number;
+    last_updated_stock: number | null;
     needs_replenishment: boolean;
   }> => {
     try {
@@ -1298,10 +1322,12 @@ export const replenishmentRequests = {
           i.name, 
           i.description, 
           i.location,
+          i.url,
           i.current_stock, 
           i.min_threshold, 
           i.unit, 
-          i.is_active
+          i.is_active,
+          i.last_updated_stock
         FROM replenishment_items i
         JOIN replenishment_departments d ON i.department_id = d.id
         WHERE i.is_active = 1
@@ -1314,10 +1340,12 @@ export const replenishmentRequests = {
         name: string;
         description: string | null;
         location: string | null;
+        url: string | null;
         current_stock: number;
         min_threshold: number;
         unit: string;
         is_active: number;
+        last_updated_stock: number | null;
       }>;
       
       return items.map(item => ({
@@ -1424,11 +1452,11 @@ export const replenishmentRequests = {
       // If status is 'stocked', update the item's current_stock
       if (newStatus === 'stocked') {
         const updateStockStmt = db.prepare(`
-          UPDATE replenishment_items 
-          SET current_stock = current_stock + ?, updated_at = ?
+          UPDATE replenishment_items
+          SET current_stock = current_stock + ?, updated_at = ?, last_updated_stock = ?
           WHERE id = ?
         `);
-        updateStockStmt.run(current.quantity_requested, timestamp, current.item_id);
+        updateStockStmt.run(current.quantity_requested, timestamp, timestamp, current.item_id);
       }
     } catch (error) {
       console.error(`Error updating request status for request ${requestId}:`, error);
@@ -1446,6 +1474,7 @@ export const replenishmentRequests = {
     quantity_requested: number;
     current_stock: number;
     unit: string;
+    url: string | null;
     status: string;
     requested_by: string;
     requested_date: string;
@@ -1470,6 +1499,7 @@ export const replenishmentRequests = {
           r.quantity_requested,
           i.current_stock,
           i.unit,
+          i.url,
           r.status,
           r.requested_by,
           r.requested_date,
@@ -1495,6 +1525,7 @@ export const replenishmentRequests = {
         quantity_requested: number;
         current_stock: number;
         unit: string;
+        url: string | null;
         status: string;
         requested_by: string;
         requested_date: string;
@@ -1591,13 +1622,13 @@ export const replenishmentRequests = {
     try {
       const db = initializeDb();
       const timestamp = Date.now();
-      
+
       const stmt = db.prepare(`
-        UPDATE replenishment_items 
-        SET current_stock = ?, updated_at = ?
+        UPDATE replenishment_items
+        SET current_stock = ?, updated_at = ?, last_updated_stock = ?
         WHERE id = ?
       `);
-      stmt.run(newStock, timestamp, itemId);
+      stmt.run(newStock, timestamp, timestamp, itemId);
     } catch (error) {
       console.error(`Error updating stock for item ${itemId}:`, error);
       throw error;
@@ -1747,12 +1778,15 @@ export const replenishmentRequests = {
     name: string,
     description: string,
     location: string,
+    url: string,
     currentStock: number,
     minThreshold: number,
-    unit: string
+    unit: string,
+    lastUpdatedStock?: number
   ): number => {
     const db = initializeDb();
     const timestamp = Date.now();
+    const lastUpdated = lastUpdatedStock || timestamp;
     
     // Check if an inactive item with this name already exists in this department
     const checkStmt = db.prepare(`
@@ -1766,11 +1800,11 @@ export const replenishmentRequests = {
         // Reactivate the deleted item with new details
         const updateStmt = db.prepare(`
           UPDATE replenishment_items
-          SET description = ?, location = ?, current_stock = ?, min_threshold = ?, unit = ?, 
-              updated_at = ?, is_active = 1
+          SET description = ?, location = ?, url = ?, current_stock = ?, min_threshold = ?, unit = ?, 
+              updated_at = ?, last_updated_stock = ?, is_active = 1
           WHERE id = ?
         `);
-        updateStmt.run(description || null, location || null, currentStock, minThreshold, unit, timestamp, existing.id);
+        updateStmt.run(description || null, location || null, url || null, currentStock, minThreshold, unit, timestamp, lastUpdated, existing.id);
         return existing.id;
       } else {
         // Item already exists and is active - throw error with special marker
@@ -1782,9 +1816,9 @@ export const replenishmentRequests = {
     
     // Create new item
     const stmt = db.prepare(`
-      INSERT INTO replenishment_items 
-      (department_id, name, description, location, current_stock, min_threshold, unit, created_at, updated_at, is_active)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      INSERT INTO replenishment_items
+      (department_id, name, description, location, url, current_stock, min_threshold, unit, created_at, updated_at, last_updated_stock, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     `);
     
     const result = stmt.run(
@@ -1792,11 +1826,13 @@ export const replenishmentRequests = {
       name,
       description || null,
       location || null,
+      url || null,
       currentStock,
       minThreshold,
       unit,
       timestamp,
-      timestamp
+      timestamp,
+      lastUpdated
     );
     return result.lastInsertRowid as number;
   },
@@ -1807,17 +1843,20 @@ export const replenishmentRequests = {
     name: string,
     description: string,
     location: string,
+    url: string,
     currentStock: number,
     minThreshold: number,
-    unit: string
+    unit: string,
+    lastUpdatedStock?: number
   ): void => {
     try {
       const db = initializeDb();
       const timestamp = Date.now();
+      const lastUpdated = lastUpdatedStock || timestamp;
       
       const stmt = db.prepare(`
         UPDATE replenishment_items
-        SET name = ?, description = ?, location = ?, current_stock = ?, min_threshold = ?, unit = ?, updated_at = ?
+        SET name = ?, description = ?, location = ?, url = ?, current_stock = ?, min_threshold = ?, unit = ?, updated_at = ?, last_updated_stock = ?
         WHERE id = ?
       `);
       
@@ -1825,10 +1864,12 @@ export const replenishmentRequests = {
         name,
         description || null,
         location || null,
+        url || null,
         currentStock,
         minThreshold,
         unit,
         timestamp,
+        lastUpdated,
         itemId
       );
     } catch (error) {
