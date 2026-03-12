@@ -15,3 +15,4 @@ Add a url section of an item to paste links to order it
 Copy item button in Edit Mode to easily make a similar item
 Last edited time, to know how recently a stock has been updated
 add outlines around serve area edit/delete buttons
+add pagination to the History list
