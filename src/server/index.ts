@@ -13724,12 +13724,20 @@ app.get('/replenishment-requests', async (req, res) => {
           // Click outside modal to close functionality
           const modals = document.querySelectorAll('.modal');
           modals.forEach(modal => {
-            modal.addEventListener('click', function(event) {
-              // Only close if clicking directly on the modal backdrop (not on modal-content or its children)
-              if (event.target === modal) {
+            let mousedownTarget = null;
+            
+            // Track where mousedown happened
+            modal.addEventListener('mousedown', function(event) {
+              mousedownTarget = event.target;
+            });
+            
+            // Only close if both mousedown and mouseup happened on the backdrop
+            modal.addEventListener('mouseup', function(event) {
+              // Only close if both mousedown and mouseup were on the modal backdrop itself
+              if (event.target === modal && mousedownTarget === modal) {
                 // Determine which modal was clicked and call its close function
                 const modalId = modal.id;
-                
+
                 if (modalId === 'newRequestModal') {
                   closeNewRequestModal();
                 } else if (modalId === 'editStockModal') {
@@ -13746,6 +13754,8 @@ app.get('/replenishment-requests', async (req, res) => {
                   closeConfirmModal(false);
                 }
               }
+              // Reset the tracking variable
+              mousedownTarget = null;
             });
           });
           
