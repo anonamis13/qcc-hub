@@ -12436,7 +12436,7 @@ app.get('/replenishment-requests', async (req, res) => {
                         <button class="status-button" onclick="updateStatus(${req.id}, 'ordered', '${req.item_name}')">
                           Mark as Ordered ✓
                         </button>
-                        ${req.url ? `<a href="${req.url}" target="_blank" class="order-link-btn-small">Order More</a>` : ''}
+                        ${req.url ? `<a href="${req.url}" target="_blank" class="order-link-btn-small">Get More</a>` : ''}
                       </div>
                     </div>
                   `).join('') || '<p class="empty-state">No requested items</p>'}
@@ -12617,7 +12617,7 @@ app.get('/replenishment-requests', async (req, res) => {
                         ${item.location ? `<div class="inventory-description">Location: ${item.location}</div>` : ''}
                         ${item.description ? `<div class="inventory-description">${item.description}</div>` : ''}
                         <div class="inventory-buttons">
-                          ${item.url ? `<a href="${item.url}" target="_blank" rel="noopener noreferrer" class="order-link-btn" title="Order Online" onclick="event.stopPropagation()">Order More</a>` : ''}
+                          ${item.url ? `<a href="${item.url}" target="_blank" rel="noopener noreferrer" class="order-link-btn" title="Order Online" onclick="event.stopPropagation()">Get More</a>` : ''}
                           <button class="edit-stock-button" onclick="event.stopPropagation(); editStock(${item.id}, '${item.name.replace(/'/g, "\\'")}', ${item.current_stock}, '${item.unit}')">
                             Edit Stock
                           </button>
