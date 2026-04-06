@@ -11366,6 +11366,22 @@ app.get('/replenishment-requests', async (req, res) => {
           .low-stock-alert h3 {
             margin-top: 0;
             color: #856404;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+
+          .low-stock-collapse-icon {
+            font-size: 0.8em;
+            transition: transform 0.3s ease, color 0.3s ease;
+            color: #6c757d;
+          }
+
+          .low-stock-collapse-icon.collapsed {
+            transform: rotate(-90deg);
+            color: #ff9800;
           }
           
           .low-stock-items {
@@ -12379,8 +12395,11 @@ app.get('/replenishment-requests', async (req, res) => {
           
           ${lowStockItems.length > 0 ? `
           <div class="low-stock-alert">
-            <h3>⚠️ Low Stock Items (${lowStockItems.length})</h3>
-            <div class="low-stock-items">
+            <h3 onclick="toggleLowStockItems()">
+              <span>⚠️ Low Stock Items (${lowStockItems.length})</span>
+              <span class="low-stock-collapse-icon collapsed" id="low-stock-icon">▼</span>
+            </h3>
+            <div class="low-stock-items" id="low-stock-items" style="display: none;">
               ${lowStockItems.map(item => `
                 <div class="low-stock-item">
                   <strong>${item.department_name}</strong>: ${item.name} 
@@ -13443,6 +13462,20 @@ app.get('/replenishment-requests', async (req, res) => {
                 addItemSection.classList.add('section-collapsed');
               }
               localStorage.setItem('replenishment-inventory-' + sectionSlug, 'closed');
+            }
+          }
+
+          function toggleLowStockItems() {
+            const itemsElement = document.getElementById('low-stock-items');
+            const iconElement = document.getElementById('low-stock-icon');
+            if (!itemsElement || !iconElement) return;
+
+            if (itemsElement.style.display === 'none') {
+              itemsElement.style.display = 'grid';
+              iconElement.classList.remove('collapsed');
+            } else {
+              itemsElement.style.display = 'none';
+              iconElement.classList.add('collapsed');
             }
           }
           
