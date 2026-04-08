@@ -11,6 +11,9 @@ dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+const GROUP_ATTENDANCE_CONCURRENCY = Math.max(1, parseInt(process.env.PCO_GROUP_ATTENDANCE_CONCURRENCY || '2', 10) || 2);
+const SMTP_AUTH_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
+let lastSmtpAuthAlertAt = 0;
 
 // Middleware
 app.use(cors());
@@ -29,6 +32,29 @@ const formatDate = (dateString: string) => {
     year: 'numeric'
   });
 };
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) return [];
+
+  const safeConcurrency = Math.max(1, Math.min(concurrency, items.length));
+  const results = new Array<R>(items.length);
+  let currentIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const index = currentIndex++;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: safeConcurrency }, () => worker()));
+  return results;
+}
 
 // Routes
 app.get('/api/group-stats/:groupId', async (req, res) => {
@@ -247,8 +273,8 @@ app.get('/api/individual-group-attendance', async (req, res) => {
       return res.json([]);
     }
     
-    // Get attendance data for each selected group
-    const groupAttendancePromises = selectedGroups.map(async (group) => {
+    // Get attendance data for each selected group with a concurrency limit
+    const allGroupsAttendance = await mapWithConcurrency(selectedGroups, GROUP_ATTENDANCE_CONCURRENCY, async (group) => {
       const attendance = await getGroupAttendance(group.id, showAllEvents, forceRefresh);
       return {
         groupId: group.id,
@@ -256,8 +282,6 @@ app.get('/api/individual-group-attendance', async (req, res) => {
         ...attendance
       };
     });
-    
-    const allGroupsAttendance = await Promise.all(groupAttendancePromises);
     
     // Helper function to get Wednesday of the week for any given date
     const getWednesdayOfWeek = (date: Date) => {
@@ -469,15 +493,13 @@ app.get('/api/aggregate-attendance', async (req, res) => {
     // Get attendance data for each filtered group
     // For aggregate calculations, we need some historical data to find fallback membership counts
     // Use current year + previous year to capture November 2024 data for early 2025 weeks
-    const attendancePromises = filteredGroups.data.map(async (group) => {
+    const allGroupsAttendance = await mapWithConcurrency(filteredGroups.data, GROUP_ATTENDANCE_CONCURRENCY, async (group) => {
       const attendance = await getGroupAttendance(group.id, showAllEvents, forceRefresh);
       return {
         ...attendance,
         group_name: group.attributes.name
       };
     });
-    
-    const allGroupsAttendance = await Promise.all(attendancePromises);
     
     // For groups that are missing membership data in early weeks, fetch additional historical data
     // But keep it separate so it's only used for fallback membership, not for creating weeks
@@ -1415,6 +1437,26 @@ app.get('/api/dream-teams/test-notifications', async (req, res) => {
     });
   } catch (error) {
     console.error('Error testing notifications:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Admin endpoint: resend check-in notification emails
+// IMPORTANT: This must be defined BEFORE the :workflowId route
+app.post('/api/dream-teams/resend-checkin-emails', async (req, res) => {
+  try {
+    console.log('Admin triggered resend of Dream Team check-in notification emails');
+    const result = await sendCheckInNotifications();
+
+    res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('Error resending check-in emails:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
@@ -7589,6 +7631,23 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
         .refresh-button:hover {
           background-color: #0056b3;
         }
+        .admin-tools-button {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 16px;
+          background-color: #6f42c1;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          font-size: 14px;
+          cursor: pointer;
+          text-decoration: none;
+          transition: background-color 0.3s ease;
+        }
+        .admin-tools-button:hover {
+          background-color: #5a32a3;
+        }
         .refresh-button:disabled {
           background-color: #007bff !important;
           cursor: not-allowed;
@@ -7730,6 +7789,9 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
             <button id="refreshButton" class="refresh-button">
               <span>Refresh Data</span>
             </button>
+            <a href="/dream-teams/admin-tools" class="admin-tools-button">
+              <span>Admin Tools</span>
+            </a>
             <a href="/dream-teams" class="back-button">
               <span><strong>⟵</strong></span>
               <span>Back to Teams</span>
@@ -7919,6 +7981,254 @@ app.get('/dream-teams/pending-removals', async (req, res) => {
 
         // Load data on page load
         loadPendingRemovals();
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+// Dream Teams admin tools page
+// IMPORTANT: This must be defined BEFORE the :workflowId route
+app.get('/dream-teams/admin-tools', async (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>QCC Hub - DTHR - Admin Tools</title>
+      <link rel="icon" type="image/x-icon" href="https://www.queencitypeople.com/favicon.ico">
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          margin: 20px;
+          background-color: #f5f5f5;
+          transition: background-color 0.3s ease;
+        }
+        body.dark-mode {
+          background-color: #1a1a1a;
+          color: #ffffff;
+        }
+        body.dark-mode .container {
+          background-color: #2d2d2d;
+          color: #ffffff;
+        }
+        body.dark-mode .header {
+          border-bottom-color: #555;
+        }
+        body.dark-mode .header h1 {
+          color: #ffffff;
+        }
+        body.dark-mode .card {
+          background-color: #3d3d3d;
+          border-color: #555;
+        }
+        body.dark-mode .card h2 {
+          color: #ffffff;
+        }
+        body.dark-mode .card p {
+          color: #cccccc;
+        }
+        body.dark-mode .back-button {
+          background-color: #495057;
+          color: #ffffff;
+        }
+        body.dark-mode .back-button:hover {
+          background-color: #6c757d;
+        }
+        body.dark-mode .action-button {
+          background-color: #c82333;
+        }
+        body.dark-mode .action-button:hover {
+          background-color: #b21f2d;
+        }
+        
+        /* FOUC Prevention - Temporary loading styles */
+        html.dark-mode-loading {
+          background-color: #1a1a1a !important;
+        }
+        html.dark-mode-loading body {
+          background-color: #1a1a1a !important;
+          color: #ffffff !important;
+        }
+        html.dark-mode-loading .container {
+          background-color: #2d2d2d !important;
+          color: #ffffff !important;
+        }
+        html.dark-mode-loading h1 {
+          color: #ffffff !important;
+        }
+        body.dark-mode .result {
+          background-color: #0c3544;
+          border-color: #1d6f7e;
+          color: #b8daff;
+        }
+        body.dark-mode .error {
+          background-color: #721c24;
+          border-color: #a94442;
+          color: #f8d7da;
+        }
+        .container {
+          max-width: 900px;
+          margin: 0 auto;
+          padding: 20px;
+          background-color: white;
+          border-radius: 10px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 24px;
+          padding-bottom: 16px;
+          border-bottom: 2px solid #e9ecef;
+        }
+        .header h1 {
+          margin: 0;
+          font-size: 1.6em;
+          color: #333;
+        }
+        .back-button {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          background-color: #6c757d;
+          color: white;
+          border: none;
+          padding: 10px 16px;
+          border-radius: 4px;
+          text-decoration: none;
+          font-size: 14px;
+          transition: background-color 0.3s ease;
+        }
+        .back-button:hover {
+          background-color: #5a6268;
+        }
+        .card {
+          border: 1px solid #dee2e6;
+          border-radius: 8px;
+          padding: 20px;
+          background-color: #fff;
+        }
+        .card h2 {
+          margin-top: 0;
+          margin-bottom: 10px;
+          font-size: 1.2em;
+        }
+        .card p {
+          margin: 0 0 16px 0;
+          color: #666;
+        }
+        .action-button {
+          background-color: #dc3545;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          padding: 10px 16px;
+          font-size: 14px;
+          cursor: pointer;
+          transition: background-color 0.3s ease;
+        }
+        .action-button:hover {
+          background-color: #c82333;
+        }
+        .action-button:disabled {
+          cursor: not-allowed;
+          opacity: 0.7;
+        }
+        .result, .error {
+          margin-top: 16px;
+          padding: 12px;
+          border-radius: 6px;
+          border: 1px solid;
+          display: none;
+          white-space: pre-wrap;
+        }
+        .result {
+          background-color: #d1ecf1;
+          border-color: #bee5eb;
+          color: #0c5460;
+        }
+        .error {
+          background-color: #f8d7da;
+          border-color: #f5c6cb;
+          color: #721c24;
+        }
+      </style>
+      <script>
+        if (localStorage.getItem('darkMode') === 'true') {
+          document.documentElement.classList.add('dark-mode-loading');
+        }
+      </script>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>Admin Tools</h1>
+          <a href="/dream-teams/pending-removals" class="back-button">Back to Pending Removals</a>
+        </div>
+
+        <div class="card">
+          <h2>Resend Check-In Emails</h2>
+          <p>Re-run today's Dream Team check-in notification process to resend any emails that may have been missed.</p>
+          <button id="resendButton" class="action-button">Resend Check-In Emails</button>
+          <div id="resultMessage" class="result"></div>
+          <div id="errorMessage" class="error"></div>
+        </div>
+      </div>
+
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          document.documentElement.classList.remove('dark-mode-loading');
+          if (localStorage.getItem('darkMode') === 'true') {
+            document.body.classList.add('dark-mode');
+          }
+        });
+
+        const resendButton = document.getElementById('resendButton');
+        const resultMessage = document.getElementById('resultMessage');
+        const errorMessage = document.getElementById('errorMessage');
+
+        resendButton.addEventListener('click', async () => {
+          const confirmed = window.confirm('Confirm resend of check-in emails due today?');
+          if (!confirmed) return;
+
+          resendButton.disabled = true;
+          const originalText = resendButton.textContent;
+          resendButton.textContent = 'Resending...';
+          resultMessage.style.display = 'none';
+          errorMessage.style.display = 'none';
+
+          try {
+            const response = await fetch('/api/dream-teams/resend-checkin-emails', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            const result = await response.json();
+
+            if (!response.ok || !result.success) {
+              throw new Error(result.error || 'Failed to resend check-in emails');
+            }
+
+            const summary = [
+              'Check-in email resend completed.',
+              'Notifications sent: ' + (result.notificationsSent || 0),
+              'Check-ins due: ' + (result.checkInsDue || 0),
+              'Teams notified: ' + (result.teamsNotified || 0),
+              result.skipped ? ('Status: ' + result.skipped) : ''
+            ].filter(Boolean).join('\\n');
+
+            resultMessage.textContent = summary;
+            resultMessage.style.display = 'block';
+          } catch (error) {
+            errorMessage.textContent = error instanceof Error ? error.message : 'Unknown error';
+            errorMessage.style.display = 'block';
+          } finally {
+            resendButton.disabled = false;
+            resendButton.textContent = originalText;
+          }
+        });
       </script>
     </body>
     </html>
@@ -14839,6 +15149,74 @@ const createEmailTransporter = () => {
   });
 };
 
+const createAlertEmailTransporter = () => {
+  if (!process.env.ALERT_SMTP_HOST || !process.env.ALERT_SMTP_USER || !process.env.ALERT_SMTP_PASS) {
+    return null;
+  }
+
+  return nodemailer.createTransport({
+    host: process.env.ALERT_SMTP_HOST,
+    port: parseInt(process.env.ALERT_SMTP_PORT || '587'),
+    secure: process.env.ALERT_SMTP_SECURE === 'true',
+    auth: {
+      user: process.env.ALERT_SMTP_USER,
+      pass: process.env.ALERT_SMTP_PASS
+    }
+  });
+};
+
+const isSmtpAuthError = (error: any): boolean => {
+  return error?.code === 'EAUTH' || error?.responseCode === 535;
+};
+
+const sendSmtpAuthFailureAlert = async (stage: string, error: any) => {
+  const alertTo = process.env.ALERT_EMAIL_TO;
+  if (!alertTo) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastSmtpAuthAlertAt < SMTP_AUTH_ALERT_COOLDOWN_MS) {
+    return;
+  }
+
+  const alertTransporter = createAlertEmailTransporter();
+  if (!alertTransporter) {
+    console.warn('ALERT_EMAIL_TO is set, but ALERT_SMTP_* is not fully configured. Cannot send SMTP auth failure alert email.');
+    return;
+  }
+
+  const errorMessage = error?.message || String(error);
+  const responseCode = error?.responseCode || 'unknown';
+  const responseSnippet = (error?.response || 'N/A').toString().slice(0, 500);
+  const environmentName = process.env.RENDER_SERVICE_NAME || process.env.NODE_ENV || 'unknown';
+  const fromEmail = process.env.ALERT_EMAIL_FROM || process.env.ALERT_SMTP_USER;
+  const occurredAt = new Date().toISOString();
+
+  try {
+    await alertTransporter.sendMail({
+      from: fromEmail,
+      to: alertTo,
+      subject: `[QCC Hub] SMTP auth failure detected (${environmentName})`,
+      text: [
+        'QCC Hub detected an SMTP authentication failure while sending Dream Team check-in notifications.',
+        '',
+        `Time: ${occurredAt}`,
+        `Environment: ${environmentName}`,
+        `Stage: ${stage}`,
+        `Error message: ${errorMessage}`,
+        `Response code: ${responseCode}`,
+        `Response: ${responseSnippet}`
+      ].join('\n')
+    });
+
+    lastSmtpAuthAlertAt = now;
+    console.log(`Sent SMTP auth failure alert email to ${alertTo}`);
+  } catch (alertError: any) {
+    console.error('Failed to send SMTP auth failure alert email:', alertError?.message || alertError);
+  }
+};
+
 // Helper function to fetch email address for a person from PCO
 const fetchPersonEmail = async (personId: string, retries = 3): Promise<string | null> => {
   try {
@@ -14875,6 +15253,18 @@ async function sendCheckInNotifications() {
   if (!transporter) {
     console.log('Email notifications disabled - SMTP not configured');
     return { notificationsSent: 0, skipped: 'Email not configured' };
+  }
+
+  try {
+    await transporter.verify();
+  } catch (verifyError: any) {
+    if (isSmtpAuthError(verifyError)) {
+      console.error('SMTP authentication failed during check-in notifications. Skipping email sends until credentials are corrected.');
+      await sendSmtpAuthFailureAlert('transporter.verify', verifyError);
+      return { notificationsSent: 0, skipped: 'SMTP authentication failed' };
+    }
+    console.error('SMTP verification failed. Skipping check-in notification emails:', verifyError?.message || verifyError);
+    return { notificationsSent: 0, skipped: 'SMTP verification failed' };
   }
   
   const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
@@ -15179,8 +15569,15 @@ Next Steps Director</p>
         
         emailsSent++;
         console.log(`Sent check-in notification email to ${workflowName} leaders: ${leaderEmails.join(', ')}${process.env.SMTP_BCC ? ` (BCC: ${process.env.SMTP_BCC})` : ''}`);
-      } catch (emailError) {
-        console.error(`Failed to send email to ${workflowName} leaders:`, emailError);
+      } catch (emailError: any) {
+        if (isSmtpAuthError(emailError)) {
+          console.error(`SMTP auth failed while sending ${workflowName} notification. Stopping further email attempts.`);
+          await sendSmtpAuthFailureAlert(`sendMail (${workflowName})`, emailError);
+          break;
+        }
+
+        const emailErrorMessage = emailError?.message || String(emailError);
+        console.error(`Failed to send email to ${workflowName} leaders: ${emailErrorMessage}`);
       }
     }
     

@@ -5,6 +5,8 @@ import { cache } from './cache.js';
 dotenv.config();
 
 const PCO_BASE_URL = 'https://api.planningcenteronline.com';
+const PCO_ATTENDANCE_CONCURRENCY = Math.max(1, parseInt(process.env.PCO_ATTENDANCE_CONCURRENCY || '3', 10) || 3);
+const PCO_GROUP_METADATA_CONCURRENCY = Math.max(1, parseInt(process.env.PCO_GROUP_METADATA_CONCURRENCY || '5', 10) || 5);
 
 // Utility function to wait
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -36,6 +38,29 @@ async function retryWithBackoff<T>(
     
     return retryWithBackoff(fn, retries - 1, baseDelay);
   }
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) return [];
+
+  const safeConcurrency = Math.max(1, Math.min(concurrency, items.length));
+  const results = new Array<R>(items.length);
+  let currentIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const index = currentIndex++;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: safeConcurrency }, () => worker()));
+  return results;
 }
 
 interface PCOTag {
@@ -308,8 +333,10 @@ export const getPeopleGroups = async (groupTypeId?: number, forceRefresh: boolea
     
     if (!groupTypeId) {
       // Check each group for Family Group status and get tags
-      const groupsWithMetadata = await Promise.all(
-        allGroups.map(async (group) => {
+      const groupsWithMetadata = await mapWithConcurrency(
+        allGroups,
+        PCO_GROUP_METADATA_CONCURRENCY,
+        async (group) => {
           const [isFamilyGroupResult, tags] = await Promise.all([
             isFamilyGroup(group.id),
             getGroupTags(group.id, forceRefresh)
@@ -321,7 +348,7 @@ export const getPeopleGroups = async (groupTypeId?: number, forceRefresh: boolea
             tags: tags,
             metadata: extractGroupMetadata(tags)
           };
-        })
+        }
       );
       
       return { 
@@ -335,8 +362,10 @@ export const getPeopleGroups = async (groupTypeId?: number, forceRefresh: boolea
     );
     
     // Check each filtered group for Family Group status and get tags
-    const groupsWithMetadata = await Promise.all(
-      filteredGroups.map(async (group) => {
+    const groupsWithMetadata = await mapWithConcurrency(
+      filteredGroups,
+      PCO_GROUP_METADATA_CONCURRENCY,
+      async (group) => {
         const [isFamilyGroupResult, tags] = await Promise.all([
           isFamilyGroup(group.id),
           getGroupTags(group.id, forceRefresh)
@@ -348,7 +377,7 @@ export const getPeopleGroups = async (groupTypeId?: number, forceRefresh: boolea
           tags: tags,
           metadata: extractGroupMetadata(tags)
         };
-      })
+      }
     );
     
     return {
@@ -472,8 +501,8 @@ export const getGroupAttendance = async (groupId: string, showAllEvents: boolean
       const events = await getGroupEvents(groupId, showAllEvents, forceRefresh);
 
       
-      // Get attendance for each event
-      const attendancePromises = events.map(async (event) => {
+      // Get attendance for each event with a concurrency limit to avoid 429 storms and memory spikes
+      const attendanceData = await mapWithConcurrency(events, PCO_ATTENDANCE_CONCURRENCY, async (event) => {
         const attendance = await getEventAttendance(event.id, forceRefresh);
         
         // Count attendees using the total from meta and counting present from data
@@ -499,8 +528,6 @@ export const getGroupAttendance = async (groupId: string, showAllEvents: boolean
           }
         };
       });
-
-      const attendanceData = await Promise.all(attendancePromises);
       
       // Calculate overall statistics (only including events with attendance)
       const currentDate = new Date();
