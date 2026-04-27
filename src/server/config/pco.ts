@@ -615,11 +615,22 @@ export const getGroupAttendance = async (groupId: string, showAllEvents: boolean
   });
 };
 
-export const getGroup = async (groupId: string) => {
+export const getGroup = async (groupId: string, forceRefresh: boolean = false) => {
   const cacheKey = `group_${groupId}`;
-  const cachedGroup = cache.get<PCOGroup>(cacheKey);
-  if (cachedGroup) {
-    return cachedGroup;
+  if (!forceRefresh) {
+    // Prefer the same all_groups cache used by the main Life Groups page
+    // so detail pages and list pages show the same group name.
+    const cachedAllGroups = cache.get<PCOGroup[]>('all_groups');
+    const groupFromAllGroups = cachedAllGroups?.find(group => group.id === groupId);
+    if (groupFromAllGroups) {
+      cache.set(cacheKey, groupFromAllGroups);
+      return groupFromAllGroups;
+    }
+
+    const cachedGroup = cache.get<PCOGroup>(cacheKey);
+    if (cachedGroup) {
+      return cachedGroup;
+    }
   }
 
   return retryWithBackoff(async () => {
@@ -629,6 +640,16 @@ export const getGroup = async (groupId: string) => {
       
       // Cache the results
       cache.set(cacheKey, group);
+
+      // Keep all_groups cache in sync so list/detail names stay aligned.
+      const cachedAllGroups = cache.get<PCOGroup[]>('all_groups');
+      if (cachedAllGroups) {
+        const updatedAllGroups = cachedAllGroups.map(existingGroup =>
+          existingGroup.id === group.id ? group : existingGroup
+        );
+        cache.set('all_groups', updatedAllGroups);
+      }
+
       return group;
     } catch (error) {
       console.error('Error fetching group:', error);

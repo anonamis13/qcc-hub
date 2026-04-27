@@ -10935,12 +10935,47 @@ app.get('/api/replenishment/requests', async (req, res) => {
 // Create a new request
 app.post('/api/replenishment/requests', async (req, res) => {
   try {
-    const { itemId, departmentId, quantityRequested, requestedBy, notes } = req.body;
+    const { itemId, departmentId, quantityRequested, requestedByPersonId, requestedByName, orderContacts, notes } = req.body;
     
-    // Validate required fields
-    if (!itemId || !departmentId || !quantityRequested || !requestedBy) {
+    if (!itemId || !departmentId || !quantityRequested) {
       return res.status(400).json({ 
-        error: 'Missing required fields: itemId, departmentId, quantityRequested, requestedBy' 
+        error: 'Missing required fields: itemId, departmentId, quantityRequested' 
+      });
+    }
+    
+    if (
+      requestedByPersonId === undefined ||
+      requestedByPersonId === null ||
+      String(requestedByPersonId).trim() === '' ||
+      requestedByName === undefined ||
+      requestedByName === null ||
+      String(requestedByName).trim() === ''
+    ) {
+      return res.status(400).json({
+        error: 'Requester must be selected from Planning Center (your profile).'
+      });
+    }
+    
+    if (!Array.isArray(orderContacts) || orderContacts.length === 0) {
+      return res.status(400).json({
+        error: 'Add at least one person who should order or be notified about this request.'
+      });
+    }
+    
+    const normalizedContacts: Array<{ personId: string; personName: string }> = [];
+    const seenIds = new Set<string>();
+    for (const c of orderContacts) {
+      if (!c || typeof c !== 'object') continue;
+      const pid = String((c as { personId?: unknown }).personId ?? '').trim();
+      const pname = String((c as { personName?: unknown }).personName ?? '').trim();
+      if (!pid || !pname || seenIds.has(pid)) continue;
+      seenIds.add(pid);
+      normalizedContacts.push({ personId: pid, personName: pname });
+    }
+    
+    if (normalizedContacts.length === 0) {
+      return res.status(400).json({
+        error: 'Add at least one valid person who should order or be notified about this request.'
       });
     }
     
@@ -10948,9 +10983,29 @@ app.post('/api/replenishment/requests', async (req, res) => {
       parseInt(itemId),
       parseInt(departmentId),
       parseInt(quantityRequested),
-      requestedBy,
+      String(requestedByPersonId).trim(),
+      String(requestedByName).trim(),
+      normalizedContacts,
       notes
     );
+
+    // Best effort: send notification email(s) to the selected order contacts.
+    // Request creation should still succeed if email fails.
+    try {
+      const notificationResult = await sendReplenishmentRequestNotifications({
+        requestId,
+        itemId: parseInt(itemId),
+        departmentId: parseInt(departmentId),
+        quantityRequested: parseInt(quantityRequested),
+        requestedByPersonId: String(requestedByPersonId).trim(),
+        requestedByName: String(requestedByName).trim(),
+        orderContacts: normalizedContacts,
+        notes: typeof notes === 'string' ? notes : ''
+      });
+      console.log('Replenishment notification result:', notificationResult);
+    } catch (notificationError) {
+      console.error(`Non-fatal: failed to send replenishment notifications for request ${requestId}:`, notificationError);
+    }
     
     res.json({ 
       success: true, 
@@ -10967,7 +11022,7 @@ app.post('/api/replenishment/requests', async (req, res) => {
 app.post('/api/replenishment/requests/:requestId/status', async (req, res) => {
   try {
     const { requestId } = req.params;
-    const { status, changedBy, notes } = req.body;
+    const { status, changedBy, changedByPersonId, sendEmailNotification, notes } = req.body;
     
     // Validate required fields
     if (!status || !changedBy) {
@@ -10983,13 +11038,44 @@ app.post('/api/replenishment/requests/:requestId/status', async (req, res) => {
         error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
       });
     }
+
+    if ((status === 'ordered' || status === 'delivered' || status === 'stocked') && (!changedByPersonId || String(changedByPersonId).trim() === '')) {
+      return res.status(400).json({
+        error: 'Changed by user must be selected from Planning Center for ordered, delivered, and stocked updates.'
+      });
+    }
     
+    const requestIdNum = parseInt(requestId);
     replenishmentRequests.updateRequestStatus(
-      parseInt(requestId),
+      requestIdNum,
       status,
       changedBy,
       notes
     );
+
+    if ((status === 'ordered' || status === 'delivered') ? sendEmailNotification === true : status === 'stocked') {
+      try {
+        const requestData = replenishmentRequests.getAllRequests().find((r) => r.id === requestIdNum);
+        if (requestData) {
+          const result = await sendReplenishmentStatusNotifications({
+            requestId: requestData.id,
+            itemName: requestData.item_name,
+            departmentName: requestData.department_name,
+            quantityRequested: requestData.quantity_requested,
+            unit: requestData.unit,
+            requestedByName: requestData.requested_by,
+            requestedByPersonId: requestData.requested_by_person_id || null,
+            orderContacts: requestData.order_contact_people || [],
+            newStatus: status,
+            changedByName: String(changedBy).trim(),
+            currentStockTotal: requestData.current_stock
+          });
+          console.log(`Replenishment status notification result for request ${requestIdNum}:`, result);
+        }
+      } catch (notificationError) {
+        console.error(`Non-fatal: failed sending replenishment status notifications for request ${requestIdNum}:`, notificationError);
+      }
+    }
     
     res.json({ 
       success: true, 
@@ -12009,6 +12095,157 @@ app.get('/replenishment-requests', async (req, res) => {
             border-color: #6f42c1;
           }
           
+          #newRequestModal .person-search-wrapper,
+          #statusUpdateModal .person-search-wrapper {
+            position: relative;
+          }
+          
+          #newRequestModal .person-search-results,
+          #statusUpdateModal .person-search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 3000;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            display: none;
+          }
+          
+          body.dark-mode #newRequestModal .person-search-results,
+          body.dark-mode #statusUpdateModal .person-search-results {
+            background: #2d2d2d;
+            border-color: #555;
+          }
+          
+          #newRequestModal .person-search-results.visible,
+          #statusUpdateModal .person-search-results.visible {
+            display: block;
+          }
+          
+          #newRequestModal .person-search-result,
+          #statusUpdateModal .person-search-result {
+            padding: 8px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+          }
+          
+          body.dark-mode #newRequestModal .person-search-result,
+          body.dark-mode #statusUpdateModal .person-search-result {
+            border-bottom-color: #444;
+          }
+          
+          #newRequestModal .person-search-result:last-child,
+          #statusUpdateModal .person-search-result:last-child {
+            border-bottom: none;
+          }
+          
+          #newRequestModal .person-search-result:hover,
+          #statusUpdateModal .person-search-result:hover {
+            background-color: #f0f0f0;
+          }
+          
+          body.dark-mode #newRequestModal .person-search-result:hover,
+          body.dark-mode #statusUpdateModal .person-search-result:hover {
+            background-color: #3d3d3d;
+          }
+
+          #statusUpdateModal .status-email-row {
+            margin-top: 10px;
+          }
+
+          #statusUpdateModal .status-email-checkbox-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+            font-weight: 500;
+            cursor: pointer;
+          }
+
+          #statusUpdateModal .status-email-checkbox-label input[type="checkbox"] {
+            width: auto;
+            min-width: 16px;
+            height: 16px;
+            margin: 0;
+            padding: 0;
+            border-radius: 3px;
+            accent-color: #6f42c1;
+          }
+          
+          .order-contact-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 10px;
+            min-height: 8px;
+          }
+          
+          .order-contact-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #e9ecef;
+            padding: 4px 10px;
+            border-radius: 16px;
+            font-size: 13px;
+          }
+          
+          body.dark-mode .order-contact-chip {
+            background: #3d3d3d;
+            color: #eee;
+          }
+          
+          .order-contact-chip button {
+            background: none;
+            border: none;
+            color: #dc3545;
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            padding: 0 2px;
+          }
+          
+          .add-order-contact-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: flex-end;
+          }
+          
+          .add-order-contact-row .order-contact-search-wrap {
+            flex: 1;
+            min-width: 160px;
+          }
+          
+          .add-order-contact-btn {
+            padding: 10px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            white-space: nowrap;
+          }
+          
+          .add-order-contact-btn:hover {
+            background-color: #0056b3;
+          }
+          
+          .add-order-contact-btn:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+          }
+          
+          body.dark-mode .add-order-contact-btn:disabled {
+            background-color: #555;
+          }
+          
           .submit-button {
             width: 100%;
             padding: 12px 20px;
@@ -12756,6 +12993,10 @@ app.get('/replenishment-requests', async (req, res) => {
                           <span>${req.requested_by}</span>
                         </div>
                         <div class="detail-row">
+                          <span class="label">Who should order:</span>
+                          <span>${req.order_contact_people && req.order_contact_people.length ? req.order_contact_people.map((p: { personName: string }) => p.personName).join(', ') : '—'}</span>
+                        </div>
+                        <div class="detail-row">
                           <span class="label">Date:</span>
                           <span>${req.requested_date}</span>
                         </div>
@@ -12797,6 +13038,10 @@ app.get('/replenishment-requests', async (req, res) => {
                           <span>${req.ordered_by}</span>
                         </div>
                         <div class="detail-row">
+                          <span class="label">Who should order:</span>
+                          <span>${req.order_contact_people && req.order_contact_people.length ? req.order_contact_people.map((p: { personName: string }) => p.personName).join(', ') : '—'}</span>
+                        </div>
+                        <div class="detail-row">
                           <span class="label">Date:</span>
                           <span>${req.ordered_date}</span>
                         </div>
@@ -12832,6 +13077,10 @@ app.get('/replenishment-requests', async (req, res) => {
                         <div class="detail-row">
                           <span class="label">Delivered by:</span>
                           <span>${req.delivered_by}</span>
+                        </div>
+                        <div class="detail-row">
+                          <span class="label">Who should order:</span>
+                          <span>${req.order_contact_people && req.order_contact_people.length ? req.order_contact_people.map((p: { personName: string }) => p.personName).join(', ') : '—'}</span>
                         </div>
                         <div class="detail-row">
                           <span class="label">Date:</span>
@@ -12874,9 +13123,22 @@ app.get('/replenishment-requests', async (req, res) => {
                   <input type="number" id="requestQuantity" min="1" required>
                 </div>
                 
+                <div class="form-group person-search-wrapper">
+                  <label for="requesterSearchInput">Your Name *</label>
+                  <input type="text" id="requesterSearchInput" autocomplete="off" placeholder="Type a name, then pick your profile from the list">
+                  <div id="requesterSearchResults" class="person-search-results"></div>
+                </div>
+                
                 <div class="form-group">
-                  <label for="requestedBy">Your Name *</label>
-                  <input type="text" id="requestedBy" required placeholder="Enter your name">
+                  <label for="orderContactSearchInput">Who should order or be notified? *</label>
+                  <div id="orderContactChips" class="order-contact-chips"></div>
+                  <div class="add-order-contact-row">
+                    <div class="person-search-wrapper order-contact-search-wrap">
+                      <input type="text" id="orderContactSearchInput" autocomplete="off" placeholder="Type a name...">
+                      <div id="orderContactSearchResults" class="person-search-results"></div>
+                    </div>
+                    <button type="button" class="add-order-contact-btn" id="addOrderContactBtn" style="display: none;">Add another person</button>
+                  </div>
                 </div>
                 
                 <div class="form-group">
@@ -12984,6 +13246,10 @@ app.get('/replenishment-requests', async (req, res) => {
                       <span class="label">Requested by:</span>
                       <span>${req.requested_by} on ${req.requested_date}</span>
                     </div>
+                    <div class="detail-row">
+                      <span class="label">Who should order:</span>
+                      <span>${req.order_contact_people && req.order_contact_people.length ? req.order_contact_people.map((p: { personName: string }) => p.personName).join(', ') : '—'}</span>
+                    </div>
                     ${req.status === 'stocked' ? `
                       <div class="detail-row">
                         <span class="label">Completed by:</span>
@@ -13052,6 +13318,32 @@ app.get('/replenishment-requests', async (req, res) => {
                 <div class="modal-actions">
                   <button type="button" class="cancel-button" onclick="closeNameModal()">Cancel</button>
                   <button type="submit" class="submit-button">Continue</button>
+                </div>
+              </form>
+            </div>
+          </div>
+          
+          <!-- Status Update Modal (ordered/delivered) -->
+          <div id="statusUpdateModal" class="modal">
+            <div class="modal-content">
+              <span class="close-modal" onclick="closeStatusUpdateModal()">&times;</span>
+              <h2 id="statusUpdateModalTitle">Confirm Status Update</h2>
+              <p id="statusUpdateModalMessage" style="margin-bottom: 20px; color: #666;"></p>
+              <form id="statusUpdateForm">
+                <div class="form-group person-search-wrapper">
+                  <label for="statusChangedBySearchInput">Your Name *</label>
+                  <input type="text" id="statusChangedBySearchInput" autocomplete="off" placeholder="Type your name and select your PCO profile">
+                  <div id="statusChangedBySearchResults" class="person-search-results"></div>
+                </div>
+                <div class="form-group status-email-row" id="statusEmailRow">
+                  <label class="status-email-checkbox-label">
+                    <input type="checkbox" id="statusSendEmailCheckbox">
+                    <span>Send email notification?</span>
+                  </label>
+                </div>
+                <div class="modal-actions">
+                  <button type="button" class="cancel-button" onclick="closeStatusUpdateModal()">Cancel</button>
+                  <button type="submit" class="submit-button">Update Status</button>
                 </div>
               </form>
             </div>
@@ -13191,6 +13483,185 @@ app.get('/replenishment-requests', async (req, res) => {
           let historyCurrentPage = 1;
           let historyItemsPerPage = 50;
           let allHistoryCards = [];
+          
+          let replenishmentSelectedRequester = null;
+          let replenishmentOrderContacts = [];
+          let replenishmentRequesterSearchTimeout = null;
+          let replenishmentOrderContactSearchTimeout = null;
+          let statusModalSelectedPerson = null;
+          let statusModalSearchTimeout = null;
+          
+          function escapeHtmlReplenishment(text) {
+            const div = document.createElement('div');
+            div.textContent = text == null ? '' : String(text);
+            return div.innerHTML;
+          }
+          
+          function renderOrderContactChips() {
+            const el = document.getElementById('orderContactChips');
+            if (!el) return;
+            el.innerHTML = replenishmentOrderContacts.map(function(c) {
+              return '<span class="order-contact-chip"><span>' + escapeHtmlReplenishment(c.name) + '</span>' +
+                '<button type="button" class="order-contact-chip-remove" data-person-id="' + escapeHtmlReplenishment(c.id) + '" aria-label="Remove">✕</button></span>';
+            }).join('');
+          }
+          
+          function syncOrderContactAddAnotherButton() {
+            const addBtn = document.getElementById('addOrderContactBtn');
+            if (!addBtn) return;
+            addBtn.style.display = replenishmentOrderContacts.length >= 1 ? '' : 'none';
+          }
+          
+          function addOrderContactFromPicker(personId, personName) {
+            if (!personId || !personName) return;
+            if (replenishmentOrderContacts.some(function(c) { return c.id === personId; })) return;
+            replenishmentOrderContacts.push({ id: personId, name: personName });
+            const orderInput = document.getElementById('orderContactSearchInput');
+            const orderResults = document.getElementById('orderContactSearchResults');
+            if (orderInput) orderInput.value = '';
+            if (orderResults) {
+              orderResults.innerHTML = '';
+              orderResults.classList.remove('visible');
+            }
+            renderOrderContactChips();
+            syncOrderContactAddAnotherButton();
+          }
+          
+          function resetReplenishmentPcoFields() {
+            replenishmentSelectedRequester = null;
+            replenishmentOrderContacts = [];
+            const rs = document.getElementById('requesterSearchInput');
+            const os = document.getElementById('orderContactSearchInput');
+            const rr = document.getElementById('requesterSearchResults');
+            const or = document.getElementById('orderContactSearchResults');
+            if (rs) rs.value = '';
+            if (os) os.value = '';
+            if (rr) { rr.innerHTML = ''; rr.classList.remove('visible'); }
+            if (or) { or.innerHTML = ''; or.classList.remove('visible'); }
+            renderOrderContactChips();
+            syncOrderContactAddAnotherButton();
+          }
+          
+          function setupReplenishmentPcoSearch() {
+            const requesterInput = document.getElementById('requesterSearchInput');
+            const requesterResults = document.getElementById('requesterSearchResults');
+            const orderInput = document.getElementById('orderContactSearchInput');
+            const orderResults = document.getElementById('orderContactSearchResults');
+            const addBtn = document.getElementById('addOrderContactBtn');
+            const chipsEl = document.getElementById('orderContactChips');
+            if (!requesterInput || !requesterResults || !orderInput || !orderResults || !addBtn) return;
+            
+            requesterInput.addEventListener('input', function() {
+              const query = this.value.trim();
+              if (replenishmentRequesterSearchTimeout) clearTimeout(replenishmentRequesterSearchTimeout);
+              replenishmentSelectedRequester = null;
+              if (query.length < 2) {
+                requesterResults.innerHTML = '';
+                requesterResults.classList.remove('visible');
+                return;
+              }
+              replenishmentRequesterSearchTimeout = setTimeout(async function() {
+                try {
+                  const response = await fetch('/api/dream-teams/search-people?q=' + encodeURIComponent(query));
+                  const result = await response.json();
+                  if (result.success && result.data.length > 0) {
+                    requesterResults.innerHTML = result.data.map(function(person) {
+                      return '<div class="person-search-result" data-id="' + escapeHtmlReplenishment(person.id) + '" data-name="' + escapeHtmlReplenishment(person.name) + '">' +
+                        escapeHtmlReplenishment(person.name) + '</div>';
+                    }).join('');
+                    requesterResults.classList.add('visible');
+                    requesterResults.querySelectorAll('.person-search-result').forEach(function(el) {
+                      el.addEventListener('click', function() {
+                        replenishmentSelectedRequester = {
+                          id: this.getAttribute('data-id'),
+                          name: this.getAttribute('data-name')
+                        };
+                        requesterInput.value = replenishmentSelectedRequester.name;
+                        requesterResults.classList.remove('visible');
+                      });
+                    });
+                  } else {
+                    requesterResults.innerHTML = '<div class="person-search-result" style="color: #888; cursor: default;">No results found</div>';
+                    requesterResults.classList.add('visible');
+                  }
+                } catch (err) {
+                  console.error(err);
+                }
+              }, 300);
+            });
+            
+            orderInput.addEventListener('input', function() {
+              const query = this.value.trim();
+              if (replenishmentOrderContactSearchTimeout) clearTimeout(replenishmentOrderContactSearchTimeout);
+              if (query.length < 2) {
+                orderResults.innerHTML = '';
+                orderResults.classList.remove('visible');
+                return;
+              }
+              replenishmentOrderContactSearchTimeout = setTimeout(async function() {
+                try {
+                  const response = await fetch('/api/dream-teams/search-people?q=' + encodeURIComponent(query));
+                  const result = await response.json();
+                  if (result.success && result.data.length > 0) {
+                    orderResults.innerHTML = result.data.map(function(person) {
+                      return '<div class="person-search-result" data-id="' + escapeHtmlReplenishment(person.id) + '" data-name="' + escapeHtmlReplenishment(person.name) + '">' +
+                        escapeHtmlReplenishment(person.name) + '</div>';
+                    }).join('');
+                    orderResults.classList.add('visible');
+                    orderResults.querySelectorAll('.person-search-result').forEach(function(el) {
+                      el.addEventListener('click', function() {
+                        const pid = this.getAttribute('data-id');
+                        const pname = this.getAttribute('data-name');
+                        addOrderContactFromPicker(pid, pname);
+                      });
+                    });
+                  } else {
+                    orderResults.innerHTML = '<div class="person-search-result" style="color: #888; cursor: default;">No results found</div>';
+                    orderResults.classList.add('visible');
+                  }
+                } catch (err) {
+                  console.error(err);
+                }
+              }, 300);
+            });
+            
+            orderInput.addEventListener('keydown', function(e) {
+              if (e.key !== 'Enter') return;
+              e.preventDefault();
+              const pickable = orderResults.querySelectorAll('.person-search-result[data-id][data-name]');
+              if (pickable.length === 0) return;
+              const first = pickable[0];
+              addOrderContactFromPicker(first.getAttribute('data-id'), first.getAttribute('data-name'));
+            });
+            
+            addBtn.addEventListener('click', function() {
+              orderInput.focus();
+              orderInput.select();
+            });
+            
+            const orderSearchWrap = document.querySelector('#newRequestModal .order-contact-search-wrap');
+            document.addEventListener('click', function(e) {
+              const t = e.target;
+              if (!t) return;
+              if (!requesterInput.contains(t) && !requesterResults.contains(t)) {
+                requesterResults.classList.remove('visible');
+              }
+              if (orderSearchWrap && !orderSearchWrap.contains(t)) {
+                orderResults.classList.remove('visible');
+              }
+            });
+            
+            if (chipsEl) {
+              chipsEl.addEventListener('click', function(e) {
+                const btn = e.target.closest('.order-contact-chip-remove');
+                if (!btn) return;
+                const pid = btn.getAttribute('data-person-id');
+                replenishmentOrderContacts = replenishmentOrderContacts.filter(function(c) { return c.id !== pid; });
+                renderOrderContactChips();
+                syncOrderContactAddAnotherButton();
+              });
+            }
+          }
 
           function showConfirmModal(title, message) {
             return new Promise((resolve) => {
@@ -13228,6 +13699,7 @@ app.get('/replenishment-requests', async (req, res) => {
             
             // Reset form first
             document.getElementById('newRequestForm').reset();
+            resetReplenishmentPcoFields();
             document.getElementById('requestItem').disabled = true;
             document.getElementById('requestItem').innerHTML = '<option value="">Select a department first...</option>';
             
@@ -13278,6 +13750,7 @@ app.get('/replenishment-requests', async (req, res) => {
             document.getElementById('newRequestModal').classList.remove('show');
             // Reset form
             document.getElementById('newRequestForm').reset();
+            resetReplenishmentPcoFields();
             document.getElementById('requestItem').disabled = true;
             document.getElementById('requestItem').innerHTML = '<option value="">Select a department first...</option>';
           }
@@ -13306,6 +13779,106 @@ app.get('/replenishment-requests', async (req, res) => {
               window._nameModalReject('cancelled');
               window._nameModalResolve = null;
               window._nameModalReject = null;
+            }
+          }
+
+          function setupStatusUpdateModalSearch() {
+            const searchInput = document.getElementById('statusChangedBySearchInput');
+            const resultsEl = document.getElementById('statusChangedBySearchResults');
+            if (!searchInput || !resultsEl) return;
+
+            searchInput.addEventListener('input', function() {
+              const query = this.value.trim();
+              if (statusModalSearchTimeout) clearTimeout(statusModalSearchTimeout);
+              statusModalSelectedPerson = null;
+              if (query.length < 2) {
+                resultsEl.innerHTML = '';
+                resultsEl.classList.remove('visible');
+                return;
+              }
+
+              statusModalSearchTimeout = setTimeout(async function() {
+                try {
+                  const response = await fetch('/api/dream-teams/search-people?q=' + encodeURIComponent(query));
+                  const result = await response.json();
+
+                  if (result.success && result.data.length > 0) {
+                    resultsEl.innerHTML = result.data.map(function(person) {
+                      return '<div class="person-search-result" data-id="' + escapeHtmlReplenishment(person.id) + '" data-name="' + escapeHtmlReplenishment(person.name) + '">' +
+                        escapeHtmlReplenishment(person.name) + '</div>';
+                    }).join('');
+                    resultsEl.classList.add('visible');
+
+                    resultsEl.querySelectorAll('.person-search-result').forEach(function(el) {
+                      el.addEventListener('click', function() {
+                        statusModalSelectedPerson = {
+                          id: this.getAttribute('data-id'),
+                          name: this.getAttribute('data-name')
+                        };
+                        searchInput.value = statusModalSelectedPerson.name;
+                        resultsEl.classList.remove('visible');
+                      });
+                    });
+                  } else {
+                    resultsEl.innerHTML = '<div class="person-search-result" style="color: #888; cursor: default;">No results found</div>';
+                    resultsEl.classList.add('visible');
+                  }
+                } catch (error) {
+                  console.error('Status modal search error:', error);
+                }
+              }, 300);
+            });
+
+            document.addEventListener('click', function(e) {
+              const t = e.target;
+              if (!t) return;
+              if (!searchInput.contains(t) && !resultsEl.contains(t)) {
+                resultsEl.classList.remove('visible');
+              }
+            });
+          }
+
+          function openStatusUpdateModal(newStatus, itemName) {
+            return new Promise((resolve, reject) => {
+              statusModalSelectedPerson = null;
+              const titleEl = document.getElementById('statusUpdateModalTitle');
+              const msgEl = document.getElementById('statusUpdateModalMessage');
+              const searchInput = document.getElementById('statusChangedBySearchInput');
+              const resultsEl = document.getElementById('statusChangedBySearchResults');
+              const checkbox = document.getElementById('statusSendEmailCheckbox');
+              const emailRow = document.getElementById('statusEmailRow');
+              const modal = document.getElementById('statusUpdateModal');
+
+              titleEl.textContent = 'Confirm Status Update';
+              msgEl.textContent = 'Select your Planning Center profile to mark "' + itemName + '" as ' + newStatus + '.';
+              searchInput.value = '';
+              resultsEl.innerHTML = '';
+              resultsEl.classList.remove('visible');
+              checkbox.checked = false;
+              if (newStatus === 'stocked') {
+                emailRow.style.display = 'none';
+              } else {
+                emailRow.style.display = '';
+              }
+              modal.classList.add('show');
+
+              setTimeout(() => {
+                searchInput.focus();
+              }, 100);
+
+              window._statusModalResolve = resolve;
+              window._statusModalReject = reject;
+            });
+          }
+
+          function closeStatusUpdateModal() {
+            const modal = document.getElementById('statusUpdateModal');
+            if (modal) modal.classList.remove('show');
+            statusModalSelectedPerson = null;
+            if (window._statusModalReject) {
+              window._statusModalReject('cancelled');
+              window._statusModalResolve = null;
+              window._statusModalReject = null;
             }
           }
           
@@ -13961,10 +14534,22 @@ app.get('/replenishment-requests', async (req, res) => {
           
           async function updateStatus(requestId, newStatus, itemName) {
             try {
-              const userName = await openNameModal(
-                'Confirm Status Update',
-                \`Enter your name to mark "\${itemName}" as \${newStatus}:\`
-              );
+              let changedBy = '';
+              let changedByPersonId = null;
+              let sendEmailNotification = false;
+              
+              if (newStatus === 'ordered' || newStatus === 'delivered' || newStatus === 'stocked') {
+                const statusUpdateData = await openStatusUpdateModal(newStatus, itemName);
+                changedBy = statusUpdateData.changedByName;
+                changedByPersonId = statusUpdateData.changedByPersonId;
+                sendEmailNotification = newStatus === 'stocked' ? true : statusUpdateData.sendEmailNotification;
+              } else {
+                const userName = await openNameModal(
+                  'Confirm Status Update',
+                  \`Enter your name to mark "\${itemName}" as \${newStatus}:\`
+                );
+                changedBy = userName;
+              }
               
               const response = await fetch(\`/api/replenishment/requests/\${requestId}/status\`, {
                 method: 'POST',
@@ -13973,7 +14558,9 @@ app.get('/replenishment-requests', async (req, res) => {
                 },
                 body: JSON.stringify({
                   status: newStatus,
-                  changedBy: userName
+                  changedBy: changedBy,
+                  changedByPersonId: changedByPersonId,
+                  sendEmailNotification: sendEmailNotification
                 })
               });
               
@@ -14087,6 +14674,8 @@ app.get('/replenishment-requests', async (req, res) => {
                   closeEditModal();
                 } else if (modalId === 'nameInputModal') {
                   closeNameModal();
+                } else if (modalId === 'statusUpdateModal') {
+                  closeStatusUpdateModal();
                 } else if (modalId === 'serveAreaModal') {
                   closeServeAreaModal();
                 } else if (modalId === 'itemModal') {
@@ -14132,11 +14721,24 @@ app.get('/replenishment-requests', async (req, res) => {
           newRequestForm.addEventListener('submit', async function(e) {
             e.preventDefault();
             
+            if (!replenishmentSelectedRequester) {
+              await showAlert('Planning Center profile required', 'Type your name, then select your profile from the list.');
+              return;
+            }
+            if (replenishmentOrderContacts.length === 0) {
+              await showAlert('Who should order?', 'Add at least one person who should order or be notified (search and pick a name, or press Enter on a match).');
+              return;
+            }
+            
             const formData = {
               itemId: parseInt(document.getElementById('requestItem').value),
               departmentId: parseInt(document.getElementById('requestDepartment').value),
               quantityRequested: parseInt(document.getElementById('requestQuantity').value),
-              requestedBy: document.getElementById('requestedBy').value,
+              requestedByPersonId: replenishmentSelectedRequester.id,
+              requestedByName: replenishmentSelectedRequester.name,
+              orderContacts: replenishmentOrderContacts.map(function(c) {
+                return { personId: c.id, personName: c.name };
+              }),
               notes: document.getElementById('requestNotes').value
             };
             
@@ -14216,6 +14818,24 @@ app.get('/replenishment-requests', async (req, res) => {
               document.getElementById('nameInputModal').classList.remove('show');
             }
           });
+
+          const statusUpdateForm = document.getElementById('statusUpdateForm');
+          statusUpdateForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (!statusModalSelectedPerson || !window._statusModalResolve) {
+              showAlert('Planning Center profile required', 'Select your name from Planning Center before updating status.');
+              return;
+            }
+            const shouldSend = !!document.getElementById('statusSendEmailCheckbox').checked;
+            window._statusModalResolve({
+              changedByPersonId: statusModalSelectedPerson.id,
+              changedByName: statusModalSelectedPerson.name,
+              sendEmailNotification: shouldSend
+            });
+            window._statusModalResolve = null;
+            window._statusModalReject = null;
+            document.getElementById('statusUpdateModal').classList.remove('show');
+          });
           
           // Handle deletion reason form submission
           const deletionReasonForm = document.getElementById('deletionReasonForm');
@@ -14264,6 +14884,7 @@ app.get('/replenishment-requests', async (req, res) => {
           addModalClickOutsideHandler(document.getElementById('newRequestModal'), closeNewRequestModal);
           addModalClickOutsideHandler(document.getElementById('editStockModal'), closeEditModal);
           addModalClickOutsideHandler(document.getElementById('nameInputModal'), closeNameModal);
+          addModalClickOutsideHandler(document.getElementById('statusUpdateModal'), closeStatusUpdateModal);
           addModalClickOutsideHandler(document.getElementById('deletionReasonModal'), closeDeletionModal);
           addModalClickOutsideHandler(document.getElementById('confirmationModal'), closeConfirmationModal);
           addModalClickOutsideHandler(document.getElementById('alertModal'), closeAlertModal);
@@ -14274,11 +14895,14 @@ app.get('/replenishment-requests', async (req, res) => {
           window.addEventListener('click', function(event) {
             const editModal = document.getElementById('editStockModal');
             const nameModal = document.getElementById('nameInputModal');
+            const statusUpdateModal = document.getElementById('statusUpdateModal');
             
             if (event.target === editModal) {
               closeEditModal();
             } else if (event.target === nameModal) {
               closeNameModal();
+            } else if (event.target === statusUpdateModal) {
+              closeStatusUpdateModal();
             }
           });
           
@@ -14287,14 +14911,20 @@ app.get('/replenishment-requests', async (req, res) => {
             if (event.key === 'Escape') {
               const editModal = document.getElementById('editStockModal');
               const nameModal = document.getElementById('nameInputModal');
+              const statusUpdateModal = document.getElementById('statusUpdateModal');
               
               if (editModal.classList.contains('show')) {
                 closeEditModal();
               } else if (nameModal.classList.contains('show')) {
                 closeNameModal();
+              } else if (statusUpdateModal.classList.contains('show')) {
+                closeStatusUpdateModal();
               }
             }
           });
+          
+          setupReplenishmentPcoSearch();
+          setupStatusUpdateModalSearch();
           
           // Restore collapse states on page load
           restoreCollapseStates();
@@ -14325,7 +14955,7 @@ app.get('/life-groups/groups/:groupId/attendance', async (req, res) => {
 
     
     const [group, attendanceData] = await Promise.all([
-      getGroup(groupId),
+      getGroup(groupId, forceRefresh),
       getGroupAttendance(groupId, showAllEvents, forceRefresh)
     ]);
     
@@ -15244,6 +15874,286 @@ const fetchPersonEmail = async (personId: string, retries = 3): Promise<string |
     return null;
   }
 };
+
+interface ReplenishmentNotificationPayload {
+  requestId: number;
+  itemId: number;
+  departmentId: number;
+  quantityRequested: number;
+  requestedByPersonId: string;
+  requestedByName: string;
+  orderContacts: Array<{ personId: string; personName: string }>;
+  notes?: string;
+}
+
+const escapeHtml = (value: string): string => {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
+async function sendReplenishmentRequestNotifications(payload: ReplenishmentNotificationPayload) {
+  if (process.env.REPLENISHMENT_EMAIL_FLAG === 'false') {
+    return { notificationsSent: 0, skipped: 'Replenishment notifications disabled' };
+  }
+
+  const transporter = createEmailTransporter();
+  if (!transporter) {
+    return { notificationsSent: 0, skipped: 'Email not configured' };
+  }
+
+  try {
+    await transporter.verify();
+  } catch (verifyError: any) {
+    if (isSmtpAuthError(verifyError)) {
+      await sendSmtpAuthFailureAlert('replenishment.transporter.verify', verifyError);
+      return { notificationsSent: 0, skipped: 'SMTP authentication failed' };
+    }
+    console.error('SMTP verification failed for replenishment notifications:', verifyError?.message || verifyError);
+    return { notificationsSent: 0, skipped: 'SMTP verification failed' };
+  }
+
+  const allItems = replenishmentRequests.getAllItems();
+  const item = allItems.find((i) => i.id === payload.itemId && i.department_id === payload.departmentId);
+  const itemName = item?.name || `Item #${payload.itemId}`;
+  const departmentName = item?.department_name || `Serve Area #${payload.departmentId}`;
+  const unit = item?.unit || 'units';
+  const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const appBaseUrl = (process.env.BASE_URL || process.env.APP_URL || '').trim();
+  const replenishmentPath = '/replenishment-requests';
+  const replenishmentUrl = appBaseUrl
+    ? `${appBaseUrl.replace(/\/+$/, '')}${replenishmentPath}`
+    : replenishmentPath;
+
+  const recipientsSource = [...payload.orderContacts];
+  if (!recipientsSource.some((c) => c.personId === payload.requestedByPersonId)) {
+    recipientsSource.push({
+      personId: payload.requestedByPersonId,
+      personName: payload.requestedByName
+    });
+  }
+
+  const recipients = await mapWithConcurrency(recipientsSource, 2, async (contact) => {
+    const email = await fetchPersonEmail(contact.personId);
+    return {
+      personId: contact.personId,
+      personName: contact.personName,
+      email
+    };
+  });
+
+  const dedupedByEmail = new Map<string, { personName: string; email: string }>();
+  for (const recipient of recipients) {
+    if (!recipient.email) continue;
+    const emailKey = recipient.email.toLowerCase();
+    if (!dedupedByEmail.has(emailKey)) {
+      dedupedByEmail.set(emailKey, {
+        personName: recipient.personName,
+        email: recipient.email
+      });
+    }
+  }
+  const validRecipients = Array.from(dedupedByEmail.values());
+  if (validRecipients.length === 0) {
+    console.log(`No valid recipient emails for replenishment request ${payload.requestId}`);
+    return { notificationsSent: 0, skipped: 'No recipient emails found' };
+  }
+
+  const to = validRecipients.map((r) => r.email).join(', ');
+  const recipientNames = validRecipients.map((r) => r.personName).join(', ');
+  const notesText = payload.notes?.trim() ? payload.notes.trim() : 'None';
+
+  const subject = `[QCC Hub] New Replenishment Request - ${itemName}`;
+  const text = [
+    'A new Replenishment Request has been submitted for you in QCC Hub.',
+    '',
+    `Item: ${itemName}`,
+    `Serve Area: ${departmentName}`,
+    `Quantity: ${payload.quantityRequested} ${unit}`,
+    `Requested by: ${payload.requestedByName}`,
+    `Notified contacts: ${recipientNames}`,
+    `Notes: ${notesText}`,
+    '',
+    'Here is the Link to the Replenishment Requests: ${replenishmentUrl}',
+    replenishmentUrl
+  ].join('\n');
+
+  const html = `
+    <p>A new Replenishment Request has been submitted for you in <strong>QCC Hub</strong>.</p>
+    <ul>
+      <li><strong>Item:</strong> ${escapeHtml(itemName)}</li>
+      <li><strong>Serve Area:</strong> ${escapeHtml(departmentName)}</li>
+      <li><strong>Quantity:</strong> ${payload.quantityRequested} ${escapeHtml(unit)}</li>
+      <li><strong>Requested by:</strong> ${escapeHtml(payload.requestedByName)}</li>
+      <li><strong>Notified contacts:</strong> ${escapeHtml(recipientNames)}</li>
+      <li><strong>Notes:</strong> ${escapeHtml(notesText)}</li>
+    </ul>
+    <p>Here's the Link to the <a href="${escapeHtml(replenishmentUrl)}">Replenishment Requests</a></p>
+  `;
+
+  try {
+    await transporter.sendMail({
+      from: fromEmail,
+      to,
+      subject,
+      text,
+      html
+    });
+    console.log(`Replenishment request notification sent for request ${payload.requestId} to ${to}`);
+    return { notificationsSent: validRecipients.length };
+  } catch (sendError: any) {
+    if (isSmtpAuthError(sendError)) {
+      await sendSmtpAuthFailureAlert('replenishment.sendMail', sendError);
+      return { notificationsSent: 0, skipped: 'SMTP authentication failed while sending' };
+    }
+    console.error(`Failed to send replenishment notification for request ${payload.requestId}:`, sendError?.message || sendError);
+    return { notificationsSent: 0, skipped: 'Send failed' };
+  }
+}
+
+interface ReplenishmentStatusNotificationPayload {
+  requestId: number;
+  itemName: string;
+  departmentName: string;
+  quantityRequested: number;
+  unit: string;
+  requestedByName: string;
+  requestedByPersonId: string | null;
+  orderContacts: Array<{ personId: string; personName: string }>;
+  newStatus: 'ordered' | 'delivered' | 'stocked';
+  changedByName: string;
+  currentStockTotal?: number | null;
+}
+
+async function sendReplenishmentStatusNotifications(payload: ReplenishmentStatusNotificationPayload) {
+  if (process.env.REPLENISHMENT_EMAIL_FLAG === 'false') {
+    return { notificationsSent: 0, skipped: 'Replenishment notifications disabled' };
+  }
+
+  const transporter = createEmailTransporter();
+  if (!transporter) {
+    return { notificationsSent: 0, skipped: 'Email not configured' };
+  }
+
+  try {
+    await transporter.verify();
+  } catch (verifyError: any) {
+    if (isSmtpAuthError(verifyError)) {
+      await sendSmtpAuthFailureAlert('replenishment.status.transporter.verify', verifyError);
+      return { notificationsSent: 0, skipped: 'SMTP authentication failed' };
+    }
+    console.error('SMTP verification failed for replenishment status notifications:', verifyError?.message || verifyError);
+    return { notificationsSent: 0, skipped: 'SMTP verification failed' };
+  }
+
+  const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const appBaseUrl = (process.env.BASE_URL || process.env.APP_URL || '').trim();
+  const replenishmentPath = '/replenishment-requests';
+  const replenishmentUrl = appBaseUrl
+    ? `${appBaseUrl.replace(/\/+$/, '')}${replenishmentPath}`
+    : replenishmentPath;
+
+  const recipientsSource = [...payload.orderContacts];
+  if (payload.requestedByPersonId && !recipientsSource.some((c) => c.personId === payload.requestedByPersonId)) {
+    recipientsSource.push({
+      personId: payload.requestedByPersonId,
+      personName: payload.requestedByName
+    });
+  }
+
+  const recipients = await mapWithConcurrency(recipientsSource, 2, async (contact) => {
+    const email = await fetchPersonEmail(contact.personId);
+    return { personName: contact.personName, email };
+  });
+
+  const dedupedByEmail = new Map<string, { personName: string; email: string }>();
+  for (const recipient of recipients) {
+    if (!recipient.email) continue;
+    const emailKey = recipient.email.toLowerCase();
+    if (!dedupedByEmail.has(emailKey)) {
+      dedupedByEmail.set(emailKey, {
+        personName: recipient.personName,
+        email: recipient.email
+      });
+    }
+  }
+  const validRecipients = Array.from(dedupedByEmail.values());
+  if (validRecipients.length === 0) {
+    console.log(`No valid recipient emails for replenishment status update ${payload.requestId}`);
+    return { notificationsSent: 0, skipped: 'No recipient emails found' };
+  }
+
+  const to = validRecipients.map((r) => r.email).join(', ');
+  const recipientNames = validRecipients.map((r) => r.personName).join(', ');
+  const humanStatus =
+    payload.newStatus === 'ordered'
+      ? 'Ordered'
+      : payload.newStatus === 'delivered'
+        ? 'Delivered'
+        : 'Stocked';
+  const stockedLine =
+    payload.newStatus === 'stocked' && typeof payload.currentStockTotal === 'number'
+      ? `New stock total: ${payload.currentStockTotal} ${payload.unit}`
+      : null;
+  const introLine =
+    payload.newStatus === 'stocked'
+      ? 'A replenishment request has been fully stocked in QCC Hub.'
+      : 'A replenishment request status has been updated in QCC Hub.';
+
+  const subject = `[QCC Hub] Replenishment Request ${humanStatus} - ${payload.itemName}`;
+  const text = [
+    introLine,
+    '',
+    `New status: ${humanStatus}`,
+    `Item: ${payload.itemName}`,
+    `Serve Area: ${payload.departmentName}`,
+    `Quantity: ${payload.quantityRequested} ${payload.unit}`,
+    ...(stockedLine ? [stockedLine] : []),
+    `Originally requested by: ${payload.requestedByName}`,
+    `Updated by: ${payload.changedByName}`,
+    `Notified contacts: ${recipientNames}`,
+    '',
+    'Here is the link to the Replenishment Requests:',
+    replenishmentUrl
+  ].join('\n');
+
+  const html = `
+    <p>${escapeHtml(introLine)}</p>
+    <ul>
+      <li><strong>New status:</strong> ${escapeHtml(humanStatus)}</li>
+      <li><strong>Item:</strong> ${escapeHtml(payload.itemName)}</li>
+      <li><strong>Serve Area:</strong> ${escapeHtml(payload.departmentName)}</li>
+      <li><strong>Quantity:</strong> ${payload.quantityRequested} ${escapeHtml(payload.unit)}</li>
+      ${stockedLine ? `<li><strong>New stock total:</strong> ${payload.currentStockTotal} ${escapeHtml(payload.unit)}</li>` : ''}
+      <li><strong>Originally requested by:</strong> ${escapeHtml(payload.requestedByName)}</li>
+      <li><strong>Updated by:</strong> ${escapeHtml(payload.changedByName)}</li>
+      <li><strong>Notified contacts:</strong> ${escapeHtml(recipientNames)}</li>
+    </ul>
+    <p>Here's the Link to the <a href="${escapeHtml(replenishmentUrl)}">Replenishment Requests</a></p>
+  `;
+
+  try {
+    await transporter.sendMail({
+      from: fromEmail,
+      to,
+      subject,
+      text,
+      html
+    });
+    console.log(`Replenishment status notification sent for request ${payload.requestId} to ${to}`);
+    return { notificationsSent: validRecipients.length };
+  } catch (sendError: any) {
+    if (isSmtpAuthError(sendError)) {
+      await sendSmtpAuthFailureAlert('replenishment.status.sendMail', sendError);
+      return { notificationsSent: 0, skipped: 'SMTP authentication failed while sending' };
+    }
+    console.error(`Failed to send replenishment status notification for request ${payload.requestId}:`, sendError?.message || sendError);
+    return { notificationsSent: 0, skipped: 'Send failed' };
+  }
+}
 
 // Check for members with check-ins due today and send notifications
 async function sendCheckInNotifications() {

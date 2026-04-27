@@ -1015,6 +1015,26 @@ export const dreamTeamsTracking = {
   }
 };
 
+function parseReplenishmentOrderContactsJson(
+  json: string | null | undefined
+): Array<{ personId: string; personName: string }> {
+  if (!json || json.trim() === '') return [];
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((p): p is { personId: string; personName: string } =>
+        p !== null &&
+        typeof p === 'object' &&
+        typeof (p as { personId?: string }).personId === 'string' &&
+        typeof (p as { personName?: string }).personName === 'string'
+      )
+      .map((p) => ({ personId: p.personId, personName: p.personName }));
+  } catch {
+    return [];
+  }
+}
+
 // Replenishment Requests tracking functions
 export const replenishmentRequests = {
   // Initialize replenishment tables
@@ -1130,6 +1150,22 @@ export const replenishmentRequests = {
         CREATE INDEX IF NOT EXISTS idx_replenishment_requests_department 
         ON replenishment_requests(department_id)
       `);
+      
+      try {
+        db.exec(`ALTER TABLE replenishment_requests ADD COLUMN requested_by_person_id TEXT`);
+      } catch (error) {
+        // Column already exists
+      }
+      try {
+        db.exec(`ALTER TABLE replenishment_requests ADD COLUMN order_contact_people_json TEXT`);
+      } catch (error) {
+        // Column already exists
+      }
+      try {
+        db.exec(`UPDATE replenishment_requests SET order_contact_people_json = '[]' WHERE order_contact_people_json IS NULL`);
+      } catch (error) {
+        // Ignore
+      }
       
       console.log('Replenishment tables initialized successfully');
     } catch (error) {
@@ -1363,21 +1399,35 @@ export const replenishmentRequests = {
     itemId: number,
     departmentId: number,
     quantityRequested: number,
-    requestedBy: string,
+    requestedByPersonId: string,
+    requestedByName: string,
+    orderContacts: Array<{ personId: string; personName: string }>,
     notes?: string
   ): number => {
     try {
       const db = initializeDb();
       const timestamp = Date.now();
       const requestedDate = getLocalDateString();
+      const orderContactsJson = JSON.stringify(orderContacts);
       
       const stmt = db.prepare(`
         INSERT INTO replenishment_requests 
-        (item_id, department_id, quantity_requested, status, requested_by, requested_date, notes, created_at, updated_at)
-        VALUES (?, ?, ?, 'requested', ?, ?, ?, ?, ?)
+        (item_id, department_id, quantity_requested, status, requested_by, requested_by_person_id, order_contact_people_json, requested_date, notes, created_at, updated_at)
+        VALUES (?, ?, ?, 'requested', ?, ?, ?, ?, ?, ?, ?)
       `);
       
-      const result = stmt.run(itemId, departmentId, quantityRequested, requestedBy, requestedDate, notes || null, timestamp, timestamp);
+      const result = stmt.run(
+        itemId,
+        departmentId,
+        quantityRequested,
+        requestedByName,
+        requestedByPersonId,
+        orderContactsJson,
+        requestedDate,
+        notes || null,
+        timestamp,
+        timestamp
+      );
       const requestId = result.lastInsertRowid as number;
       
       // Log the status change
@@ -1386,7 +1436,7 @@ export const replenishmentRequests = {
         (request_id, old_status, new_status, changed_by, changed_at, notes, timestamp)
         VALUES (?, NULL, 'requested', ?, ?, ?, ?)
       `);
-      logStmt.run(requestId, requestedBy, requestedDate, 'Request created', timestamp);
+      logStmt.run(requestId, requestedByName, requestedDate, 'Request created', timestamp);
       
       return requestId;
     } catch (error) {
@@ -1477,6 +1527,8 @@ export const replenishmentRequests = {
     url: string | null;
     status: string;
     requested_by: string;
+    requested_by_person_id: string | null;
+    order_contact_people: Array<{ personId: string; personName: string }>;
     requested_date: string;
     ordered_date: string | null;
     ordered_by: string | null;
@@ -1502,6 +1554,8 @@ export const replenishmentRequests = {
           i.url,
           r.status,
           r.requested_by,
+          r.requested_by_person_id,
+          r.order_contact_people_json,
           r.requested_date,
           r.ordered_date,
           r.ordered_by,
@@ -1516,7 +1570,7 @@ export const replenishmentRequests = {
         JOIN replenishment_departments d ON r.department_id = d.id
         ORDER BY r.created_at DESC
       `);
-      return stmt.all() as Array<{
+      const rows = stmt.all() as Array<{
         id: number;
         item_id: number;
         item_name: string;
@@ -1528,6 +1582,8 @@ export const replenishmentRequests = {
         url: string | null;
         status: string;
         requested_by: string;
+        requested_by_person_id: string | null;
+        order_contact_people_json: string | null;
         requested_date: string;
         ordered_date: string | null;
         ordered_by: string | null;
@@ -1538,6 +1594,13 @@ export const replenishmentRequests = {
         notes: string | null;
         created_at: number;
       }>;
+      return rows.map((row) => {
+        const { order_contact_people_json, ...rest } = row;
+        return {
+          ...rest,
+          order_contact_people: parseReplenishmentOrderContactsJson(order_contact_people_json)
+        };
+      });
     } catch (error) {
       console.error('Error getting all requests:', error);
       return [];
@@ -1560,6 +1623,8 @@ export const replenishmentRequests = {
           i.unit,
           r.status,
           r.requested_by,
+          r.requested_by_person_id,
+          r.order_contact_people_json,
           r.requested_date,
           r.ordered_date,
           r.ordered_by,
@@ -1575,7 +1640,17 @@ export const replenishmentRequests = {
         WHERE r.status = ?
         ORDER BY r.created_at DESC
       `);
-      return stmt.all(status) as Array<any>;
+      const rows = stmt.all(status) as Array<{
+        order_contact_people_json: string | null;
+        [key: string]: unknown;
+      }>;
+      return rows.map((row) => {
+        const { order_contact_people_json, ...rest } = row;
+        return {
+          ...rest,
+          order_contact_people: parseReplenishmentOrderContactsJson(order_contact_people_json)
+        };
+      });
     } catch (error) {
       console.error(`Error getting requests with status ${status}:`, error);
       return [];
