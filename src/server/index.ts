@@ -12711,6 +12711,9 @@ app.get('/replenishment-requests', async (req, res) => {
             height: 100%;
             background-color: rgba(0,0,0,0.5);
             animation: fadeIn 0.3s;
+            overflow-y: auto;
+            padding: 20px 0;
+            box-sizing: border-box;
           }
           
           @keyframes fadeIn {
@@ -12721,7 +12724,7 @@ app.get('/replenishment-requests', async (req, res) => {
           .modal.show {
             display: flex;
             justify-content: center;
-            align-items: center;
+            align-items: flex-start;
           }
           
           .modal-content {
@@ -12731,6 +12734,9 @@ app.get('/replenishment-requests', async (req, res) => {
             box-shadow: 0 4px 20px rgba(0,0,0,0.3);
             max-width: 500px;
             width: 90%;
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            box-sizing: border-box;
             animation: slideDown 0.3s;
             position: relative;
           }

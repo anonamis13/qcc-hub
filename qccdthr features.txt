@@ -1,5 +1,6 @@
 Upcoming Features
 =================
+Spotify Wrapped style end-of-year stats for each members on a Dream Team (that gets emailed to them?)
 Search feature to find which teams a member is on
 Chart for total members vs. serve attendance
 Flag for haven't served in 2 months?
