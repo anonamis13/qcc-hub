@@ -1,4 +1,7 @@
-import { Router, urlencoded } from 'express';
+import { Router, urlencoded, raw } from 'express';
+import { parseWorkbook } from './parse-workbook.js';
+import { buildImportReport } from './import-report.js';
+import { importWorkbook } from './import-workbook.js';
 import {
   getAvailableYears,
   getHighlightDefinitions,
@@ -108,6 +111,69 @@ export function createMinistryMetricsRouter(): Router {
       res.status(500).json({ error: 'Failed to fetch ministry metrics' });
     }
   });
+
+  /**
+   * Workbook upload. The file is sent as the raw request body rather than as
+   * multipart form data, which keeps this dependency-free - ExcelJS reads
+   * directly from the buffer.
+   *
+   * With ?dryRun=true nothing is written; the parsed report comes back so the
+   * upload can be reviewed before committing it.
+   */
+  router.post(
+    '/api/ministry-metrics/import',
+    raw({ type: () => true, limit: '25mb' }),
+    async (req, res) => {
+      try {
+        const body = req.body;
+        if (!Buffer.isBuffer(body) || body.length === 0) {
+          return res.status(400).json({ error: 'No file received.' });
+        }
+
+        // .xlsx files are zip archives and always start with "PK".
+        if (body[0] !== 0x50 || body[1] !== 0x4b) {
+          return res.status(400).json({
+            error: 'That does not look like an .xlsx file. Export the sheet as Excel and try again.',
+          });
+        }
+
+        const dryRun = req.query.dryRun === 'true';
+
+        let parsed;
+        try {
+          parsed = await parseWorkbook(body);
+        } catch (err) {
+          return res.status(400).json({
+            error: 'Could not read that workbook: ' + (err instanceof Error ? err.message : 'unknown error'),
+          });
+        }
+
+        const report = buildImportReport(parsed);
+
+        if (parsed.weeks.length === 0) {
+          return res.status(400).json({
+            error: 'No worksheets with a readable date in cell C1 were found in that workbook.',
+            report,
+          });
+        }
+
+        if (dryRun) {
+          return res.json({ dryRun: true, report });
+        }
+
+        const importedBy =
+          typeof req.query.by === 'string' && req.query.by.trim() !== ''
+            ? req.query.by.trim()
+            : 'web upload';
+        const summary = await importWorkbook(body, { importedBy });
+
+        res.json({ dryRun: false, report, summary });
+      } catch (error) {
+        console.error('Error importing ministry metrics workbook:', error);
+        res.status(500).json({ error: 'Failed to import workbook' });
+      }
+    }
+  );
 
   // A plain-spreadsheet escape hatch, so the data is never locked inside this app.
   router.get('/api/ministry-metrics/export.csv', (req, res) => {

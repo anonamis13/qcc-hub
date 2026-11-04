@@ -428,9 +428,14 @@ function givingColumnsOf(ws: ExcelJS.Worksheet): Map<string, ParsedGiving> {
   return out;
 }
 
-export async function parseWorkbook(filePath: string): Promise<ParseResult> {
+/** Accepts a path on disk or the raw bytes of an uploaded workbook. */
+export async function parseWorkbook(source: string | Buffer): Promise<ParseResult> {
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(filePath);
+  if (typeof source === 'string') {
+    await wb.xlsx.readFile(source);
+  } else {
+    await wb.xlsx.load(source);
+  }
 
   const weeks: ParsedWeek[] = [];
   const skippedSheets: string[] = [];

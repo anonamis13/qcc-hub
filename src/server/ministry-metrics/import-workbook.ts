@@ -22,11 +22,11 @@ export type ImportSummary = {
 };
 
 export async function importWorkbook(
-  filePath: string,
+  source: string | Buffer,
   options: { importedBy?: string } = {}
 ): Promise<ImportSummary> {
   const db = initializeMetricsDb();
-  const { weeks } = await parseWorkbook(filePath);
+  const { weeks } = await parseWorkbook(source);
   const now = Date.now();
   const importedBy = options.importedBy ?? 'workbook-import';
 

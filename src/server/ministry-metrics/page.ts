@@ -81,6 +81,21 @@ export function renderDashboardPage(): string {
     .loading, .empty { padding: 40px; text-align: center; opacity: 0.6; }
     .error { padding: 16px; border-radius: 8px; background: #f8d7da; color: #842029; }
     body.dark-mode .error { background: #4a1d24; color: #f5c2c7; }
+
+    .import-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    input[type=file] { font-family: inherit; font-size: 0.9em; }
+    .notice { padding: 12px 14px; border-radius: 8px; font-size: 0.9em; margin-top: 14px; }
+    .notice.ok { background: #d1e7dd; color: #0f5132; }
+    .notice.warn { background: #fff3cd; color: #664d03; }
+    .notice.bad { background: #f8d7da; color: #842029; }
+    body.dark-mode .notice.ok { background: #0f3c2b; color: #a3cfbb; }
+    body.dark-mode .notice.warn { background: #4a3c08; color: #ffe69c; }
+    body.dark-mode .notice.bad { background: #4a1d24; color: #f5c2c7; }
+    .report { margin-top: 16px; font-size: 0.88em; }
+    .report h4 { margin: 16px 0 6px; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; }
+    .report ul { margin: 0; padding-left: 20px; line-height: 1.6; }
+    .report .muted { opacity: 0.65; }
+    .spin { opacity: 0.6; }
   </style>
 </head>
 <body>
@@ -90,6 +105,7 @@ export function renderDashboardPage(): string {
       <a href="/home-page" class="back-link">&larr; Back to QCC Hub</a>
     </div>
     <div class="header-actions">
+      <button id="importToggle">Import spreadsheet</button>
       <button id="exportBtn">Export CSV</button>
       <button id="darkModeToggle">🌙 Dark Mode</button>
       <form method="POST" action="/ministry-metrics/logout" style="margin:0">
@@ -117,6 +133,21 @@ export function renderDashboardPage(): string {
         </select>
       </div>
     </div>
+  </div>
+
+  <div class="card" id="importCard" style="display:none">
+    <h3 class="chart-title">Import a spreadsheet</h3>
+    <p class="chart-note">
+      Upload a weekly numbers workbook (.xlsx). Nothing is saved until you review the summary and confirm.
+      Importing a year that is already loaded updates it rather than duplicating it.
+    </p>
+    <div class="import-row">
+      <input type="file" id="fileInput" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+      <button id="checkBtn">Check file</button>
+      <button id="commitBtn" class="primary" style="display:none">Import</button>
+    </div>
+    <div id="importStatus"></div>
+    <div id="importReport" class="report"></div>
   </div>
 
   <div class="card">
@@ -456,6 +487,194 @@ function renderTable() {
 
 function renderAll() { renderSummary(); renderCharts(); renderTable(); }
 
+// --- Spreadsheet import ----------------------------------------------------
+
+function setImportStatus(kind, message) {
+  const el = document.getElementById('importStatus');
+  el.innerHTML = message ? '<div class="notice ' + kind + '">' + message + '</div>' : '';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+function renderImportReport(report) {
+  const el = document.getElementById('importReport');
+  const parts = [];
+  const list = function (items) {
+    return '<ul>' + items.map(function (i) { return '<li>' + i + '</li>'; }).join('') + '</ul>';
+  };
+
+  parts.push('<h4>What was found</h4>');
+  parts.push(list([
+    report.weekCount + ' weeks' +
+      (report.dateRange ? ', ' + report.dateRange.first + ' to ' + report.dateRange.last : ''),
+    numberFmt(report.totals.adults) + ' adults and ' + numberFmt(report.totals.kids) + ' kids in total',
+    moneyFmt(report.totals.giving) + ' in tithes and offerings',
+    report.totals.weeksNoService + ' weeks with no service held',
+  ]));
+
+  if (report.coverage.length) {
+    parts.push('<h4>Coverage</h4>');
+    parts.push(list(report.coverage.map(function (c) {
+      let s = c.year + ': ' + c.present + ' of ' + c.expected + ' Sundays';
+      if (c.missingInside.length) s += ' — gaps recorded as no service: ' + c.missingInside.join(', ');
+      if (c.missingOutside.length) s += ' <span class="muted">(outside the covered range, not recorded: ' + c.missingOutside.join(', ') + ')</span>';
+      return s;
+    })));
+  }
+
+  if (report.schedules.length) {
+    parts.push('<h4>Service schedules</h4>');
+    parts.push(list(report.schedules.map(function (s) {
+      return s.weeks + ' week(s) — ' + escapeHtml(s.schedule) +
+        ' <span class="muted">(' + s.first + ' to ' + s.last + ')</span>';
+    })));
+  }
+
+  const matchedHighlights = report.highlights.filter(function (h) { return h.matched; });
+  if (matchedHighlights.length) {
+    parts.push('<h4>Highlighted Sundays</h4>');
+    parts.push(list(matchedHighlights.map(function (h) {
+      return h.year + ' ' + escapeHtml(h.name) + ': ' + h.date +
+        (h.note ? ' <span class="muted">(' + escapeHtml(h.note) + ')</span>' : '');
+    })));
+  }
+
+  if (report.corrections.length) {
+    parts.push('<h4>' + report.corrections.length + ' corrections will be applied</h4>');
+    parts.push(list(report.corrections.map(function (c) {
+      return c.date + ': ' + escapeHtml(c.note);
+    })));
+  }
+
+  if (report.givingConflicts.length) {
+    parts.push('<h4>Giving conflicts</h4>');
+    parts.push(list(report.givingConflicts.map(function (c) {
+      return c.date + ': using ' + moneyFmt(c.chosen.value) + ' from the newest sheet, ignoring ' +
+        c.rejected.map(function (r) { return moneyFmt(r.value); }).join(', ');
+    })));
+  }
+
+  if (report.skippedSheets.length) {
+    parts.push('<h4>Skipped sheets</h4>');
+    parts.push(list(report.skippedSheets.map(function (s) {
+      return escapeHtml(s) + ' <span class="muted">(no readable date in cell C1)</span>';
+    })));
+  }
+
+  if (report.problems.length) {
+    parts.push('<h4>Needs a look</h4>');
+    parts.push(list(report.problems.map(function (p) { return escapeHtml(p); })));
+  }
+
+  el.innerHTML = parts.join('');
+}
+
+async function uploadWorkbook(file, dryRun) {
+  const res = await fetch('/api/ministry-metrics/import?dryRun=' + (dryRun ? 'true' : 'false'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: file,
+  });
+  if (res.status === 401) {
+    window.location.href = '/ministry-metrics/login';
+    throw new Error('Session expired');
+  }
+  const data = await res.json().catch(function () { return {}; });
+  if (!res.ok) {
+    if (data.report) renderImportReport(data.report);
+    throw new Error(data.error || 'Upload failed with status ' + res.status);
+  }
+  return data;
+}
+
+function wireImport() {
+  const card = document.getElementById('importCard');
+  const fileInput = document.getElementById('fileInput');
+  const checkBtn = document.getElementById('checkBtn');
+  const commitBtn = document.getElementById('commitBtn');
+
+  document.getElementById('importToggle').addEventListener('click', function () {
+    card.style.display = card.style.display === 'none' ? 'block' : 'none';
+    if (card.style.display === 'block') card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+
+  // A new file selection invalidates any previously reviewed report.
+  fileInput.addEventListener('change', function () {
+    commitBtn.style.display = 'none';
+    setImportStatus('', '');
+    document.getElementById('importReport').innerHTML = '';
+  });
+
+  checkBtn.addEventListener('click', async function () {
+    const file = fileInput.files[0];
+    if (!file) { setImportStatus('warn', 'Choose a .xlsx file first.'); return; }
+
+    checkBtn.disabled = true;
+    setImportStatus('', '<span class="spin">Reading ' + escapeHtml(file.name) + '…</span>');
+    try {
+      const data = await uploadWorkbook(file, true);
+      renderImportReport(data.report);
+      const problems = data.report.problems.length;
+      setImportStatus(
+        problems ? 'warn' : 'ok',
+        'Read ' + data.report.weekCount + ' weeks. Nothing has been saved yet.' +
+          (problems ? ' ' + problems + ' item(s) need a look below — you can still import.' : '')
+      );
+      commitBtn.textContent = 'Import ' + data.report.weekCount + ' weeks';
+      commitBtn.style.display = 'inline-block';
+    } catch (err) {
+      setImportStatus('bad', escapeHtml(err.message));
+      commitBtn.style.display = 'none';
+    } finally {
+      checkBtn.disabled = false;
+    }
+  });
+
+  commitBtn.addEventListener('click', async function () {
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    commitBtn.disabled = true;
+    setImportStatus('', '<span class="spin">Importing…</span>');
+    try {
+      const data = await uploadWorkbook(file, false);
+      const s = data.summary;
+      setImportStatus(
+        'ok',
+        'Imported. ' + s.weeksInserted + ' weeks added, ' + s.weeksUpdated + ' updated, ' +
+          s.servicesWritten + ' services, ' + s.givingWritten + ' giving rows.'
+      );
+      commitBtn.style.display = 'none';
+      fileInput.value = '';
+      await reloadAfterImport();
+    } catch (err) {
+      setImportStatus('bad', escapeHtml(err.message));
+    } finally {
+      commitBtn.disabled = false;
+    }
+  });
+}
+
+/** Picks up years that did not exist before the import. */
+async function reloadAfterImport() {
+  const meta = await getJson('/api/ministry-metrics/meta');
+  const hadNoData = state.years.length === 0;
+  state.years = meta.years;
+  state.metricDefs = meta.metrics;
+  state.highlightDefs = meta.highlights;
+  if (hadNoData || state.selectedYears.length === 0) {
+    state.selectedYears = meta.years.slice(-2);
+  }
+  showError('');
+  populateSelectors();
+  renderYearToggles();
+  await loadWeeks();
+}
+
 function renderYearToggles() {
   const el = document.getElementById('yearToggles');
   el.innerHTML = state.years.map(function (y) {
@@ -512,6 +731,20 @@ async function init() {
     window.location.href = '/api/ministry-metrics/export.csv?years=' + state.selectedYears.join(',');
   });
 
+  wireImport();
+
+  const metricSelect = document.getElementById('metricSelect');
+  metricSelect.addEventListener('change', function () {
+    state.metric = metricSelect.value;
+    renderCharts();
+  });
+
+  const alignSelect = document.getElementById('alignSelect');
+  alignSelect.addEventListener('change', function () {
+    state.align = alignSelect.value;
+    renderCharts();
+  });
+
   try {
     const meta = await getJson('/api/ministry-metrics/meta');
     state.years = meta.years;
@@ -519,42 +752,41 @@ async function init() {
     state.highlightDefs = meta.highlights;
     state.selectedYears = meta.years.slice(-2);
 
+    // With nothing imported, lead with the importer rather than empty charts.
     if (!state.years.length) {
-      showError('No metrics have been imported yet.');
+      document.getElementById('importCard').style.display = 'block';
+      setImportStatus('warn', 'No metrics have been imported yet. Upload a weekly numbers spreadsheet to get started.');
       return;
     }
 
-    const metricSelect = document.getElementById('metricSelect');
-    metricSelect.innerHTML =
-      '<optgroup label="Attendance">' +
-      DERIVED_METRICS.map(function (m) { return '<option value="' + m.key + '">' + m.label + '</option>'; }).join('') +
-      '</optgroup>' +
-      '<optgroup label="Ministries &amp; response">' +
-      state.metricDefs.map(function (m) { return '<option value="' + m.key + '">' + m.label + '</option>'; }).join('') +
-      '</optgroup>';
-    metricSelect.value = state.metric;
-    metricSelect.addEventListener('change', function () {
-      state.metric = metricSelect.value;
-      renderCharts();
-    });
-
-    const alignSelect = document.getElementById('alignSelect');
-    alignSelect.innerHTML =
-      '<option value="calendar">Calendar week</option>' +
-      state.highlightDefs
-        .filter(function (h) { return h.is_anchor; })
-        .map(function (h) { return '<option value="' + h.key + '">Aligned on ' + h.name + '</option>'; })
-        .join('');
-    alignSelect.addEventListener('change', function () {
-      state.align = alignSelect.value;
-      renderCharts();
-    });
-
+    populateSelectors();
     renderYearToggles();
     await loadWeeks();
   } catch (err) {
     showError('Could not load metrics: ' + err.message);
   }
+}
+
+/** Fills the metric and alignment menus. Listeners are wired once, in init. */
+function populateSelectors() {
+  const metricSelect = document.getElementById('metricSelect');
+  metricSelect.innerHTML =
+    '<optgroup label="Attendance">' +
+    DERIVED_METRICS.map(function (m) { return '<option value="' + m.key + '">' + m.label + '</option>'; }).join('') +
+    '</optgroup>' +
+    '<optgroup label="Ministries &amp; response">' +
+    state.metricDefs.map(function (m) { return '<option value="' + m.key + '">' + m.label + '</option>'; }).join('') +
+    '</optgroup>';
+  metricSelect.value = state.metric;
+
+  const alignSelect = document.getElementById('alignSelect');
+  alignSelect.innerHTML =
+    '<option value="calendar">Calendar week</option>' +
+    state.highlightDefs
+      .filter(function (h) { return h.is_anchor; })
+      .map(function (h) { return '<option value="' + h.key + '">Aligned on ' + h.name + '</option>'; })
+      .join('');
+  alignSelect.value = state.align;
 }
 
 init();
