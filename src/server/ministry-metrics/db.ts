@@ -32,25 +32,34 @@ const dbPath = process.env.RENDER
 
 let db: Database.Database;
 
-/** Week-level metrics that are stored as key/value rows rather than columns. */
+/**
+ * Week-level metrics that are stored as key/value rows rather than columns.
+ *
+ * `zero_is_absent` marks metrics where a recorded 0 means the gathering did not
+ * happen that week rather than that nobody came - a ministry on a seasonal
+ * break, for instance. Those weeks are left as gaps on charts instead of being
+ * plotted as zero. It is false for things like baptisms, where none happening
+ * is a real and meaningful figure.
+ */
 const METRIC_DEFINITIONS: Array<{
   key: string;
   label: string;
   category: string;
   unit: string;
   display_order: number;
+  zero_is_absent: number;
 }> = [
-  { key: 'yth_attendance', label: 'YTH Attendance', category: 'ministry', unit: 'people', display_order: 10 },
-  { key: 'ya_attendance', label: 'YA Attendance', category: 'ministry', unit: 'people', display_order: 20 },
-  { key: 'lg_attendance', label: 'Life Group Attendance', category: 'groups', unit: 'people', display_order: 30 },
-  { key: 'ya_lg_attendance', label: 'YA Life Group Attendance', category: 'groups', unit: 'people', display_order: 40 },
-  { key: 'family_lg_attendance', label: 'Family Life Group Attendance', category: 'groups', unit: 'people', display_order: 50 },
-  { key: 'courses_attendance', label: 'Courses Attendance', category: 'ministry', unit: 'people', display_order: 60 },
-  { key: 'dna_attendance', label: 'DNA Attendance', category: 'ministry', unit: 'people', display_order: 70 },
-  { key: 'baptisms', label: 'Baptisms', category: 'response', unit: 'count', display_order: 80 },
-  { key: 'decisions', label: 'Decisions', category: 'response', unit: 'count', display_order: 90 },
-  { key: 'first_time_guests', label: 'First Time Guests', category: 'engagement', unit: 'people', display_order: 100 },
-  { key: 'dream_team_checkins', label: 'Dream Team Check-ins', category: 'engagement', unit: 'people', display_order: 110 },
+  { key: 'yth_attendance', label: 'YTH Attendance', category: 'ministry', unit: 'people', display_order: 10, zero_is_absent: 1 },
+  { key: 'ya_attendance', label: 'YA Attendance', category: 'ministry', unit: 'people', display_order: 20, zero_is_absent: 1 },
+  { key: 'lg_attendance', label: 'Life Group Attendance', category: 'groups', unit: 'people', display_order: 30, zero_is_absent: 1 },
+  { key: 'ya_lg_attendance', label: 'YA Life Group Attendance', category: 'groups', unit: 'people', display_order: 40, zero_is_absent: 1 },
+  { key: 'family_lg_attendance', label: 'Family Life Group Attendance', category: 'groups', unit: 'people', display_order: 50, zero_is_absent: 1 },
+  { key: 'courses_attendance', label: 'Courses Attendance', category: 'ministry', unit: 'people', display_order: 60, zero_is_absent: 1 },
+  { key: 'dna_attendance', label: 'DNA Attendance', category: 'ministry', unit: 'people', display_order: 70, zero_is_absent: 1 },
+  { key: 'baptisms', label: 'Baptisms', category: 'response', unit: 'count', display_order: 80, zero_is_absent: 0 },
+  { key: 'decisions', label: 'Decisions', category: 'response', unit: 'count', display_order: 90, zero_is_absent: 0 },
+  { key: 'first_time_guests', label: 'First Time Guests', category: 'engagement', unit: 'people', display_order: 100, zero_is_absent: 0 },
+  { key: 'dream_team_checkins', label: 'Dream Team Check-ins', category: 'engagement', unit: 'people', display_order: 110, zero_is_absent: 1 },
 ];
 
 /**
@@ -125,9 +134,17 @@ export function initializeMetricsDb(): Database.Database {
       category TEXT NOT NULL,
       unit TEXT,
       display_order INTEGER NOT NULL,
-      is_active BOOLEAN DEFAULT 1
+      is_active BOOLEAN DEFAULT 1,
+      zero_is_absent BOOLEAN DEFAULT 0
     )
   `);
+
+  // Added after the table shipped, so existing databases need the column.
+  try {
+    db.exec(`ALTER TABLE mm_metric_definitions ADD COLUMN zero_is_absent BOOLEAN DEFAULT 0`);
+  } catch {
+    // Already present.
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS mm_week_metrics (
@@ -223,13 +240,14 @@ export function initializeMetricsDb(): Database.Database {
 
 function seedReferenceData(database: Database.Database) {
   const insertMetric = database.prepare(`
-    INSERT INTO mm_metric_definitions (key, label, category, unit, display_order, is_active)
-    VALUES (@key, @label, @category, @unit, @display_order, 1)
+    INSERT INTO mm_metric_definitions (key, label, category, unit, display_order, is_active, zero_is_absent)
+    VALUES (@key, @label, @category, @unit, @display_order, 1, @zero_is_absent)
     ON CONFLICT(key) DO UPDATE SET
       label = excluded.label,
       category = excluded.category,
       unit = excluded.unit,
-      display_order = excluded.display_order
+      display_order = excluded.display_order,
+      zero_is_absent = excluded.zero_is_absent
   `);
 
   const insertHighlight = database.prepare(`

@@ -223,7 +223,15 @@ function valueFor(week, metric) {
     return week.online;
   }
   const v = week.metrics[metric];
-  return typeof v === 'number' ? v : null;
+  if (typeof v !== 'number') return null;
+
+  // A recorded 0 for a gathering means it did not meet that week (a ministry on
+  // a break, say). Plotting it would drag the line down to zero and back; a gap
+  // reads as the pause it actually was.
+  const def = state.metricDefs.find(function (m) { return m.key === metric; });
+  if (v === 0 && def && def.zero_is_absent) return null;
+
+  return v;
 }
 
 function metricLabel(key) {
@@ -389,10 +397,17 @@ const moneyFmt = function (v) {
 function renderCharts() {
   const main = buildDatasets(state.metric, 'count');
   document.getElementById('mainChartTitle').textContent = metricLabel(state.metric);
-  document.getElementById('mainChartNote').textContent =
+
+  const notes = [
     state.align === 'calendar'
       ? 'Diamond markers are highlighted Sundays. Weeks with no service are left as gaps.'
-      : 'Years are aligned so ' + metricLabelForAnchor(state.align) + ' falls at week 0 in every year.';
+      : 'Years are aligned so ' + metricLabelForAnchor(state.align) + ' falls at week 0 in every year.',
+  ];
+  const def = state.metricDefs.find(function (m) { return m.key === state.metric; });
+  if (def && def.zero_is_absent) {
+    notes.push('Weeks recorded as 0 are treated as off-weeks and skipped rather than plotted as zero.');
+  }
+  document.getElementById('mainChartNote').textContent = notes.join(' ');
 
   if (mainChart) mainChart.destroy();
   mainChart = new Chart(document.getElementById('mainChart'), {

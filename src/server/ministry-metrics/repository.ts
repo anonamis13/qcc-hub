@@ -50,10 +50,16 @@ export function getMetricDefinitions() {
   const db = initializeMetricsDb();
   return db
     .prepare(
-      `SELECT key, label, category, unit FROM mm_metric_definitions
+      `SELECT key, label, category, unit, zero_is_absent FROM mm_metric_definitions
        WHERE is_active = 1 ORDER BY display_order`
     )
-    .all() as Array<{ key: string; label: string; category: string; unit: string | null }>;
+    .all() as Array<{
+    key: string;
+    label: string;
+    category: string;
+    unit: string | null;
+    zero_is_absent: number;
+  }>;
 }
 
 export function getHighlightDefinitions() {
