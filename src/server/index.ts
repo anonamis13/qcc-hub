@@ -6,6 +6,7 @@ import nodemailer from 'nodemailer';
 import pcoClient, { getPeopleGroups, getGroupAttendance, getGroup, getGroupMemberships, getDreamTeamWorkflows, getWorkflowCards } from './config/pco.js';
 import { cache } from './config/cache.js';
 import { membershipSnapshots, dreamTeamsTracking, replenishmentRequests } from '../data/database.js';
+import { createMinistryMetricsRouter } from './ministry-metrics/routes.js';
 
 dotenv.config();
 
@@ -21,6 +22,9 @@ app.use(express.json());
 
 // Serve static files (for logo)
 app.use(express.static('.'));
+
+// Ministry Metrics lives in its own module with its own database
+app.use(createMinistryMetricsRouter());
 
 // Helper function to format date
 const formatDate = (dateString: string) => {
@@ -2735,6 +2739,12 @@ app.get('/home-page', async (req, res) => {
         .app-button.replenishment:hover {
           background-color: #5a32a3;
         }
+        .app-button.ministry-metrics {
+          background-color: #0d6efd;
+        }
+        .app-button.ministry-metrics:hover {
+          background-color: #0a58ca;
+        }
         .description {
           color: #888;
           font-size: 14px;
@@ -2823,6 +2833,11 @@ app.get('/home-page', async (req, res) => {
           Replenishment Requests
         </a>
         <p class="description">Submit and manage resource replenishment requests</p>
+        
+        <a href="/ministry-metrics" class="app-button ministry-metrics">
+          Ministry Metrics
+        </a>
+        <p class="description">Track weekly attendance, giving, and year-over-year trends</p>
       </div>
       
       <script>

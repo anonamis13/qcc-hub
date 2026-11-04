@@ -16,6 +16,19 @@ Queen City Church Administrative Hub - A comprehensive web application for manag
 - Member removal workflow system
 - Team review and approval processes
 
+### Ministry Metrics
+- Weekly attendance, giving, and ministry figures captured in the app
+- Historical spreadsheet import (one worksheet per Sunday)
+- Year-over-year charts, including alignment on special Sundays so Easter
+  compares against Easter rather than against a calendar week
+- Highlighted Sundays (Easter, Church Birthday, Christmas) resolved by rule
+- CSV export of everything held in the section
+- Password protected, since it contains giving figures
+
+This section stores its data in its own SQLite database (`metrics.db`) rather
+than the shared cache, because it is hand-entered and cannot be rebuilt from
+Planning Center.
+
 ### Core Features
 - Integration with Planning Center Online API
 - Real-time attendance tracking
@@ -40,6 +53,12 @@ Queen City Church Administrative Hub - A comprehensive web application for manag
    PCO_SECRET=your_secret
    MONGODB_URI=your_mongodb_connection_string
    PORT=3000
+   METRICS_PASSWORD_HASH=scrypt$...
+   ```
+   Generate the Ministry Metrics password hash with:
+   ```bash
+   npm run build
+   node dist/server/ministry-metrics/cli-hash-password.js "your password"
    ```
 4. Start the development server:
    ```bash

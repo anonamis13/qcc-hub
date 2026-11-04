@@ -138,3 +138,6 @@ dist
 # SQLite database files
 *.db
 *.db-journal
+
+# Ministry Metrics source spreadsheets (contain giving figures)
+import_data/

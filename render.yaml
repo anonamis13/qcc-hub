@@ -13,4 +13,8 @@ services:
       - key: PCO_SECRET
         sync: false
       - key: PCO_GROUP_TYPE_ID
+        sync: false
+      # Ministry Metrics password hash. Generate with:
+      #   node dist/server/ministry-metrics/cli-hash-password.js "<password>"
+      - key: METRICS_PASSWORD_HASH
         sync: false 

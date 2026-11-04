@@ -1,0 +1,22 @@
+Upcoming Features
+=================
+New app to display historical attendance data
+Ingest all of the past 7 years of spreadsheet data
+	Mostly consistent formatting
+	Changed when we went to 3 services
+Display data in a meaningful, helpful way
+	Compare year-over-year
+	Special Sundays data (Easter, Christmas, etc.)
+	Times of year with most Guests
+	Sermon series (spreadsheet exists)
+
+Go through July - December to validate data
+Desired password?: 
+Import 2024 and earlier data
+Clearstream issues (duplicate and september missing)
+DNA Tags in PCO
+
+
+Completed Features
+==================
+Password (node dist/server/ministry-metrics/cli-hash-password.js "testpass")
