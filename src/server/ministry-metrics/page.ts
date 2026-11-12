@@ -69,10 +69,50 @@ export function renderDashboardPage(): string {
     table { width: 100%; border-collapse: collapse; font-size: 0.88em; }
     th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid #e9ecef; white-space: nowrap; }
     th:first-child, td:first-child { text-align: left; }
-    th { font-weight: 600; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.7; }
+    th {
+      font-weight: 600; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.03em;
+      /* Keeps column names visible while the table body scrolls. A sticky cell
+         needs its own background or rows show through underneath, and a border
+         would scroll away with the cell, so the rule is drawn as a shadow.
+         The label is dimmed with colour rather than opacity, which would make
+         the background translucent and let rows show through the header. */
+      color: #6c757d;
+      position: sticky; top: 0; z-index: 1;
+      background: #fff; border-bottom: none; box-shadow: inset 0 -1px 0 #e9ecef;
+    }
+    body.dark-mode th { background: #2d2d2d; color: #9aa0a6; box-shadow: inset 0 -1px 0 #444; }
     body.dark-mode th, body.dark-mode td { border-bottom-color: #444; }
     tr.no-service td { opacity: 0.5; font-style: italic; }
     .table-scroll { overflow-x: auto; max-height: 520px; overflow-y: auto; }
+
+    /* Notes sit in their own full-width row beneath the week they belong to,
+       rather than in a column, so they stay next to that week's date and
+       event labels and the table keeps its original narrow columns. */
+    .note-btn {
+      width: auto; margin: 0 0 0 6px; padding: 1px 6px; font-size: 0.85em; font-weight: 400;
+      background: none; border: 1px solid transparent; border-radius: 4px;
+      color: #6c757d; cursor: pointer; vertical-align: baseline;
+    }
+    .note-btn:hover { background: rgba(127,127,127,0.18); color: #0d6efd; }
+    body.dark-mode .note-btn:hover { color: #6ea8fe; }
+
+    tr.note-row td { padding: 0 10px 8px; border-bottom: 1px solid #e9ecef; text-align: left; white-space: normal; }
+    body.dark-mode tr.note-row td { border-bottom-color: #444; }
+    tr.note-row .note-body {
+      padding: 7px 12px; border-left: 3px solid #0d6efd; border-radius: 0 6px 6px 0;
+      background: rgba(13,110,253,0.07); line-height: 1.5;
+    }
+    body.dark-mode tr.note-row .note-body { background: rgba(110,168,254,0.12); }
+    .note-imported { font-style: italic; margin-right: 8px; }
+    .note-text { cursor: text; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
+    .note-text:hover { background: rgba(127,127,127,0.15); }
+    .note-text.empty { opacity: 0.55; font-style: italic; }
+    .note-input {
+      width: 100%; font-family: inherit; font-size: 0.95em; padding: 5px 8px;
+      border: 1px solid #0d6efd; border-radius: 4px; box-sizing: border-box; background: #fff; color: #333;
+    }
+    body.dark-mode .note-input { background: #363636; color: #e8e8e8; }
+    .note-saving { opacity: 0.5; }
 
     .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600; color: #fff; margin-left: 6px; }
     .flag { color: #d63384; cursor: help; font-weight: 700; margin-left: 4px; }
@@ -94,7 +134,7 @@ export function renderDashboardPage(): string {
     .report { margin-top: 16px; font-size: 0.88em; }
     .report h4 { margin: 16px 0 6px; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; }
     .report ul { margin: 0; padding-left: 20px; line-height: 1.6; }
-    .report .muted { opacity: 0.65; }
+    .muted { opacity: 0.65; }
     .spin { opacity: 0.6; }
   </style>
 </head>
@@ -184,7 +224,11 @@ const state = {
   summaries: [],
   metricDefs: [],
   highlightDefs: [],
+  // Dates whose note row is open despite having no note saved yet.
+  openNotes: new Set(),
 };
+
+let pendingNoteFocus = null;
 
 // Metrics derived from the service rows, offered alongside the stored ones.
 const DERIVED_METRICS = [
@@ -462,42 +506,141 @@ function renderTable() {
   document.getElementById('tableNote').textContent =
     rows.length + ' weeks' + (flagged ? '  •  ' + flagged + ' carry a note about the source data (hover the ⚑)' : '');
 
+  const columns = ['Date', 'Services', 'Adults', 'Kids', 'In person', 'Online', 'Guests', 'Giving', 'Venue'];
   const head = '<thead><tr>' +
-    ['Date', 'Services', 'Adults', 'Kids', 'In person', 'Online', 'Guests', 'Giving', 'Venue']
-      .map(function (h) { return '<th>' + h + '</th>'; }).join('') +
+    columns.map(function (h) { return '<th>' + h + '</th>'; }).join('') +
     '</tr></thead>';
+
+  /**
+   * The note row for a week, shown when there is something to display or the
+   * user opened it. The spreadsheet's own annotation sits alongside anything
+   * typed here, so importing a workbook never looks like it erased a note.
+   */
+  const noteRow = function (w) {
+    const typed = w.user_note || '';
+    const open = typed !== '' || state.openNotes.has(w.service_date);
+    if (!open) return '';
+    const imported = w.note
+      ? '<span class="note-imported muted">' + escapeHtml(w.note) + '</span>'
+      : '';
+    const body = typed
+      ? '<span class="note-text" data-date="' + w.service_date + '">' + escapeHtml(typed) + '</span>'
+      : '<span class="note-text empty" data-date="' + w.service_date + '">Add a note…</span>';
+    return '<tr class="note-row"><td colspan="' + columns.length + '">' +
+      '<div class="note-body">' + imported + body + '</div>' +
+      '</td></tr>';
+  };
 
   const body = rows.map(function (w) {
     const pills = w.highlights.map(function (h) {
-      return '<span class="pill" style="background:' + (h.color || '#6c757d') + '">' + (h.label || h.name) + '</span>';
+      return '<span class="pill" style="background:' + (h.color || '#6c757d') + '">' + escapeHtml(h.label || h.name) + '</span>';
     }).join('');
     const flag = w.issues.length
-      ? '<span class="flag" title="' + w.issues.map(function (i) { return i.note.replace(/"/g, '&quot;'); }).join(' | ') + '">⚑</span>'
+      ? '<span class="flag" title="' + escapeHtml(w.issues.map(function (i) { return i.note; }).join(' | ')) + '">⚑</span>'
       : '';
-    if (w.status !== 'held') {
+    const noteBtn = '<button type="button" class="note-btn" data-date="' + w.service_date + '"' +
+      ' title="' + (w.user_note ? 'Edit note' : 'Add a note') + '">✎</button>';
+    const first = '<td>' + w.service_date + pills + flag + noteBtn + '</td>';
+
+    const main = w.status !== 'held'
       // Giving and guest figures still exist for weeks with no gathering.
-      return '<tr class="no-service">' +
-        '<td>' + w.service_date + pills + flag + '</td>' +
-        '<td colspan="5">no service held</td>' +
-        '<td>' + numberFmt(w.metrics.first_time_guests) + '</td>' +
-        '<td>' + (w.giving ? moneyFmt(w.giving.tithes_offerings) : '') + '</td>' +
-        '<td>' + (w.venue || '') + '</td>' +
+      ? '<tr class="no-service">' + first +
+          '<td colspan="5">no service held</td>' +
+          '<td>' + numberFmt(w.metrics.first_time_guests) + '</td>' +
+          '<td>' + (w.giving ? moneyFmt(w.giving.tithes_offerings) : '') + '</td>' +
+          '<td>' + escapeHtml(w.venue || '') + '</td>' +
+        '</tr>'
+      : '<tr>' + first +
+          '<td>' + w.services.filter(function (s) { return s.kind === 'in_person'; }).length + '</td>' +
+          '<td>' + numberFmt(w.adults) + '</td>' +
+          '<td>' + numberFmt(w.kids) + '</td>' +
+          '<td>' + numberFmt(w.in_person) + '</td>' +
+          '<td>' + numberFmt(w.online) + '</td>' +
+          '<td>' + numberFmt(w.metrics.first_time_guests) + '</td>' +
+          '<td>' + (w.giving ? moneyFmt(w.giving.tithes_offerings) : '') + '</td>' +
+          '<td>' + escapeHtml(w.venue || '') + '</td>' +
         '</tr>';
-    }
-    return '<tr>' +
-      '<td>' + w.service_date + pills + flag + '</td>' +
-      '<td>' + w.services.filter(function (s) { return s.kind === 'in_person'; }).length + '</td>' +
-      '<td>' + numberFmt(w.adults) + '</td>' +
-      '<td>' + numberFmt(w.kids) + '</td>' +
-      '<td>' + numberFmt(w.in_person) + '</td>' +
-      '<td>' + numberFmt(w.online) + '</td>' +
-      '<td>' + numberFmt(w.metrics.first_time_guests) + '</td>' +
-      '<td>' + (w.giving ? moneyFmt(w.giving.tithes_offerings) : '') + '</td>' +
-      '<td>' + (w.venue || '') + '</td>' +
-      '</tr>';
+
+    return main + noteRow(w);
   }).join('');
 
   document.getElementById('weekTable').innerHTML = head + '<tbody>' + body + '</tbody>';
+
+  // Opening a note via the button should land the cursor in the field.
+  if (pendingNoteFocus) {
+    const target = document.querySelector('.note-text[data-date="' + pendingNoteFocus + '"]');
+    pendingNoteFocus = null;
+    if (target) beginNoteEdit(target);
+  }
+}
+
+// --- Note editing ----------------------------------------------------------
+
+function beginNoteEdit(span) {
+  if (span.dataset.editing === 'true') return;
+  const date = span.dataset.date;
+  const week = state.weeks.find(function (w) { return w.service_date === date; });
+  const original = week && week.user_note ? week.user_note : '';
+
+  span.dataset.editing = 'true';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'note-input';
+  input.value = original;
+  input.maxLength = 500;
+  span.replaceWith(input);
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+
+  let settled = false;
+
+  const restore = function (value) {
+    // An empty note has nothing to show, so the row folds away again.
+    if (!value) {
+      state.openNotes.delete(date);
+      renderTable();
+      return;
+    }
+    const replacement = document.createElement('span');
+    replacement.className = 'note-text';
+    replacement.dataset.date = date;
+    replacement.textContent = value;
+    input.replaceWith(replacement);
+  };
+
+  const save = async function () {
+    if (settled) return;
+    settled = true;
+    const value = input.value.trim();
+    if (value === original) { restore(original); return; }
+
+    input.disabled = true;
+    input.classList.add('note-saving');
+    try {
+      const res = await fetch('/api/ministry-metrics/weeks/' + date + '/note', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: value }),
+      });
+      if (res.status === 401) { window.location.href = '/ministry-metrics/login'; return; }
+      const data = await res.json().catch(function () { return {}; });
+      if (!res.ok) throw new Error(data.error || 'Save failed with status ' + res.status);
+
+      if (week) week.user_note = data.week.user_note;
+      showError('');
+      restore(data.week.user_note || '');
+    } catch (err) {
+      showError('Could not save note: ' + err.message);
+      restore(original);
+    }
+  };
+
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    // Escape abandons the edit without writing anything.
+    if (e.key === 'Escape') { settled = true; restore(original); }
+  });
+  input.addEventListener('blur', save);
 }
 
 function renderAll() { renderSummary(); renderCharts(); renderTable(); }
@@ -747,6 +890,22 @@ async function init() {
   });
 
   wireImport();
+
+  // Delegated so it survives the table being re-rendered.
+  document.getElementById('weekTable').addEventListener('click', function (e) {
+    const btn = e.target.closest('.note-btn');
+    if (btn) {
+      const date = btn.dataset.date;
+      const existing = document.querySelector('.note-text[data-date="' + date + '"]');
+      if (existing) { beginNoteEdit(existing); return; }
+      state.openNotes.add(date);
+      pendingNoteFocus = date;
+      renderTable();
+      return;
+    }
+    const span = e.target.closest('.note-text');
+    if (span) beginNoteEdit(span);
+  });
 
   const metricSelect = document.getElementById('metricSelect');
   metricSelect.addEventListener('change', function () {

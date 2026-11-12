@@ -95,6 +95,9 @@ export function initializeMetricsDb(): Database.Database {
   // One row per Sunday. `status` distinguishes a Sunday with no service from
   // one whose data has not been entered yet - a real zero would drag down every
   // average and trend line that crosses it.
+  // `note` holds the annotation carried in from the spreadsheet; `user_note` is
+  // typed in the app. They are kept apart so re-importing a workbook, which
+  // rewrites `note`, can never clobber something a person wrote.
   db.exec(`
     CREATE TABLE IF NOT EXISTS mm_weeks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,10 +105,18 @@ export function initializeMetricsDb(): Database.Database {
       venue TEXT,
       status TEXT NOT NULL DEFAULT 'held',
       note TEXT,
+      user_note TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )
   `);
+
+  // Added after the table shipped, so existing databases need the column.
+  try {
+    db.exec(`ALTER TABLE mm_weeks ADD COLUMN user_note TEXT`);
+  } catch {
+    // Already present.
+  }
 
   // Service times are stored as data, not columns, so schedule changes (two
   // services, the Easter three-service trial, then 8:00/9:45/11:30) coexist

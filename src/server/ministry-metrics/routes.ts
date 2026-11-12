@@ -8,6 +8,8 @@ import {
   getMetricDefinitions,
   getWeeks,
   getYearSummaries,
+  setWeekNote,
+  MAX_NOTE_LENGTH,
 } from './repository.js';
 import { renderDashboardPage } from './page.js';
 import {
@@ -112,6 +114,33 @@ export function createMinistryMetricsRouter(): Router {
     }
   });
 
+  router.put('/api/ministry-metrics/weeks/:date/note', (req, res) => {
+    try {
+      const raw = req.body?.note;
+      if (raw !== null && raw !== undefined && typeof raw !== 'string') {
+        return res.status(400).json({ error: 'note must be a string or null' });
+      }
+
+      const trimmed = typeof raw === 'string' ? raw.trim() : '';
+      if (trimmed.length > MAX_NOTE_LENGTH) {
+        return res
+          .status(400)
+          .json({ error: `Notes are limited to ${MAX_NOTE_LENGTH} characters.` });
+      }
+
+      // Clearing the box removes the note rather than storing an empty string.
+      const week = setWeekNote(req.params.date, trimmed === '' ? null : trimmed, 'web ui');
+      if (!week) {
+        return res.status(400).json({ error: 'Expected a valid date in YYYY-MM-DD form.' });
+      }
+
+      res.json({ success: true, week });
+    } catch (error) {
+      console.error('Error saving ministry metrics note:', error);
+      res.status(500).json({ error: 'Failed to save note' });
+    }
+  });
+
   /**
    * Workbook upload. The file is sent as the raw request body rather than as
    * multipart form data, which keeps this dependency-free - ExcelJS reads
@@ -187,6 +216,7 @@ export function createMinistryMetricsRouter(): Router {
         'status',
         'venue',
         'note',
+        'user_note',
         'services_in_person',
         'adults',
         'kids',
@@ -216,6 +246,7 @@ export function createMinistryMetricsRouter(): Router {
             w.status,
             w.venue,
             w.note,
+            w.user_note,
             w.services.filter((s) => s.kind === 'in_person').length,
             w.adults,
             w.kids,

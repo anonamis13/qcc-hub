@@ -15,6 +15,7 @@ export type WeekRow = {
   status: string;
   venue: string | null;
   note: string | null;
+  user_note: string | null;
   services: ServiceRow[];
   adults: number | null;
   kids: number | null;
@@ -88,7 +89,7 @@ export function getWeeks(years: number[]): WeekRow[] {
 
   const weeks = db
     .prepare(
-      `SELECT id, service_date, status, venue, note
+      `SELECT id, service_date, status, venue, note, user_note
        FROM mm_weeks
        WHERE SUBSTR(service_date, 1, 4) IN (${placeholders})
        ORDER BY service_date`
@@ -99,6 +100,7 @@ export function getWeeks(years: number[]): WeekRow[] {
     status: string;
     venue: string | null;
     note: string | null;
+    user_note: string | null;
   }>;
 
   if (weeks.length === 0) return [];
@@ -188,6 +190,7 @@ export function getWeeks(years: number[]): WeekRow[] {
       status: w.status,
       venue: w.venue,
       note: w.note,
+      user_note: w.user_note,
       services: svc,
       adults,
       kids,
@@ -216,6 +219,55 @@ export function getWeeks(years: number[]): WeekRow[] {
       })),
     };
   });
+}
+
+export const MAX_NOTE_LENGTH = 500;
+
+/**
+ * Sets the manually entered note for a week. Creates the week if it does not
+ * exist, so a Sunday absent from any imported workbook can still be annotated.
+ * Returns null if the date is not a valid Sunday.
+ */
+export function setWeekNote(
+  serviceDate: string,
+  note: string | null,
+  changedBy: string
+): WeekRow | null {
+  const db = initializeMetricsDb();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(serviceDate)) return null;
+  const parsed = new Date(`${serviceDate}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== serviceDate) {
+    return null;
+  }
+
+  const now = Date.now();
+  const existing = db
+    .prepare('SELECT id, user_note FROM mm_weeks WHERE service_date = ?')
+    .get(serviceDate) as { id: number; user_note: string | null } | undefined;
+
+  db.transaction(() => {
+    if (existing) {
+      db.prepare('UPDATE mm_weeks SET user_note = ?, updated_at = ? WHERE id = ?').run(
+        note,
+        now,
+        existing.id
+      );
+    } else {
+      db.prepare(
+        `INSERT INTO mm_weeks (service_date, venue, status, note, user_note, created_at, updated_at)
+         VALUES (?, NULL, 'held', NULL, ?, ?, ?)`
+      ).run(serviceDate, note, now, now);
+    }
+
+    db.prepare(
+      `INSERT INTO mm_audit (entity, entity_id, field, old_value, new_value, changed_by, changed_at)
+       VALUES ('mm_weeks', ?, 'user_note', ?, ?, ?, ?)`
+    ).run(serviceDate, existing?.user_note ?? null, note, changedBy, now);
+  })();
+
+  const year = Number(serviceDate.slice(0, 4));
+  return getWeeks([year]).find((w) => w.service_date === serviceDate) ?? null;
 }
 
 export type YearSummary = {
